@@ -31,15 +31,26 @@ ghcr.io/strong-network/knowledge-worker-agent
 Triggers:
 
 - **Publish a GitHub release:** its tag must match `VERSION`, with an optional
-  `v` prefix. A release tagged `v1.2.0` produces image tag `v1.2.0`.
-- **Manual Run workflow on the default branch:** produces `sha-<12-character SHA>`.
+  `v` prefix. A release tagged `v1.5.0` with `VERSION` at `1.5.0` is accepted.
+- **Manual Run workflow on the default branch.**
+
+**Both produce the same tags: the version from `VERSION`, and `latest`.** What you
+pull therefore does not depend on how the publication was triggered. Earlier runs
+tagged manual publications `sha-<12-character SHA>`, which is no longer the case.
 
 Both paths first run the same CI and `make build` through a reusable workflow.
 The image is built with `Dockerfile.release`, its pinned dependencies and embedded
 opencode/dictation components. Currently it supports **linux/amd64** only.
-There is no moving `latest` tag, so publishing an older release or a prerelease
-does not change what a floating tag points to. A repeated run can replace that
-release tag; use the digest printed in the run summary for immutable deployment.
+
+Two consequences worth knowing. `latest` moves with every publication, including a
+manual one, so it is a convenience tag rather than something to depend on. And
+publishing twice without changing `VERSION` replaces the image at that version
+tag: bump `VERSION` for anything consumers may already have pulled, and use the
+digest printed in the run summary when you need an immutable reference.
+
+The README documents the current version and the pull commands for both
+registries. A test (`cmd/server/imageversion_test.go`) fails if they fall behind
+`VERSION`, so bumping the version means updating the README in the same change.
 
 GHCR authentication uses the public repository's **`GITHUB_TOKEN`**, with
 `packages: write` scoped to the publishing job. No additional GHCR PAT is needed.
@@ -51,7 +62,7 @@ pull access after setting visibility.
 
 ## Secondary registry: Docker Hub (enabled by default)
 
-Every image publication also pushes the same tag to
+Every image publication also pushes the same tags to
 `docker.io/strongnetwork/knowledge-worker-agent`. No repository variables are
 needed to enable this default. The two Docker Hub secrets below are required;
 missing credentials fail the mirror job rather than silently skipping it.
@@ -67,8 +78,9 @@ Configure these in the **public** repository's Actions settings:
 
 Create that image repository and set it public if anonymous pulls are intended.
 The mirror job copies the GHCR image by digest using Buildx, without rebuilding,
-and uses the same tag. A mirror failure fails that job but does not remove the
-already published GHCR image. Retry the failed mirror job to copy the same digest.
+and applies the same version and `latest` tags. A mirror failure fails that job
+but does not remove the already published GHCR image. Retry the failed mirror job
+to copy the same digest.
 
 The registry credentials are used only by the image workflow, never by PR build
 checks. Publishing does not happen on pull requests or ordinary branch pushes.
