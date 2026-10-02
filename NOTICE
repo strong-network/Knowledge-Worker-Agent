@@ -9,7 +9,7 @@ its own licence, and its licence text is in its source at the version shown.
 In the server binary
 ====================
 
-Go standard library and runtime (go1.26.6)
+Go standard library and runtime (go1.27.1)
   Licence: BSD-3-Clause
   Copyright 2009 The Go Authors.
 

@@ -46,7 +46,7 @@ RUN apk add --no-cache curl \
     && echo "${OC_SHA256}  /asset/opencode-${OC_TARGET}.tar.gz" | sha256sum -c -
 
 # --- Go build ---
-FROM golang:1.26-alpine AS builder
+FROM golang:1.27-alpine AS builder
 # The image sets GOTOOLCHAIN=local; auto honours go.mod's toolchain floor.
 ENV GOTOOLCHAIN=auto
 WORKDIR /src

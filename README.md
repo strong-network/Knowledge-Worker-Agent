@@ -39,7 +39,7 @@ see [Contributing](#contributing).
 - **opencode.** Installed automatically at a pinned version, checked against its SHA-256, if it
   isn't on `PATH` or set with `KWA_OPENCODE_BIN`.
 - **git**, for source control features.
-- **Go 1.26 and Node.js**, to build from source.
+- **Go 1.27 and Node.js**, to build from source.
 
 ## Give users access in SecurSpaces
 
@@ -72,11 +72,11 @@ docker pull ghcr.io/strong-network/knowledge-worker-agent:latest
 docker pull strongnetwork/knowledge-worker-agent:latest
 
 # A specific version
-docker pull ghcr.io/strong-network/knowledge-worker-agent:1.5.0
-docker pull strongnetwork/knowledge-worker-agent:1.5.0
+docker pull ghcr.io/strong-network/knowledge-worker-agent:1.5.1
+docker pull strongnetwork/knowledge-worker-agent:1.5.1
 ```
 
-The latest version is **1.5.0**. Every published image is tagged with its version, taken from the
+The latest version is **1.5.1**. Every published image is tagged with its version, taken from the
 [`VERSION`](VERSION) file, and `latest` moves to the most recently published one. Pin the version
 tag for anything repeatable, and the digest where you need the exact image. Images are
 `linux/amd64`.
