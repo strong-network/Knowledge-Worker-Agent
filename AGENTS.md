@@ -16,8 +16,8 @@ them to a Vue 3 single-page app over Server-Sent Events (SSE).
 - **Ships as:** one static Go binary (`knowledge-worker-agent`) with the built frontend embedded via
   `//go:embed`. No CGO, no shared libraries. The release image installs it as
   `/usr/bin/knowledge-worker-agent`.
-- **Go module:** `github.com/strong-network/Knowledge-Worker-Agent`, **Go 1.26** (`go.mod`), with a
-  toolchain floor of `go1.26.6`.
+- **Go module:** `github.com/strong-network/Knowledge-Worker-Agent`, **Go 1.27** (`go.mod`), with a
+  toolchain floor of `go1.27.1`.
 - **Only direct Go dependency:** `modernc.org/sqlite v1.34.5` (pure-Go SQLite); everything else
   is the standard library. `NOTICE` lists what the binary contains.
 - **Version:** the binary reports `<VERSION file>-<short git SHA>` (for example `1.2.0-a1b2c3d`),
@@ -395,10 +395,10 @@ names too.
   `go build ./cmd/server` requires running `make frontend` first to populate it.
 - **`make test` uses `go test ./... -v`** — `-v` makes output verbose; use `make test-short` for
   quiet runs.
-- **`go.mod` sets a toolchain floor** (`toolchain go1.26.6`), below which Go has known
+- **`go.mod` sets a toolchain floor** (`toolchain go1.27.1`), below which Go has known
   standard-library vulnerabilities. With the default `GOTOOLCHAIN=auto`, an older local Go
-  downloads and uses 1.26.6; `Dockerfile.release` sets `GOTOOLCHAIN=auto` because the `golang`
-  images default to `local`. Keep `go 1.26.0` in `go.mod` unless intentionally bumping — `go mod
+  downloads and uses 1.27.1; `Dockerfile.release` sets `GOTOOLCHAIN=auto` because the `golang`
+  images default to `local`. Keep `go 1.27.0` in `go.mod` unless intentionally bumping — `go mod
   tidy` writes the patch digit and will restore it — and raise
   the toolchain line when `govulncheck` reports a fixed Go release.
 - **Background bootstrap:** right after start, `/api/chat` and a few endpoints return 503
