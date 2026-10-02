@@ -1,0 +1,294 @@
+/* Copyright 2026 Citrix Systems, Inc. */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root { --mono: "SF Mono","Cascadia Code",Consolas,"Liberation Mono",monospace; }
+
+/* ── Theme variables ──
+   --text2/--text3 are tuned to clear WCAG AA (4.5:1) against every surface they
+   land on, including --hover. Their previous values did not: --text2 measured
+   3.57:1 (dark) / 2.71:1 (light) and --text3 fell to 2.44:1 (dark) / 1.37:1
+   (light), which left secondary sidebar text close to invisible.
+
+   --hover is a dedicated hover/active background. It is deliberately NOT
+   --surface2: that token is used as a resting background in ~135 places (form
+   inputs, modal tabs, cards), so darkening it to make hover perceptible would
+   have repainted panels across the whole app. As a hover fill it only managed
+   1.09:1 (dark) / 1.05:1 (light) against --surface — effectively no feedback. */
+[data-theme="dark"] {
+  --bg:          #1f232f;
+  --surface:     #292f3f;
+  --surface2:    #2f3546;
+  --surface3:    #343b4a;
+  --hover:       #3a4259;
+  --border:      #3c4252;
+  --text:        #ffffff;
+  --text2:       #c0c2c9;
+  --text3:       #adb0b8;
+  --accent:      #03a9f1;
+  --accent2:     #4fb7ce;
+  --accent-h:    #0a91cf;
+  --blue:        #03a9f1;
+  --green:       #6eb89d;
+  --orange:      #f7941d;
+  --red:         #da3f3f;
+  --user-bg:     #242a38;
+  --user-border: #3c4252;
+  --code-bg:     #1f232f;
+  --diff-add:    rgba(110,184,157,.15);
+  --diff-del:    rgba(218,63,63,.15);
+  --diff-add-t:  #6eb89d;
+  --diff-del-t:  #da3f3f;
+  --scrollbar-thumb:   #4a5265;
+  --scrollbar-thumb-h: #687186;
+  --scrollbar-track:   rgba(255,255,255,.04);
+}
+[data-theme="light"] {
+  --bg:          #f5f5f5;
+  --surface:     #ffffff;
+  --surface2:    #f9f9f9;
+  --surface3:    #eeeeee;
+  --hover:       #dedfe3;
+  --border:      #d8dbe0;
+  --text:        #000000;
+  --text2:       #51555f;
+  --text3:       #5e616d;
+  --accent:      #03a9f1;
+  --accent2:     #0a91cf;
+  --accent-h:    #028fd0;
+  --blue:        #03a9f1;
+  --green:       #6eb89d;
+  --orange:      #f7941d;
+  --red:         #da3f3f;
+  --user-bg:     #f0f5ff;
+  --user-border: #d8dbe0;
+  --code-bg:     #f5f5f5;
+  --diff-add:    rgba(110,184,157,.1);
+  --diff-del:    rgba(218,63,63,.1);
+  --diff-add-t:  #6eb89d;
+  --diff-del-t:  #da3f3f;
+  --scrollbar-thumb:   #a5adba;
+  --scrollbar-thumb-h: #747d8c;
+  --scrollbar-track:   rgba(0,0,0,.04);
+}
+
+html, body { height: 100%; }
+body {
+  font-family: 'Roboto', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  display: flex;
+  overflow: hidden;
+  font-size: 15px;
+  transition: background .2s, color .2s;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#app {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+@supports (height: 100dvh) {
+  html, body, #app { height: 100dvh; }
+}
+
+* { scrollbar-color: var(--scrollbar-thumb) transparent; scrollbar-width: thin; }
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--scrollbar-thumb);border-radius:999px;border:2px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:var(--scrollbar-thumb-h);background-clip:content-box}
+
+/* ── Animations ── */
+@keyframes fadeUp { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
+@keyframes fadeIn { from{opacity:0} to{opacity:1} }
+@keyframes slideUp { from{transform:translateY(10px);opacity:0} to{transform:translateY(0);opacity:1} }
+@keyframes blink { 50%{opacity:0} }
+@keyframes toolPulse { 0%,100%{opacity:1} 50%{opacity:.6} }
+@keyframes pulse-save { 0%,100%{opacity:1} 50%{opacity:.6} }
+
+/* ── Toast ── */
+#toast {
+  position:fixed; top:20px; right:20px;
+  background:var(--surface2);
+  border:1px solid var(--border);
+  color:var(--text);
+  padding:10px 16px;
+  border-radius:9px;
+  font-size:13px;
+  opacity:0;
+  pointer-events:none;
+  transition:opacity .2s, transform .2s;
+  transform:translateY(-6px);
+  z-index:999;
+  max-width:320px;
+  box-shadow:0 4px 16px rgba(0,0,0,.3);
+}
+#toast.show { opacity:1; transform:translateY(0); }
+
+/* ── Screen-reader only ──
+   For live regions and labels that must be announced but not drawn. Not
+   `display:none` or `visibility:hidden`, which remove the node from the
+   accessibility tree along with the layout. */
+.sr-only {
+  position:absolute; width:1px; height:1px;
+  padding:0; margin:-1px; border:0;
+  overflow:hidden; clip-path:inset(50%); white-space:nowrap;
+}
+
+/* ── Modal shared ── */
+.modal-overlay {
+  position:fixed; inset:0;
+  background:rgba(0,0,0,.7);
+  z-index:200;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  animation:fadeIn .15s;
+}
+.modal {
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:14px;
+  padding:24px;
+  width:560px;
+  max-width:calc(100vw - 32px);
+  max-height:90vh;
+  overflow-y:auto;
+  box-shadow:0 20px 60px rgba(0,0,0,.5);
+  animation:slideUp .15s ease;
+}
+.modal h2 { font-size:17px; font-weight:700; margin-bottom:6px; display:flex; align-items:center; gap:8px; }
+
+/* A dialog with no field to put the caret in takes focus on its own container
+   instead (see useModalDialog), so that it is announced when it opens and Tab
+   starts inside it rather than at the top of the page. That is scaffolding, not
+   somewhere the user navigated to, and the browser's ring around the whole
+   panel reads as a rendering fault. Every control inside keeps its own. */
+[role="dialog"][tabindex="-1"]:focus { outline:none; }
+.modal-subtitle { font-size:12px; color:var(--text2); margin-bottom:20px; }
+.modal-tabs { display:flex; gap:2px; margin-bottom:20px; background:var(--surface2); border-radius:8px; padding:3px; }
+.modal-tab { flex:1; padding:7px; border:none; border-radius:6px; cursor:pointer; font-size:13px; background:none; color:var(--text2); transition:all .15s; font-weight:500; }
+.modal-tab.active { background:var(--surface); color:var(--text); box-shadow:0 1px 4px rgba(0,0,0,.2); }
+.modal-panel { display:none; }
+.modal-panel.active { display:block; }
+.modal-footer { display:flex; gap:10px; justify-content:flex-end; margin-top:22px; }
+
+/* ── Form shared ── */
+.form-group { margin-bottom:16px; }
+.form-label { display:block; font-size:13px; font-weight:600; color:var(--text2); margin-bottom:6px; }
+.form-label span { color:var(--text); }
+.form-input { width:100%; padding:8px 11px; background:var(--surface2); border:1px solid var(--border); border-radius:7px; color:var(--text); font-size:13px; outline:none; transition:border-color .15s; font-family:var(--mono); }
+.form-input:focus { border-color:var(--accent); }
+.form-select { width:100%; padding:8px 11px; background:var(--surface2); border:1px solid var(--border); border-radius:7px; color:var(--text); font-size:13px; outline:none; cursor:pointer; }
+.form-select:focus { border-color:var(--accent); }
+.form-textarea { width:100%; padding:8px 11px; background:var(--surface2); border:1px solid var(--border); border-radius:7px; color:var(--text); font-size:12px; outline:none; font-family:var(--mono); min-height:80px; resize:vertical; }
+.form-textarea:focus { border-color:var(--accent); }
+.form-hint { font-size:11px; color:var(--text2); margin-top:4px; }
+
+/* ── Buttons ── */
+.btn { padding:8px 18px; border-radius:7px; font-size:13px; font-weight:500; cursor:pointer; border:none; transition:all .15s; }
+.btn-ghost { background:none; border:1px solid var(--border); color:var(--text2); }
+.btn-ghost:hover { color:var(--text); background:var(--surface2); }
+.btn-primary { background:var(--accent); color:#fff; border:none; padding:8px 18px; border-radius:7px; font-size:13px; font-weight:500; cursor:pointer; }
+.btn-primary:hover { background:var(--accent-h); }
+.btn-primary:disabled { opacity:.6; cursor:default; }
+.btn-secondary { background:var(--surface2); border:1px solid var(--border); color:var(--text2); padding:8px 18px; border-radius:7px; font-size:13px; cursor:pointer; }
+.btn-secondary:hover { color:var(--text); background:var(--surface3); }
+
+/* ── Toggle switch ── */
+.toggle { position:relative; width:38px; height:22px; flex-shrink:0; }
+.toggle input { opacity:0; width:0; height:0; }
+.slider { position:absolute; inset:0; background:var(--surface3); border-radius:22px; cursor:pointer; transition:background .2s; }
+.slider::before { content:""; position:absolute; height:16px; width:16px; left:3px; bottom:3px; background:#fff; border-radius:50%; transition:transform .2s; }
+.toggle input:checked + .slider { background:var(--accent); }
+.toggle input:checked + .slider::before { transform:translateX(16px); }
+
+/* ── Context menu ── */
+.ctx-menu {
+  position:fixed; z-index:1000; background:var(--surface); border:1px solid var(--border);
+  border-radius:8px; box-shadow:0 8px 32px rgba(0,0,0,.3); min-width:160px;
+  overflow:hidden; animation:fadeIn .1s ease;
+}
+.ctx-menu-item {
+  padding:8px 14px; font-size:13px; cursor:pointer; color:var(--text);
+  display:flex; align-items:center; gap:8px; transition:background .1s;
+}
+.ctx-menu-item:hover { background:var(--surface2); }
+.ctx-menu-item.danger { color:var(--red); }
+
+/* ── Mobile responsive ── */
+@media (max-width: 768px) {
+  body { font-size: 14px; }
+  .modal { width:94vw !important; max-height:88vh; overflow-y:auto; padding: 18px; }
+  .modal h2 { font-size: 16px; }
+  .modal-footer { flex-wrap: wrap; }
+  .btn { padding: 9px 14px; font-size: 13px; }
+  /* Larger tap targets */
+  button, .btn, input, select, textarea { min-height: 36px; }
+  input, select, textarea { font-size: 16px !important; } /* prevents iOS zoom on focus */
+}
+
+/* ── Rendered code blocks ──
+   useMarkdown.highlightCode() enhances every `pre > code` into:
+     <pre> → <div.pre-header>(<span.pre-lang>, <button.copy-btn>) + <code.hljs>
+   Those chrome classes have no styling of their own, and every consumer
+   (MessageBubble, WorkspaceFilePanel) strips the code element's
+   background, so the imported github-dark highlight.js tokens end up rendered on
+   a light surface and wash out in light mode. We keep the card dark in BOTH app
+   themes (that's what github-dark expects) and force the surface onto the <pre>,
+   which is the one lever that wins over the scoped / github-markdown rules.
+   Scoped to `:has(> .pre-header)` so plain <pre> viewers stay untouched. */
+pre:has(> .pre-header) {
+  padding: 0 !important;
+  background: #1e2330 !important;
+  border: 1px solid #2b3140 !important;
+  border-radius: 8px;
+  overflow: hidden;
+  margin: 12px 0;
+}
+pre:has(> .pre-header) > code.hljs {
+  display: block;
+  padding: 14px;
+  background: transparent !important;
+  color: #c9d1d9 !important;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-x: auto;
+}
+.pre-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 8px 6px 14px;
+  background: #171b24;
+  border-bottom: 1px solid #2b3140;
+  font-family: var(--mono);
+}
+.pre-lang {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: #8b949e;
+  user-select: none;
+}
+.copy-btn {
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1;
+  color: #c9d1d9;
+  background: transparent;
+  border: 1px solid #2b3140;
+  border-radius: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+  transition: background .12s ease, color .12s ease, border-color .12s ease;
+}
+.copy-btn:hover { background: #2b3140; color: #fff; border-color: #3a4152; }
+.copy-btn:active { transform: translateY(1px); }

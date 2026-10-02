@@ -1,0 +1,54 @@
+{
+  // The control file of a configuration repository. It registers each artifact
+  // under an ID, then assigns IDs to projects. A workspace whose KWA_PROJECT_ID
+  // names a project here gets that project's artifacts at every start.
+  "schema_version": 2,
+
+  // 1. Register each artifact: an ID, and its path in this repository.
+  //    An ID stands for one version. To change an artifact, add it under a new
+  //    ID. Vocabularies are the exception: edit them in place.
+  "artifacts": {
+    "mcp": {
+      "mcp.microsoft-learn.v1": { "path": "artifacts/mcp/microsoft-learn.json" },
+      "mcp.atlassian.v1":       { "path": "artifacts/mcp/atlassian.json" },
+      "mcp.acme-docs.v1":       { "path": "artifacts/mcp/acme-docs.json" }
+    },
+    "provider": {
+      "provider.onprem.v1": { "path": "artifacts/provider/onprem.json" }
+    },
+    "agents": {
+      "agent.writer.v1": { "path": "artifacts/agents/writer.md" }
+    },
+    "context": {
+      "context.style.v1": { "path": "artifacts/context/style.md" }
+    },
+    "skills": {
+      "skill.meeting-notes.v1": { "path": "artifacts/skills/meeting-notes/" }
+    },
+    "vocabulary": {
+      "vocabulary.org": { "path": "artifacts/vocabulary/org.md" }
+    }
+  },
+
+  // 2. Assign IDs to projects, by kind. A project gets exactly what it lists.
+  //    To share an artifact, list its ID in each project.
+  "assignments": {
+    "projects": {
+      // Uses the built-in model providers: it's assigned none.
+      "proj_team": {
+        "mcp":        ["mcp.microsoft-learn.v1", "mcp.atlassian.v1", "mcp.acme-docs.v1"],
+        "agents":     ["agent.writer.v1"],
+        "context":    ["context.style.v1"],
+        "skills":     ["skill.meeting-notes.v1"],
+        "vocabulary": ["vocabulary.org"]
+      },
+      // Uses only its own model provider, which is fictional until you point it
+      // at a real endpoint.
+      "proj_onprem": {
+        "provider": ["provider.onprem.v1"],
+        "agents":   ["agent.writer.v1"],
+        "context":  ["context.style.v1"]
+      }
+    }
+  }
+}

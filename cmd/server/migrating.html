@@ -1,0 +1,73 @@
+<!-- Copyright 2026 Citrix Systems, Inc. -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reorganizing your files · Knowledge Worker Agent</title>
+<style>
+  :root { color-scheme: light dark; --bg: #f6f7f9; --card: #fff; --text: #1d2127; --muted: #5b6470; --accent: #2f6fde; --warn: #9a5b00; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #15181c; --card: #1f2329; --text: #e8eaed; --muted: #a3abb5; --accent: #7aa7ff; --warn: #f0b45a; } }
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--bg); color: var(--text); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { background: var(--card); max-width: 34rem; margin: 1.5rem; padding: 2rem 2.25rem; border-radius: 12px; box-shadow: 0 2px 16px rgba(0,0,0,.08); }
+  h1 { font-size: 1.35rem; margin: 0 0 .75rem; }
+  p { margin: .6rem 0; }
+  .warn { color: var(--warn); font-weight: 600; }
+  .progress { margin: 1.25rem 0 .5rem; font-weight: 600; }
+  .bar { height: 6px; border-radius: 3px; background: rgba(127,127,127,.2); overflow: hidden; }
+  .bar span { display: block; height: 100%; width: 30%; background: var(--accent); border-radius: 3px; animation: slide 1.6s ease-in-out infinite; }
+  .bar.counted span { animation: none; transition: width .5s; }
+  @keyframes slide { 0% { margin-left: -30%; } 100% { margin-left: 100%; } }
+  .muted { color: var(--muted); font-size: .9rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="heading">Reorganizing your files</h1>
+  <p id="intro">Knowledge Worker Agent is moving your chats, projects and settings into one folder, Knowledge_Worker_Agent. This happens once.</p>
+  <p class="warn">Don't stop or restart the workspace until this finishes.</p>
+  <p>You can close this tab; the move continues.</p>
+  <p class="progress" id="progress" aria-live="polite">Starting.</p>
+  <div class="bar" id="bar"><span id="fill"></span></div>
+  <p class="muted" id="stops">If the workspace stops anyway, nothing is lost: the move is undone at the next start, and runs again.</p>
+</main>
+<script>
+  const words = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
+  function minutesLeft(n) {
+    if (!n) return '';
+    if (n === 1) return ' About one minute left.';
+    return ' About ' + (n < 10 ? words[n] : n) + ' minutes left.';
+  }
+  let undoShown = false;
+  async function poll() {
+    try {
+      const res = await fetch('/api/status?t=' + Date.now(), { cache: 'no-store' });
+      const s = await res.json();
+      if (s.status !== 'migrating') {
+        location.replace('/');
+        return;
+      }
+      const m = s.migration || {};
+      if (m.undo && !undoShown) {
+        undoShown = true;
+        document.title = 'Moving your files back · Knowledge Worker Agent';
+        document.getElementById('heading').textContent = 'Moving your files back';
+        document.getElementById('intro').textContent = 'Knowledge Worker Agent is moving your chats, projects and settings back to where they were before Knowledge_Worker_Agent.';
+        document.getElementById('stops').textContent = 'If the workspace stops anyway, nothing is lost: the move back is undone at the next start, and runs again.';
+      }
+      let text = (m.phase || 'Working') + (m.total ? ': ' + m.done + ' of ' + m.total + '.' : '.');
+      document.getElementById('progress').textContent = text + minutesLeft(m.minutes);
+      const bar = document.getElementById('bar');
+      bar.classList.toggle('counted', !!m.total);
+      document.getElementById('fill').style.width = m.total ? Math.max(3, Math.round(100 * m.done / m.total)) + '%' : '';
+    } catch (e) {
+      // Between the move finishing and Knowledge Worker Agent starting, nothing answers.
+      document.getElementById('progress').textContent = 'Starting Knowledge Worker Agent.';
+    }
+    setTimeout(poll, 3000);
+  }
+  poll();
+</script>
+</body>
+</html>

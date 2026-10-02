@@ -1,0 +1,26 @@
+{
+  // A fictional Acme service that takes each user's own API key. Point the URL
+  // at a real server to try it.
+  //
+  // There's no header and no key here: Knowledge Worker Agent adds the header,
+  // with the key each user pastes into the connectors list. A key in the
+  // repository would be one key for everyone.
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "acme-docs": {
+      "type": "remote",
+      "url": "https://mcp.acme.example.com/mcp"
+    }
+  },
+  "kwa": {
+    "auth": {
+      "type": "api-key",
+      "label": "Acme Docs",
+      "help": "Paste the personal API key from your Acme Docs profile.",
+      "helpUrl": "https://docs.acme.example.com/api-keys",
+      // Sends "X-API-Key: <key>". Leave both out for "Authorization: Bearer <key>".
+      "header": "X-API-Key",
+      "scheme": ""
+    }
+  }
+}

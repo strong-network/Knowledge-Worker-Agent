@@ -1,0 +1,9 @@
+build/
+*.db
+*.bak
+upload/
+working/
+/server
+cmd/server/html/
+# Build-time opencode fallback asset, staged by Dockerfile.release. Never committed.
+internal/opencodeembed/asset/*.tar.gz

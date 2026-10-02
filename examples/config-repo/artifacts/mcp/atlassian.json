@@ -1,0 +1,24 @@
+{
+  // Atlassian Rovo: Jira and Confluence. Users sign in in the browser.
+  //
+  // There's no "enabled" key, on purpose. Assignment makes a connector
+  // available and switched off, and each user turns it on. If an artifact sets
+  // the key, the materializer removes it and logs a warning.
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "atlassian": {
+      "type": "remote",
+      "url": "https://mcp.atlassian.com/v1/mcp/authv2"
+    }
+  },
+  // Read by Knowledge Worker Agent and removed before opencode sees the rest.
+  // Without it, users may have no way to connect the server.
+  "kwa": {
+    "auth": {
+      "type": "oauth",
+      "label": "Atlassian",
+      "help": "Sign in with your Atlassian account to read and update Jira issues and Confluence pages.",
+      "helpUrl": "https://support.atlassian.com/atlassian-rovo-mcp-server/docs/getting-started-with-the-atlassian-remote-mcp-server/"
+    }
+  }
+}
