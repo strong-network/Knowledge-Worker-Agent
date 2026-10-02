@@ -1,0 +1,53 @@
+{
+  // A model provider on a private, OpenAI-compatible endpoint. The endpoint is
+  // fictional: point baseURL at a real one before assigning this. With
+  // KWA_CENTRAL_CONFIG on, assigned providers replace the built-in ones.
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "onprem": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Acme models",
+      "options": {
+        "baseURL": "https://models.acme.example.com/v1",
+        // Never the key itself. {env:NAME} reads it from an environment
+        // variable. {file:/path} reads a file instead, but opencode rejects its
+        // whole configuration while that file is missing.
+        "apiKey": "{env:ACME_MODELS_KEY}"
+      },
+      // A private endpoint has no public model list, so each model needs a cost
+      // and a limit, or usage shows no cost and no context limit.
+      "models": {
+        "large": {
+          "name": "Acme Large",
+          "cost": { "input": 2, "output": 6 },
+          "limit": { "context": 128000, "output": 8192 },
+          "tool_call": true
+        },
+        "small": {
+          "name": "Acme Small",
+          "cost": { "input": 0.2, "output": 0.6 },
+          "limit": { "context": 128000, "output": 8192 },
+          "tool_call": true
+        }
+      }
+    }
+  },
+  "kwa": {
+    "auth": {
+      // "managed": you provide the key. "user-key": each user adds their own.
+      "type": "managed",
+      // Where the key is: an environment variable's name, or a file's path.
+      // Only its presence is checked.
+      "secretRef": "ACME_MODELS_KEY",
+      "label": "Acme models",
+      "help": "Provided by your administrator."
+    },
+    // The models behind Default and Thinking, and the one for short background
+    // jobs such as naming chats.
+    "presets": {
+      "default": "onprem/large",
+      "thinking": "onprem/large",
+      "small": "onprem/small"
+    }
+  }
+}

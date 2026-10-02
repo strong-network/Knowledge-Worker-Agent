@@ -1,0 +1,160 @@
+# syntax=docker/dockerfile:1
+#
+# Knowledge Worker Agent release image.
+#
+# Uses strongnetwork/cloud_editor_generic as the workspace base. Supply your own
+# model-provider credentials and central configuration. An embedded opencode
+# fallback lets the workspace start when github.com is unreachable.
+#
+# Build:  DOCKER_BUILDKIT=1 docker build -f Dockerfile.release -t chat:0.0.8 .
+# Or:     make release
+
+# --- Frontend build ---
+FROM node:20-alpine AS frontend
+WORKDIR /src/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+# --no-audit/--no-fund: --silent discards both reports anyway, and the audit
+# POST stalls for npm's full 300s fetch-timeout on networks that block it.
+RUN --mount=type=cache,target=/root/.npm npm ci --silent --no-audit --no-fund
+COPY frontend/ ./
+RUN npx vite build
+
+# --- opencode fallback asset ---
+# Fetched at build time and embedded into the chat binary as a *backup*. At
+# runtime the installer still downloads the pinned release from GitHub first;
+# the embedded copy is used only when that fails (no egress, proxy block,
+# corrupt or altered download). Either way the binary lands in the normal
+# install dir (~/.opencode/bin, or KWA_OPENCODE_INSTALL_DIR).
+#
+# The version and checksums must match PinnedVersion and pinnedSHA256 in
+# internal/opencodeinstaller, which accepts only a matching embedded copy; a test
+# checks they agree. The build fails if the download doesn't match.
+FROM alpine:3.20 AS opencodeasset
+ARG OPENCODE_VERSION=v1.18.33
+ARG OPENCODE_SHA256_LINUX_X64=e546123213ae47909a4268692aa4b94950d011afe9cac9938753a2194f1c16d5
+ARG OPENCODE_SHA256_LINUX_ARM64=c63486624621924bf43be5c01abd252885661a734814224f6d70188a33aea858
+ARG TARGETARCH=amd64
+RUN apk add --no-cache curl \
+    && case "${TARGETARCH}" in \
+    amd64) OC_TARGET=linux-x64; OC_SHA256="${OPENCODE_SHA256_LINUX_X64}" ;; \
+    arm64) OC_TARGET=linux-arm64; OC_SHA256="${OPENCODE_SHA256_LINUX_ARM64}" ;; \
+    *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && mkdir -p /asset \
+    && curl -fsSL -o "/asset/opencode-${OC_TARGET}.tar.gz" \
+    "https://github.com/anomalyco/opencode/releases/download/${OPENCODE_VERSION}/opencode-${OC_TARGET}.tar.gz" \
+    && echo "${OC_SHA256}  /asset/opencode-${OC_TARGET}.tar.gz" | sha256sum -c -
+
+# --- Go build ---
+FROM golang:1.26-alpine AS builder
+# The image sets GOTOOLCHAIN=local; auto honours go.mod's toolchain floor.
+ENV GOTOOLCHAIN=auto
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+COPY . .
+COPY --from=frontend /src/cmd/server/html/ ./cmd/server/html/
+# Stage the fallback tarball into the embed package before compiling. Without
+# this the build still succeeds — it just produces a network-only binary.
+COPY --from=opencodeasset /asset/ ./internal/opencodeembed/asset/
+ARG VERSION
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-s -w -X main.version=${VERSION:-$(cat VERSION)-release}" \
+    -trimpath \
+    -o /knowledge-worker-agent \
+    ./cmd/server
+
+# --- Dictation engine ---
+# whisper.cpp's server, built on the runtime's OS (Ubuntu 24.04, glibc 2.39).
+# Every x86-64 CPU variant is built and the best one is loaded at startup.
+# RPATH is $ORIGIN, so the server finds its libraries in its own directory.
+FROM ubuntu:24.04 AS whisperengine
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+       build-essential cmake \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+# Pinned: bump the tag and its checksum together.
+ADD --checksum=sha256:57e280cee375ab02425b806ad5146b99f6eb9357e3c2b31357c8a6af2e2e44ae \
+    https://codeload.github.com/ggml-org/whisper.cpp/tar.gz/refs/tags/v1.9.4 whisper.cpp.tar.gz
+RUN mkdir whisper.cpp && tar xzf whisper.cpp.tar.gz --strip-components=1 -C whisper.cpp \
+    && cmake -S whisper.cpp -B build -DCMAKE_BUILD_TYPE=Release \
+       -DGGML_NATIVE=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON \
+       -DBUILD_SHARED_LIBS=ON -DWHISPER_BUILD_TESTS=OFF \
+       -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+    && cmake --build build -j"$(nproc)" --target whisper-server whisper-quantize \
+    && mkdir -p /out/engine /out/licenses/whisper.cpp \
+    && cp -a build/bin/whisper-server build/bin/lib*.so.* build/bin/libggml-cpu-*.so /out/engine/ \
+    && cp whisper.cpp/LICENSE /out/licenses/whisper.cpp/
+
+# --- Dictation model ---
+# OpenAI's official Whisper small.en weights, converted by whisper.cpp's own
+# script. Every input is pinned by SHA-256, and so is the output: the
+# conversion is deterministic, so a changed input fails the build.
+FROM python:3.12-slim AS whispermodel
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --index-url https://download.pytorch.org/whl/cpu torch==2.14.0 \
+    && pip install numpy==2.5.3
+WORKDIR /work
+ADD --checksum=sha256:f953ad0fd29cacd07d5a9eda5624af0f6bcf2258be67c92b79389873d91e0872 \
+    https://openaipublic.azureedge.net/main/whisper/models/f953ad0fd29cacd07d5a9eda5624af0f6bcf2258be67c92b79389873d91e0872/small.en.pt small.en.pt
+# The converter reads two assets from an openai/whisper checkout; only those are fetched.
+ADD --checksum=sha256:7450ae70723a5ef9d341e3cee628c7cb0177f36ce42c44b7ed2bf3325f0f6d4c \
+    https://raw.githubusercontent.com/openai/whisper/v20250625/whisper/assets/mel_filters.npz whisper/whisper/assets/mel_filters.npz
+ADD --checksum=sha256:306cd27f03c1a714eca7108e03d66b7dc042abe8c258b44c199a7ed9838dd930 \
+    https://raw.githubusercontent.com/openai/whisper/v20250625/whisper/assets/gpt2.tiktoken whisper/whisper/assets/gpt2.tiktoken
+ADD --checksum=sha256:b5d65a59060e68c4ff940e1eddfa6f94b2d68fdf58ed7f4dd57721c997e35e9d \
+    https://raw.githubusercontent.com/openai/whisper/v20250625/LICENSE LICENSE.whisper
+COPY --from=whisperengine /src/whisper.cpp/models/convert-pt-to-ggml.py ./
+RUN mkdir -p /out \
+    && python convert-pt-to-ggml.py small.en.pt whisper /out \
+    && mv /out/ggml-model.bin /out/ggml-small.en.bin \
+    && echo "ee15d70145037f2c59b8ea2ed24a7144d9089c6056e53c67c220b9db568eadd9  /out/ggml-small.en.bin" \
+       | sha256sum -c - \
+    && install -Dm644 LICENSE.whisper /out/licenses/whisper/LICENSE
+
+# --- Dictation model, 8-bit ---
+# Same accuracy at half the size and memory, and faster. Runs on the engine's
+# stage because the quantize tool needs its glibc; the step is deterministic.
+FROM whisperengine AS whisperquant
+COPY --from=whispermodel /out/ggml-small.en.bin /tmp/
+RUN mkdir -p /out \
+    && build/bin/whisper-quantize /tmp/ggml-small.en.bin /out/ggml-small.en-q8_0.bin q8_0 >/dev/null \
+    && echo "e68726c01151247654bbfb625ae2c292428e254a918bfa1768f04021167c7de0  /out/ggml-small.en-q8_0.bin" \
+       | sha256sum -c -
+
+# --- Runtime ---
+FROM strongnetwork/cloud_editor_generic:2.3.9
+
+USER root
+# The chat server owns workspace startup, replacing the base image's own.
+RUN rm -rf /usr/bin/strong_network_startup/
+
+COPY --chmod=0755 --from=builder /knowledge-worker-agent /usr/bin/knowledge-worker-agent
+# Its old name, for anything that still starts it by that path.
+RUN ln -s knowledge-worker-agent /usr/bin/chat
+
+# Dictation: engine, model and their licences.
+COPY --from=whisperengine /out/engine/ /usr/lib/knowledge-worker-agent/whisper/
+COPY --from=whisperquant /out/ggml-small.en-q8_0.bin /usr/share/knowledge-worker-agent/whisper/
+COPY --from=whisperengine /out/licenses/ /usr/share/doc/knowledge-worker-agent/third-party/
+COPY --from=whispermodel /out/licenses/ /usr/share/doc/knowledge-worker-agent/third-party/
+# Fails the build if the base image lacks a library the engine needs.
+RUN ! ldd /usr/lib/knowledge-worker-agent/whisper/whisper-server /usr/lib/knowledge-worker-agent/whisper/*.so* | grep 'not found' \
+    && /usr/lib/knowledge-worker-agent/whisper/whisper-server --help >/dev/null
+
+RUN mkdir -p /home/developer
+
+ENV KWA_HOST=0.0.0.0
+ENV KWA_PORT=8765
+ENV COPILOT_WORKSPACE=/home/developer
+ENV COPILOT_DB_PATH=/home/developer/copilot-web.db
+
+EXPOSE 8765
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
+    CMD ["/usr/bin/knowledge-worker-agent", "health"]
+
+ENTRYPOINT ["/usr/bin/knowledge-worker-agent"]

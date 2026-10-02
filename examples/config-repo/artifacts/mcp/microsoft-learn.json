@@ -1,0 +1,18 @@
+{
+  // Microsoft Learn: search Microsoft's documentation. It connects without an
+  // account, so its kwa block only names and describes it.
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "microsoft-learn": {
+      "type": "remote",
+      "url": "https://learn.microsoft.com/api/mcp"
+    }
+  },
+  "kwa": {
+    "auth": {
+      "type": "none",
+      "label": "Microsoft Learn",
+      "help": "Searches Microsoft's documentation. No account needed."
+    }
+  }
+}
