@@ -61,6 +61,26 @@ Images built before the binary was renamed have it at `/usr/bin/chat`, which cur
 as a link. For the full steps, see
 [Give users access to Knowledge Worker Agent](https://docs.citrix.com/en-us/securspaces/knowledge-worker-agent/administer/give-users-access.html).
 
+## Container images
+
+The release image is published to GitHub Container Registry and to Docker Hub. The two are the
+same image: Docker Hub is a copy of the GHCR build, by digest.
+
+```bash
+# Latest release
+docker pull ghcr.io/strong-network/knowledge-worker-agent:latest
+docker pull strongnetwork/knowledge-worker-agent:latest
+
+# A specific version
+docker pull ghcr.io/strong-network/knowledge-worker-agent:1.5.0
+docker pull strongnetwork/knowledge-worker-agent:1.5.0
+```
+
+The latest version is **1.5.0**. Every published image is tagged with its version, taken from the
+[`VERSION`](VERSION) file, and `latest` moves to the most recently published one. Pin the version
+tag for anything repeatable, and the digest where you need the exact image. Images are
+`linux/amd64`.
+
 ## Features at a glance
 
 - Chat with markdown, tool-call details, questions and approvals, a message queue, and attachments

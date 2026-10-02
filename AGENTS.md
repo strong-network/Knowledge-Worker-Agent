@@ -398,7 +398,8 @@ names too.
 - **`go.mod` sets a toolchain floor** (`toolchain go1.26.6`), below which Go has known
   standard-library vulnerabilities. With the default `GOTOOLCHAIN=auto`, an older local Go
   downloads and uses 1.26.6; `Dockerfile.release` sets `GOTOOLCHAIN=auto` because the `golang`
-  images default to `local`. Keep `go 1.26` in `go.mod` unless intentionally bumping, and raise
+  images default to `local`. Keep `go 1.26.0` in `go.mod` unless intentionally bumping — `go mod
+  tidy` writes the patch digit and will restore it — and raise
   the toolchain line when `govulncheck` reports a fixed Go release.
 - **Background bootstrap:** right after start, `/api/chat` and a few endpoints return 503
   (`requireOpencodeReady`) until opencode is verified — expected, not a bug.

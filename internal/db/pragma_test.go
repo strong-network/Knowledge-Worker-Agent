@@ -96,13 +96,18 @@ func TestInitUpgradesExistingDeleteModeDB(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "legacy.db")
 
-	// Build a database the way the previous release did: the pragma names are
-	// ignored, leaving the default rollback journal.
-	old, err := sql.Open("sqlite", path+"?_journal_mode=WAL&_busy_timeout=5000")
+	// Build a database the way the previous release did: the rollback journal,
+	// with no WAL. The journal mode is set explicitly rather than by leaving a
+	// DSN parameter to be ignored, because newer driver releases honour the
+	// old parameter names and would quietly make this a WAL database.
+	old, err := sql.Open("sqlite", path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	old.SetMaxOpenConns(1)
+	if _, err := old.Exec(`PRAGMA journal_mode=delete`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := old.Exec(`CREATE TABLE legacy (v TEXT)`); err != nil {
 		t.Fatal(err)
 	}
