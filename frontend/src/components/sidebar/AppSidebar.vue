@@ -4,7 +4,7 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useSessionsStore } from '../../stores/sessions'
-import { useUiStore } from '../../stores/ui'
+import { useUiStore, SIDEBAR_MIN } from '../../stores/ui'
 import { useProjectsStore } from '../../stores/projects'
 import { useScheduledTasksStore } from '../../stores/scheduledTasks'
 import SessionList from './SessionList.vue'
@@ -92,7 +92,7 @@ function clearPeekTimer() {
 // This asks what the input actually is rather than what the device supports:
 // `(hover: hover)` reports false on touch laptops, which do have a mouse.
 function onDockEnter(e: PointerEvent) {
-  if (!ui.sidebarCollapsed || e.pointerType === 'touch') return
+  if (!ui.sidebarCollapsed || e.pointerType === 'touch' || resizing.value) return
   clearPeekTimer()
   // A pointer crossing the rail on its way somewhere else shouldn't fling the
   // panel out, so wait long enough to tell a pass-through from an intent.
@@ -133,6 +133,46 @@ watch(
 )
 
 onBeforeUnmount(clearPeekTimer)
+
+// ── Resizing ──
+// Dragging the right edge sets the width, between SIDEBAR_MIN and a third of
+// the window. Dragging well past the minimum collapses the bar to the rail,
+// live, so dragging back out reopens it within the same gesture.
+const COLLAPSE_BELOW = 150
+const resizing = ref(false)
+function startResize(e: PointerEvent) {
+  if (e.button !== 0) return
+  e.preventDefault()
+  const startX = e.clientX
+  const startW = document.getElementById('sidebar')?.getBoundingClientRect().width ?? ui.sidebarWidth
+  const handle = e.currentTarget as HTMLElement | null
+  try { handle?.setPointerCapture(e.pointerId) } catch { /* not all pointers capture */ }
+  resizing.value = true
+  function onMove(ev: PointerEvent) {
+    const want = startW + (ev.clientX - startX)
+    if (want < COLLAPSE_BELOW) {
+      // Reopening restores the width from before this drag, not the minimum.
+      if (!ui.sidebarCollapsed) { ui.setSidebarWidth(startW); ui.setSidebarCollapsed(true) }
+      return
+    }
+    if (ui.sidebarCollapsed) ui.setSidebarCollapsed(false)
+    ui.setSidebarWidth(Math.max(SIDEBAR_MIN, want))
+  }
+  function onUp(ev: PointerEvent) {
+    try { handle?.releasePointerCapture(ev.pointerId) } catch { /* handle gone after a collapse */ }
+    window.removeEventListener('pointermove', onMove)
+    window.removeEventListener('pointerup', onUp)
+    window.removeEventListener('pointercancel', onUp)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+    resizing.value = false
+  }
+  window.addEventListener('pointermove', onMove)
+  window.addEventListener('pointerup', onUp)
+  window.addEventListener('pointercancel', onUp)
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+}
 </script>
 
 <template>
@@ -141,6 +181,7 @@ onBeforeUnmount(clearPeekTimer)
   <div
     id="sidebar-dock"
     :class="{ collapsed: ui.sidebarCollapsed, peeking }"
+    :style="{ '--sidebar-width': ui.sidebarWidth + 'px' }"
     @pointerenter="onDockEnter"
     @pointerleave="onDockLeave"
   >
@@ -168,10 +209,7 @@ onBeforeUnmount(clearPeekTimer)
         :class="{ open: ui.sidebarOpen, peek: ui.sidebarCollapsed }"
       >
         <div id="sidebar-header">
-          <!-- The toggle leads the row so it keeps the rail button's position:
-               collapsed and expanded, the icon sits on the same spot, so
-               hovering the rail to expand doesn't slide it out from under the
-               pointer. -->
+          <div class="brand-title">Knowledge Worker Agent</div>
           <button
             class="collapse-btn"
             @click="onSidebarButton"
@@ -183,7 +221,6 @@ onBeforeUnmount(clearPeekTimer)
               <path d="M9 4v16" stroke-linecap="round"/>
             </svg>
           </button>
-          <div class="brand-title">Knowledge Worker Agent</div>
         </div>
 
         <button id="new-chat-btn" @click="openNewChat">
@@ -222,6 +259,18 @@ onBeforeUnmount(clearPeekTimer)
         </div>
       </div>
     </Transition>
+
+    <!-- On the docked bar's right edge; a peeking or collapsed bar has none. -->
+    <div
+      v-if="!ui.sidebarCollapsed"
+      class="sb-resize"
+      :class="{ dragging: resizing }"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize sidebar"
+      title="Drag to resize"
+      @pointerdown="startResize"
+    ></div>
   </div>
 </template>
 
@@ -242,8 +291,10 @@ onBeforeUnmount(clearPeekTimer)
 }
 
 #sidebar {
-  width: 268px;
-  min-width: 268px;
+  width: var(--sidebar-width, 268px);
+  /* Also enforced while dragging; here it holds when the window shrinks. */
+  max-width: 33.333vw;
+  flex-shrink: 0;
   background: var(--surface);
   border-right: 1px solid var(--border);
   display: flex;
@@ -276,8 +327,7 @@ onBeforeUnmount(clearPeekTimer)
   background: var(--surface);
   border-right: 1px solid var(--border);
   display: flex; flex-direction: column; align-items: center;
-  /* 9px top matches the header's padding, so the toggle occupies the same
-     point vertically as well as horizontally when the sidebar opens. */
+  /* 9px top matches the header's padding, so the toggle sits on the header row. */
   gap: 8px; padding: 9px 0 12px;
 }
 .rail-btn {
@@ -298,7 +348,7 @@ onBeforeUnmount(clearPeekTimer)
    with it. The old header was 14/12 padding around a 34px avatar, which is
    why it sat 6px proud of the chat header. */
 #sidebar-header {
-  padding: 9px 12px 9px 8px;
+  padding: 9px 8px 9px 16px;
   min-height: 54px;
   border-bottom: 1px solid var(--border);
   display: flex;
@@ -306,14 +356,13 @@ onBeforeUnmount(clearPeekTimer)
   gap: 6px;
 }
 .brand-title {
+  flex: 1;
   font-size: 14px; font-weight: 600; line-height: 1.2; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
-/* Sized and positioned to land on the rail button's centre: the rail is 52px
-   wide with a 36px button (centre 26px), so 8px of header padding plus half of
-   36px puts this in the same place. Keeping the two in step is the point of
-   the matching numbers — changing one means changing the other. */
+/* Ends the header row, at the bar's right edge, where it is easier to spot
+   than in the corner. */
 .collapse-btn {
   flex-shrink: 0;
   width: 36px; height: 36px;
@@ -380,10 +429,30 @@ onBeforeUnmount(clearPeekTimer)
   background: var(--accent); margin-left: 2px; flex-shrink: 0;
 }
 
+/* A 10px grab area centred on the bar's border; only a hairline lights up. */
+.sb-resize {
+  position: absolute;
+  top: 0; bottom: 0; right: -5px;
+  width: 10px;
+  cursor: col-resize;
+  z-index: 20;
+  touch-action: none;
+}
+.sb-resize::after {
+  content: '';
+  position: absolute;
+  top: 0; bottom: 0; left: 4px;
+  width: 2px;
+  border-radius: 2px;
+  background: transparent;
+  transition: background .15s;
+}
+.sb-resize:hover::after, .sb-resize.dragging::after { background: var(--accent); }
+
 @media (max-width: 768px) {
   #sidebar {
     position: fixed; top: 0; left: -100%; bottom: 0; z-index: 300;
-    width: min(86vw, 320px); min-width: min(86vw, 320px);
+    width: min(86vw, 320px); min-width: min(86vw, 320px); max-width: none;
     transition: left .25s ease; box-shadow: none;
   }
   #sidebar.open { left: 0; box-shadow: 4px 0 24px rgba(0,0,0,.4); }
@@ -391,6 +460,7 @@ onBeforeUnmount(clearPeekTimer)
      drawer is also the only sidebar here, so the desktop peek positioning
      must not leak into it. */
   #sidebar-rail { display: none; }
+  .sb-resize { display: none; }
   #sidebar.peek { position: fixed; z-index: 300; box-shadow: none; }
 }
 </style>

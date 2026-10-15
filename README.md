@@ -72,11 +72,11 @@ docker pull ghcr.io/strong-network/knowledge-worker-agent:latest
 docker pull strongnetwork/knowledge-worker-agent:latest
 
 # A specific version
-docker pull ghcr.io/strong-network/knowledge-worker-agent:1.5.1
-docker pull strongnetwork/knowledge-worker-agent:1.5.1
+docker pull ghcr.io/strong-network/knowledge-worker-agent:1.5.3
+docker pull strongnetwork/knowledge-worker-agent:1.5.3
 ```
 
-The latest version is **1.5.1**. Every published image is tagged with its version, taken from the
+The latest version is **1.5.3**. Every published image is tagged with its version, taken from the
 [`VERSION`](VERSION) file, and `latest` moves to the most recently published one. Pin the version
 tag for anything repeatable, and the digest where you need the exact image. Images are
 `linux/amd64`.

@@ -13,6 +13,7 @@
 // changing it); this component owns everything about showing and editing it.
 import { ref, computed, watch, onBeforeUnmount, nextTick } from 'vue'
 import { ownerFileApi, type FileApi } from '../../api/files'
+import { fetchOfficeStatus, installOffice, type OfficeInstallStatus } from '../../api'
 import { renderMarkdown, highlightCode } from '../../composables/useMarkdown'
 import { parseCsv } from '../../utils/csv'
 import { triggerDownload } from '../../utils/download'
@@ -47,7 +48,7 @@ const files = computed(() => props.api || ownerFileApi)
 const emit = defineEmits<{ (e: 'update:dirty', value: boolean): void }>()
 
 const dirty = ref(false)
-const viewMode = ref<'code' | 'markdown' | 'image' | 'pdf' | 'html' | 'csv' | 'unsupported'>('code')
+const viewMode = ref<'code' | 'markdown' | 'image' | 'pdf' | 'html' | 'csv' | 'office' | 'unsupported'>('code')
 const imageDataUrl = ref('')
 const pdfUrl = ref('')
 const htmlUrl = ref('')
@@ -65,6 +66,10 @@ const isHtml = computed(() => ['html', 'htm'].includes(ext(props.name)))
 // .tsv comes along for free: the parser detects the delimiter, so tab-separated
 // files are the same table with a different separator.
 const isCsv = computed(() => ['csv', 'tsv'].includes(ext(props.name)))
+// PowerPoint, Word and Excel files show as a PDF the server converts with
+// LibreOffice. Only the owner's API offers it; a guest gets the download.
+const officeExts = ['pptx', 'ppt', 'docx', 'doc', 'xlsx', 'xls']
+const isOffice = (name: string) => !!files.value.officePreviewUrl && officeExts.includes(ext(name))
 // These types open rendered and can be flipped to source, so the header button
 // is shared rather than duplicated per type.
 const hasPreview = computed(() => isMarkdown.value || isHtml.value || isCsv.value)
@@ -100,6 +105,102 @@ function previewUrl(path: string): string {
 // extra reload rather than a missed one.
 let shownVersion = ''
 
+// ── Office preview ──
+// 'office' is the view while there is no PDF to show yet: converting, the
+// LibreOffice install, or a failure.
+const officeState = ref<'converting' | 'missing' | 'installing' | 'failed' | ''>('')
+const officeError = ref('')
+const officeInstall = ref<OfficeInstallStatus | null>(null)
+const officeSizes = ref({ download: 0, installed: 0 })
+let installPoll: number | undefined
+
+const installStage = computed(() => {
+  const st = officeInstall.value
+  const mb = (n?: number) => Math.round((n || 0) / 1e6)
+  switch (st?.stage) {
+    case 'downloading':
+      return st.total ? `Downloading: ${mb(st.done)} of ${mb(st.total)} MB` : 'Downloading'
+    case 'unpacking': return 'Unpacking'
+    case 'checking': return 'Checking that it starts'
+    default: return 'Starting'
+  }
+})
+
+// Asks for the PDF, which converts the file if needed, and shows it. quiet
+// keeps the current view up meanwhile, for a refresh after the file changed.
+async function showOffice(path: string, quiet = false) {
+  const url = files.value.officePreviewUrl?.(path)
+  if (!url) { viewMode.value = 'unsupported'; return }
+  if (!quiet) { viewMode.value = 'office'; officeState.value = 'converting' }
+  let res: Response
+  try {
+    res = await fetch(url, { cache: 'no-store' })
+  } catch {
+    if (props.path !== path) return
+    officeError.value = "Knowledge Worker Agent didn't respond. Try again in a moment."
+    officeState.value = 'failed'; viewMode.value = 'office'
+    return
+  }
+  if (props.path !== path) { res.body?.cancel(); return }
+  if (res.ok) {
+    // The PDF is converted and cached now; the frame fetches it from there.
+    res.body?.cancel()
+    officeState.value = ''
+    pdfUrl.value = `${url}&v=${Date.now()}`
+    viewMode.value = 'pdf'
+    return
+  }
+  const body = await res.json().catch(() => ({}))
+  if (props.path !== path) return
+  if (body.missing) { await showOfficeSetup(); return }
+  officeError.value = body.error || res.statusText
+  officeState.value = 'failed'; viewMode.value = 'office'
+}
+
+// LibreOffice is missing: offer the install, or follow one already running.
+async function showOfficeSetup() {
+  viewMode.value = 'office'
+  try {
+    const st = await fetchOfficeStatus()
+    officeSizes.value = { download: st.download_mb, installed: st.installed_mb }
+    officeInstall.value = st.install
+    if (st.install.installing) { officeState.value = 'installing'; pollInstall(); return }
+    if (st.available) { await showOffice(props.path); return }
+  } catch { /* the note still shows, without sizes */ }
+  officeState.value = 'missing'
+}
+
+async function startInstall() {
+  officeInstall.value = { installing: true, stage: 'starting' }
+  officeState.value = 'installing'
+  try {
+    await installOffice()
+  } catch {
+    officeInstall.value = { installing: false, error: "The install didn't start. Try again." }
+    officeState.value = 'missing'
+    return
+  }
+  pollInstall()
+}
+
+function stopInstallPoll() {
+  if (installPoll) { window.clearInterval(installPoll); installPoll = undefined }
+}
+
+function pollInstall() {
+  stopInstallPoll()
+  installPoll = window.setInterval(async () => {
+    let st
+    try { st = await fetchOfficeStatus() } catch { return }
+    officeInstall.value = st.install
+    if (st.install.installing) return
+    stopInstallPoll()
+    if (!isOffice(props.name)) return
+    if (st.available) await showOffice(props.path)
+    else officeState.value = 'missing'
+  }, 1000)
+}
+
 async function versionOf(path: string): Promise<string> {
   try {
     const res = await fetch(files.value.rawUrl(path), { method: 'HEAD', cache: 'no-store' })
@@ -122,10 +223,22 @@ async function load() {
   originalContent = ''
   shownVersion = ''
   dirty.value = false
+  officeState.value = ''
+  officeError.value = ''
+  stopInstallPoll()
   if (!path) { viewMode.value = 'code'; return }
 
   const e = ext(name)
   const richDoc = ['pptx', 'xlsx', 'docx'].includes(e)
+  if (isOffice(name)) {
+    viewMode.value = 'office'
+    officeState.value = 'converting'
+    const version = await versionOf(path)
+    if (props.path !== path) return
+    shownVersion = version
+    await showOffice(path)
+    return
+  }
   if (e === 'pdf') {
     viewMode.value = 'pdf'
     const version = await versionOf(path)
@@ -194,6 +307,12 @@ async function reload() {
   if (viewMode.value === 'pdf' || viewMode.value === 'html' || viewMode.value === 'image') {
     const version = await versionOf(path)
     if (props.path !== path || dirty.value || !version || version === shownVersion) return
+    if (viewMode.value === 'pdf' && isOffice(props.name)) {
+      // Keeps the old PDF up until the new one is converted.
+      shownVersion = version
+      await showOffice(path, true)
+      return
+    }
     if (viewMode.value === 'pdf') {
       // Straight to the new bytes, without blanking the frame first.
       shownVersion = version
@@ -257,12 +376,15 @@ function initEditor(content: string, filename: string) {
   teardownEditor()
   nextTick(() => {
     if (!editorContainer.value) return
+    // Prose wraps; code keeps its lines, as in most editors.
+    const wrap = ['md', 'markdown', 'mdx', 'txt'].includes(ext(filename))
     const state = EditorState.create({
       doc: content,
       extensions: [
         basicSetup,
         oneDark,
         langFor(filename),
+        wrap ? EditorView.lineWrapping : [],
         EditorView.updateListener.of((u) => {
           if (u.docChanged) {
             const doc = u.state.doc.toString()
@@ -323,7 +445,7 @@ function downloadOpen() {
   if (props.path) triggerDownload(files.value.downloadUrl(props.path))
 }
 
-onBeforeUnmount(teardownEditor)
+onBeforeUnmount(() => { teardownEditor(); stopInstallPoll() })
 
 defineExpose({ reload, reopen, save })
 </script>
@@ -406,6 +528,50 @@ defineExpose({ reload, reopen, save })
           <div v-if="csvTable.truncated" class="fp-csv-note">
             Showing the first {{ csvTable.rows.length.toLocaleString() }}
             of {{ csvTable.totalRows.toLocaleString() }} rows — switch to Code for the whole file.
+          </div>
+        </template>
+      </div>
+      <div v-else-if="viewMode === 'office'" class="fp-unsupported" aria-live="polite">
+        <template v-if="officeState === 'converting'">
+          <span class="fp-spinner" aria-hidden="true"></span>
+          <div class="fp-unsupported-title">Preparing preview</div>
+          <div class="fp-unsupported-sub">LibreOffice is converting the file. Large files take a few seconds.</div>
+        </template>
+        <template v-else-if="officeState === 'installing'">
+          <span class="fp-spinner" aria-hidden="true"></span>
+          <div class="fp-unsupported-title">Installing LibreOffice</div>
+          <div class="fp-unsupported-sub">{{ installStage }}</div>
+          <progress
+            v-if="officeInstall?.stage === 'downloading' && officeInstall.total"
+            class="fp-progress"
+            :value="officeInstall.done || 0"
+            :max="officeInstall.total"
+          ></progress>
+          <div class="fp-unsupported-sub">The preview opens when it's done.</div>
+        </template>
+        <template v-else-if="officeState === 'missing'">
+          <div class="fp-unsupported-icon">🗂️</div>
+          <div class="fp-unsupported-title">LibreOffice isn't installed</div>
+          <div class="fp-unsupported-sub">
+            Previewing PowerPoint, Word and Excel files needs LibreOffice.
+            <template v-if="officeSizes.download">
+              It's a {{ officeSizes.download }} MB download and uses about {{ officeSizes.installed }} MB
+              in your home folder, so it stays installed when the workspace restarts.
+            </template>
+          </div>
+          <div v-if="officeInstall?.error" class="fp-office-error">Install failed: {{ officeInstall.error }}</div>
+          <div class="fp-office-actions">
+            <button class="fp-btn save" @click="startInstall">{{ officeInstall?.error ? 'Try again' : 'Install LibreOffice' }}</button>
+            <button class="fp-btn" @click="downloadOpen">Download file</button>
+          </div>
+        </template>
+        <template v-else-if="officeState === 'failed'">
+          <div class="fp-unsupported-icon">⚠️</div>
+          <div class="fp-unsupported-title">Preview failed</div>
+          <div class="fp-unsupported-sub">{{ officeError }}</div>
+          <div class="fp-office-actions">
+            <button class="fp-btn save" @click="showOffice(props.path)">Try again</button>
+            <button class="fp-btn" @click="downloadOpen">Download file</button>
           </div>
         </template>
       </div>
@@ -514,5 +680,13 @@ defineExpose({ reload, reopen, save })
 }
 .fp-unsupported-icon { font-size: 40px; }
 .fp-unsupported-title { font-size: 15px; font-weight: 600; color: var(--text); }
-.fp-unsupported-sub { font-size: 12px; color: var(--text2); margin-bottom: 6px; }
+.fp-unsupported-sub { font-size: 12px; color: var(--text2); margin-bottom: 6px; max-width: 420px; }
+.fp-office-actions { display: flex; gap: 8px; }
+.fp-office-error { font-size: 12px; color: var(--red); max-width: 420px; margin-bottom: 6px; }
+.fp-progress { width: 220px; accent-color: var(--accent); }
+.fp-spinner {
+  width: 22px; height: 22px; border: 2px solid var(--border); border-top-color: var(--accent);
+  border-radius: 50%; animation: fp-spin .8s linear infinite;
+}
+@keyframes fp-spin { to { transform: rotate(360deg); } }
 </style>

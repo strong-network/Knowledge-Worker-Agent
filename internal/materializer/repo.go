@@ -28,35 +28,81 @@ import (
 //
 // git invocations use an argument vector (never a shell) and a timeout.
 func SyncRepo(logw io.Writer, source, cacheDir string) (string, error) {
+	dir, _, err := syncRepo(logw, source, cacheDir)
+	return dir, err
+}
+
+// syncRepo is SyncRepo, also returning why it fell back to the cached clone.
+func syncRepo(logw io.Writer, source, cacheDir string) (dir string, stale error, err error) {
 	source = strings.TrimSpace(source)
 	if source == "" {
-		return "", fmt.Errorf("sync: empty config repo source")
+		return "", nil, fmt.Errorf("sync: empty config repo source")
 	}
 
 	// Local path source: use in place.
 	if info, err := os.Stat(source); err == nil && info.IsDir() {
 		logf(logw, "  ℹ Using local config repo at %s", source)
-		return source, nil
+		return source, nil, nil
 	}
 
 	if strings.TrimSpace(cacheDir) == "" {
-		return "", fmt.Errorf("sync: empty cache dir")
+		return "", nil, fmt.Errorf("sync: empty cache dir")
 	}
 	haveCache := isGitRepo(cacheDir)
 
 	if haveCache {
 		if err := gitPull(cacheDir); err != nil {
 			logf(logw, "  ⚠ Config repo pull failed (%v); using cached clone", err)
-			return cacheDir, nil
+			return cacheDir, err, nil
 		}
-		return cacheDir, nil
+		return cacheDir, nil, nil
 	}
 
 	// No cache yet — must clone.
 	if err := gitClone(source, cacheDir); err != nil {
-		return "", fmt.Errorf("sync: clone config repo: %w", err)
+		return "", nil, fmt.Errorf("sync: clone config repo: %w", err)
 	}
-	return cacheDir, nil
+	return cacheDir, nil, nil
+}
+
+// Commit identifies a config repo commit.
+type Commit struct {
+	Hash    string
+	Date    time.Time
+	Subject string
+}
+
+// RepoCommit returns the commit checked out in dir, or a zero Commit when dir
+// is not the top of a git checkout. A plain folder inside some other
+// repository must not report that repository's commit.
+func RepoCommit(dir string) Commit {
+	top, err := runGit(dir, "rev-parse", "--show-toplevel")
+	if err != nil || !samePath(strings.TrimSpace(top), dir) {
+		return Commit{}
+	}
+	out, err := runGit(dir, "log", "-1", "--format=%H%x00%cI%x00%s")
+	if err != nil {
+		return Commit{}
+	}
+	parts := strings.SplitN(strings.TrimSpace(out), "\x00", 3)
+	if len(parts) != 3 {
+		return Commit{}
+	}
+	date, _ := time.Parse(time.RFC3339, parts[1])
+	return Commit{Hash: parts[0], Date: date, Subject: parts[2]}
+}
+
+func samePath(a, b string) bool {
+	resolve := func(p string) string {
+		if abs, err := filepath.Abs(p); err == nil {
+			p = abs
+		}
+		if real, err := filepath.EvalSymlinks(p); err == nil {
+			p = real
+		}
+		return p
+	}
+	return a != "" && resolve(a) == resolve(b)
 }
 
 func gitClone(url, dest string) error {

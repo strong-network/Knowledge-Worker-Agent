@@ -22,6 +22,13 @@ const FILE_PANEL_MIN_CHAT_MARGIN = 120
 // for prose, narrow enough to leave the conversation usable beside it.
 const FILE_PANEL_READING_FRACTION = 0.4
 
+// Chat bar (left sidebar) width. The default is its former fixed width; the
+// bar may take at most a third of the window.
+const SIDEBAR_WIDTH_KEY = 'sidebarWidth'
+export const SIDEBAR_MIN = 220
+const SIDEBAR_DEFAULT = 268
+const SIDEBAR_MAX_FRACTION = 1 / 3
+
 function readNumber(key: string): number | null {
   const raw = localStorage.getItem(key)
   if (!raw) return null
@@ -63,6 +70,15 @@ export const useUiStore = defineStore('ui', () => {
     }
   } catch { /* private mode / quota — the default below is already expanded */ }
   const sidebarCollapsed = ref<boolean>(localStorage.getItem('sidebarCollapsed') === '1')
+
+  // Only the minimum is applied on load: the third-of-the-window cap is CSS's
+  // job, so a narrow window doesn't overwrite the width the user chose.
+  const sidebarWidth = ref<number>(Math.max(SIDEBAR_MIN, readNumber(SIDEBAR_WIDTH_KEY) ?? SIDEBAR_DEFAULT))
+  function setSidebarWidth(px: number) {
+    const max = Math.max(SIDEBAR_MIN, Math.floor(window.innerWidth * SIDEBAR_MAX_FRACTION))
+    sidebarWidth.value = Math.max(SIDEBAR_MIN, Math.min(max, Math.round(px)))
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth.value))
+  }
 
   // Workspaces whose Files widget has earned its place on screen. A new chat
   // has nothing to browse, so the widget stays out of the way until the
@@ -289,7 +305,7 @@ export const useUiStore = defineStore('ui', () => {
     theme, sidebarOpen, activeModal,
     activeView, activeProjectId, openProject, showChat,
     editingScheduledTaskId, openScheduled, openScheduledTaskEditor,
-    sidebarCollapsed,
+    sidebarCollapsed, sidebarWidth, setSidebarWidth,
     filePanelWidth, filePanelCollapsed, filePanelManualCollapse,
     filePanelBodyCollapsed, setFilePanelBodyCollapsed,
     filePanelReading, setFilePanelReading,

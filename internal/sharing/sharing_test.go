@@ -214,7 +214,7 @@ func TestStartFailsSafe(t *testing.T) {
 	}
 	p.failWith = nil
 	guestPort = func() (int, bool) { return 8766, false }
-	if code, _, _ := do(t, "PUT", "/api/sessions/c1/share", "", true); code != 503 || db.IsSessionShared("c1") {
+	if code, _, _ := do(t, "PUT", "/api/sessions/c1/share", "", true); code != 409 || db.IsSessionShared("c1") {
 		t.Errorf("guest listener down: %d", code)
 	}
 }

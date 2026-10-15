@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/layout"
@@ -247,6 +248,38 @@ func safeHelpURL(raw string) string {
 func IsProvisioned(name string) bool {
 	_, ok := provisionedServers()[strings.ToLower(strings.TrimSpace(name))]
 	return ok
+}
+
+// ShadowedServers returns the user's own servers that an assigned server of the
+// same name hides: Global entries defining more than the "enabled" toggle the
+// provisioning stub carries. The platform definition wins, so theirs is unused.
+func ShadowedServers() []string {
+	prov := provisionedServers()
+	if len(prov) == 0 {
+		return nil
+	}
+	opencodeConfigMu.Lock()
+	raw, err := readConfig(opencodeConfigPath())
+	opencodeConfigMu.Unlock()
+	if err != nil {
+		return nil
+	}
+	block, _ := raw["mcp"].(map[string]any)
+	var out []string
+	for name, v := range block {
+		if _, ok := prov[strings.ToLower(name)]; !ok {
+			continue
+		}
+		entry, _ := v.(map[string]any)
+		for k := range entry {
+			if k != "enabled" {
+				out = append(out, name)
+				break
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // EnsureProvisionedStubs seeds a disabled stub in the user's Global for every

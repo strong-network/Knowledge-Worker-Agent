@@ -238,7 +238,8 @@ func HandleStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, up := guestPort(); !up {
-		writeFailure(w, &failure{http.StatusServiceUnavailable, "Sharing is unavailable in this workspace."})
+		// Not 503: a workspace proxy may drop a 503's body, and the UI shows this message.
+		writeFailure(w, &failure{http.StatusConflict, "Sharing is unavailable in this workspace."})
 		return
 	}
 	token := workspaceapps.OwnerToken(r)

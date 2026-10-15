@@ -114,8 +114,8 @@ func TestAssistEmptyInputRejected(t *testing.T) {
 func TestAssistUnavailableWhenNil(t *testing.T) {
 	mux := newAssistHandler(nil)
 	rr := postJSON(mux, "/api/agent-builder/assist/prompt", map[string]string{"prompt": "hi"})
-	if rr.Code != http.StatusServiceUnavailable {
-		t.Errorf("nil AssistFn status = %d, want 503", rr.Code)
+	if rr.Code != http.StatusConflict {
+		t.Errorf("nil AssistFn status = %d, want 409", rr.Code)
 	}
 }
 
@@ -165,12 +165,12 @@ func TestOptimizePromptEmptyRejected(t *testing.T) {
 	}
 }
 
-// TestOptimizePromptUnavailableWhenNil ensures the route returns 503 when no
+// TestOptimizePromptUnavailableWhenNil ensures the route returns 409 when no
 // assist backend is wired.
 func TestOptimizePromptUnavailableWhenNil(t *testing.T) {
 	mux := newAssistHandler(nil)
 	rr := postJSON(mux, "/api/chat/assist/prompt", map[string]string{"prompt": "hi"})
-	if rr.Code != http.StatusServiceUnavailable {
-		t.Errorf("nil AssistFn status = %d, want 503", rr.Code)
+	if rr.Code != http.StatusConflict {
+		t.Errorf("nil AssistFn status = %d, want 409", rr.Code)
 	}
 }

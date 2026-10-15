@@ -3,7 +3,7 @@
 
 import {
   browseFiles, browseEntries, viewFile, saveFile, createDirectory, deletePath, renamePath,
-  uploadFiles, downloadFileUrl, rawFileUrl,
+  duplicatePath, uploadFiles, downloadFileUrl, rawFileUrl, officePreviewUrl,
   type FileEntry, type FileViewResponse, type UploadResponse,
 } from './index'
 
@@ -18,9 +18,12 @@ export interface FileApi {
   upload(files: FileList | File[], targetDir: string): Promise<UploadResponse>
   downloadUrl(path: string): string
   rawUrl(path: string): string
-  // Absent for guests, and so are their controls.
+  // Absent for guests, and so are their controls. Rename also moves.
   rename?: (src: string, dest: string) => Promise<void>
   remove?: (path: string) => Promise<void>
+  duplicate?: (path: string) => Promise<string>
+  // Absent for guests, whose office files show the download instead.
+  officePreviewUrl?: (path: string) => string
 }
 
 export const ownerFileApi: FileApi = {
@@ -33,6 +36,8 @@ export const ownerFileApi: FileApi = {
   rawUrl: rawFileUrl,
   rename: async (src, dest) => { await renamePath(src, dest) },
   remove: deletePath,
+  duplicate: duplicatePath,
+  officePreviewUrl,
 }
 
 // The guest routes answer failures with {error}, written for the guest.

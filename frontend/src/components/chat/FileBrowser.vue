@@ -65,6 +65,7 @@ const docView = ref<InstanceType<typeof DocumentView> | null>(null)
 
 const isOpen = computed(() => !!openPath.value)
 const canModify = computed(() => !!props.api.rename && !!props.api.remove)
+const canDuplicate = computed(() => !!props.api.duplicate)
 
 watch(isOpen, (open) => emit('open-change', open))
 
@@ -312,6 +313,78 @@ async function deleteEntry(entry: FileEntry) {
   }
 }
 
+async function duplicateEntry(entry: FileEntry) {
+  if (!props.api.duplicate) return
+  try {
+    const copy = await props.api.duplicate(entry.path)
+    ;(window as any).showToast?.(`Duplicated as "${baseName(copy)}"`)
+    await fullRefresh()
+  } catch (err) {
+    ;(window as any).showToast?.(err instanceof Error ? err.message : 'Duplicate failed')
+  }
+}
+
+// ── Drag a file into another folder ──
+// Its own data type, so the app's drop-to-attach overlay (which wants Files) ignores it.
+const DRAG_TYPE = 'application/x-kwa-file-path'
+const dragPath = ref('')
+const dropTarget = ref('')
+const rootDir = computed(() => props.root.replace(/\/+$/, '') || props.root)
+
+function dragStart(entry: FileEntry, e: DragEvent) {
+  if (!e.dataTransfer) return
+  e.dataTransfer.setData(DRAG_TYPE, entry.path)
+  e.dataTransfer.effectAllowed = 'move'
+  dragPath.value = entry.path
+}
+function dragEnd() { dragPath.value = ''; dropTarget.value = '' }
+
+// Over a folder, the file goes into it; over a file, into that file's folder;
+// anywhere else in the widget, to the top level.
+function dragOver(entry: FileEntry | null, e: DragEvent) {
+  if (!dragPath.value) return
+  e.stopPropagation()
+  const dir = entry ? (entry.is_dir ? entry.path : dirOf(entry.path)) : rootDir.value
+  if (dir === dirOf(dragPath.value)) { dropTarget.value = ''; return }
+  e.preventDefault()
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+  dropTarget.value = dir
+}
+function dropOn(e: DragEvent) {
+  if (!dragPath.value) return
+  e.preventDefault()
+  e.stopPropagation()
+  const src = dragPath.value, dir = dropTarget.value
+  dragEnd()
+  if (dir) moveFile(src, dir)
+}
+function panelDragLeave(e: DragEvent) {
+  const to = e.relatedTarget as Node | null
+  if (!to || !(e.currentTarget as HTMLElement).contains(to)) dropTarget.value = ''
+}
+
+async function moveFile(src: string, dir: string) {
+  if (!props.api.rename) return
+  const name = baseName(src)
+  const where = dir === rootDir.value ? 'the top level' : `"${baseName(dir)}"`
+  try {
+    const listing = dir === rootDir.value ? entries.value : expanded.value[dir] ?? await props.api.browse(dir)
+    if (listing.some(x => x.name === name)) {
+      ;(window as any).showToast?.(`"${name}" already exists in ${where}`)
+      return
+    }
+    await props.api.rename(src, joinPath(dir, name))
+    ;(window as any).showToast?.(`Moved "${name}" to ${where}`)
+    await fullRefresh()
+  } catch (err) {
+    ;(window as any).showToast?.(err instanceof Error ? err.message : 'Move failed')
+  }
+}
+
+function baseName(path: string): string {
+  return path.slice(path.lastIndexOf('/') + 1)
+}
+
 function joinPath(dir: string, name: string): string {
   if (!dir) return name
   return dir.endsWith('/') ? dir + name : `${dir}/${name}`
@@ -381,6 +454,9 @@ defineExpose({ refresh: fullRefresh })
     v-if="shown"
     class="file-panel"
     :class="{ editing: isOpen, fullscreen, embedded, 'body-collapsed': bodyCollapsed && !isOpen }"
+    @dragover="dragOver(null, $event)"
+    @drop="dropOn"
+    @dragleave="panelDragLeave"
   >
     <!-- ── Browse view ── -->
     <template v-if="!isOpen">
@@ -412,7 +488,11 @@ defineExpose({ refresh: fullRefresh })
       </div>
       <input ref="uploadInput" type="file" multiple style="display:none" @change="onUpload" />
 
-      <div v-if="!bodyCollapsed" class="fp-list">
+      <div
+        v-if="!bodyCollapsed"
+        class="fp-list"
+        :class="{ 'drop-root': dragPath && dropTarget === rootDir }"
+      >
         <template v-if="entries.length">
           <FileTreeNode
             v-for="entry in entries"
@@ -423,6 +503,9 @@ defineExpose({ refresh: fullRefresh })
             :expanded="expanded"
             :renaming-path="renamingPath"
             :can-modify="canModify"
+            :can-duplicate="canDuplicate"
+            :drag-path="dragPath"
+            :drop-target="dropTarget"
             v-model:rename-value="renameValue"
             :is-changed="isChanged"
             :icon-for="iconFor"
@@ -432,6 +515,11 @@ defineExpose({ refresh: fullRefresh })
             :cancel-rename="cancelRename"
             :delete-entry="deleteEntry"
             :download-entry="downloadEntry"
+            :duplicate-entry="duplicateEntry"
+            :drag-start="dragStart"
+            :drag-over="dragOver"
+            :drop-on="dropOn"
+            :drag-end="dragEnd"
           />
         </template>
         <div v-else class="fp-empty">No files yet</div>
@@ -516,6 +604,7 @@ defineExpose({ refresh: fullRefresh })
 .fp-ico:hover { background: var(--surface2); color: var(--text); }
 
 .fp-list { overflow-y: auto; padding: 4px 4px 8px; }
+.fp-list.drop-root { box-shadow: inset 0 0 0 1.5px var(--accent); border-radius: 0 0 12px 12px; }
 .fp-row {
   display: flex; align-items: center; gap: 6px; padding: 6px 6px;
   border-radius: 6px; cursor: pointer; font-size: 14px; color: var(--text);

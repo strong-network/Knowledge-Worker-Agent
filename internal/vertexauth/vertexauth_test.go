@@ -52,6 +52,7 @@ func TestProjectLocationPrecedence(t *testing.T) {
 
 func TestEnsureEnv(t *testing.T) {
 	t.Setenv("GOOGLE_VERTEX_PROJECT", "")
+	t.Setenv("GOOGLE_CLOUD_PROJECT", "")
 	t.Setenv("GOOGLE_VERTEX_LOCATION", "")
 	t.Setenv("ANTHROPIC_VERTEX_PROJECT_ID", "seed-proj")
 	t.Setenv("CLOUD_ML_REGION", "seed-region")
@@ -65,18 +66,32 @@ func TestEnsureEnv(t *testing.T) {
 	if os.Getenv("GOOGLE_VERTEX_LOCATION") != "seed-region" {
 		t.Errorf("GOOGLE_VERTEX_LOCATION not seeded: %q", os.Getenv("GOOGLE_VERTEX_LOCATION"))
 	}
+	if os.Getenv("GOOGLE_CLOUD_PROJECT") != "seed-proj" {
+		t.Errorf("GOOGLE_CLOUD_PROJECT not seeded: %q", os.Getenv("GOOGLE_CLOUD_PROJECT"))
+	}
+}
+
+func TestEnsureEnvKeepsAnExistingCloudProject(t *testing.T) {
+	t.Setenv("GOOGLE_VERTEX_PROJECT", "vertex-proj")
+	t.Setenv("GOOGLE_CLOUD_PROJECT", "other-proj")
+	EnsureEnv()
+	if got := os.Getenv("GOOGLE_CLOUD_PROJECT"); got != "other-proj" {
+		t.Errorf("GOOGLE_CLOUD_PROJECT = %q, want other-proj", got)
+	}
 }
 
 func TestEnsureEnvLeavesAMissingProjectUnset(t *testing.T) {
-	for _, k := range []string{"GOOGLE_VERTEX_PROJECT", "ANTHROPIC_VERTEX_PROJECT_ID"} {
+	for _, k := range []string{"GOOGLE_VERTEX_PROJECT", "ANTHROPIC_VERTEX_PROJECT_ID", "GOOGLE_CLOUD_PROJECT"} {
 		t.Setenv(k, "")
 		os.Unsetenv(k)
 	}
 	if proj, _ := EnsureEnv(); proj != "" {
 		t.Fatalf("EnsureEnv project = %q, want empty", proj)
 	}
-	if _, set := os.LookupEnv("GOOGLE_VERTEX_PROJECT"); set {
-		t.Errorf("GOOGLE_VERTEX_PROJECT was set with no project to set it to")
+	for _, k := range []string{"GOOGLE_VERTEX_PROJECT", "GOOGLE_CLOUD_PROJECT"} {
+		if _, set := os.LookupEnv(k); set {
+			t.Errorf("%s was set with no project to set it to", k)
+		}
 	}
 }
 

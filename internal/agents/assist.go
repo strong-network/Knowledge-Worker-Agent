@@ -31,7 +31,7 @@ type assistRequest struct {
 // system prompt to be clearer and more effective, returning only the new text.
 func (h *Handlers) polishPrompt(w http.ResponseWriter, r *http.Request) {
 	if h.AssistFn == nil {
-		writeError(w, http.StatusServiceUnavailable, "The writing assistant isn't available right now.")
+		writeError(w, http.StatusConflict, "The writing assistant isn't available right now.")
 		return
 	}
 	var req assistRequest
@@ -59,7 +59,7 @@ func (h *Handlers) polishPrompt(w http.ResponseWriter, r *http.Request) {
 // text replaces the composer draft; nothing is sent.
 func (h *Handlers) optimizePrompt(w http.ResponseWriter, r *http.Request) {
 	if h.AssistFn == nil {
-		writeError(w, http.StatusServiceUnavailable, "The writing assistant isn't available right now.")
+		writeError(w, http.StatusConflict, "The writing assistant isn't available right now.")
 		return
 	}
 	var req assistRequest
@@ -85,7 +85,7 @@ func (h *Handlers) optimizePrompt(w http.ResponseWriter, r *http.Request) {
 // surfacing.
 func (h *Handlers) improveDescription(w http.ResponseWriter, r *http.Request) {
 	if h.AssistFn == nil {
-		writeError(w, http.StatusServiceUnavailable, "The writing assistant isn't available right now.")
+		writeError(w, http.StatusConflict, "The writing assistant isn't available right now.")
 		return
 	}
 	var req assistRequest
