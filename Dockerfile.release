@@ -30,9 +30,9 @@ RUN npx vite build
 # internal/opencodeinstaller, which accepts only a matching embedded copy; a test
 # checks they agree. The build fails if the download doesn't match.
 FROM alpine:3.20 AS opencodeasset
-ARG OPENCODE_VERSION=v1.18.33
-ARG OPENCODE_SHA256_LINUX_X64=e546123213ae47909a4268692aa4b94950d011afe9cac9938753a2194f1c16d5
-ARG OPENCODE_SHA256_LINUX_ARM64=c63486624621924bf43be5c01abd252885661a734814224f6d70188a33aea858
+ARG OPENCODE_VERSION=v1.19.0
+ARG OPENCODE_SHA256_LINUX_X64=7bb9e61ad6feacf2e89c10a6a2c1840e3de4220bb50ba1fc7110f31806076aec
+ARG OPENCODE_SHA256_LINUX_ARM64=e9841d43d3e1a8f36ed2691592d3b8b4fb097e606c8b559a277a1b845840e26b
 ARG TARGETARCH=amd64
 RUN apk add --no-cache curl \
     && case "${TARGETARCH}" in \

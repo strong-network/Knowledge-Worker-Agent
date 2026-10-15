@@ -19,7 +19,8 @@ type Handlers struct {
 	// unavailable-model warning. Optional; nil means "assume all available".
 	ModelsFn func() []string
 	// AssistFn runs a one-shot model turn for the writing assists (prompt
-	// polish, description improve). Optional; nil means the assists return 503.
+	// polish, description improve). Optional; nil means the assists return 409
+	// (not 503, whose body a workspace proxy may drop; the UI shows the message).
 	AssistFn AssistFn
 	// ReloadFn is invoked after a successful create/update/delete/import so the
 	// backend can pick up the on-disk change immediately (e.g. cycle the

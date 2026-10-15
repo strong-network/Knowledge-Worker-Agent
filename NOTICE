@@ -9,7 +9,7 @@ its own licence, and its licence text is in its source at the version shown.
 In the server binary
 ====================
 
-Go standard library and runtime (go1.27.1)
+Go standard library and runtime (go1.27.2)
   Licence: BSD-3-Clause
   Copyright 2009 The Go Authors.
 
@@ -102,7 +102,7 @@ Rolldown 1.2.11, its module interop helpers
 Added by the release image (Dockerfile.release)
 ===============================================
 
-opencode v1.18.33, embedded in the server binary as a fallback copy
+opencode v1.19.0, embedded in the server binary as a fallback copy
   Licence: MIT
   Copyright (c) 2025 opencode
 

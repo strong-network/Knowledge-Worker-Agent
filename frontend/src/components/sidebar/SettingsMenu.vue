@@ -129,6 +129,10 @@ onBeforeUnmount(() => {
       <span class="sm-name">Tidy up</span>
       <span v-if="ui.tidyCount" class="sm-status">{{ ui.tidyCount }} to review</span>
     </button>
+    <button class="sm-item" role="menuitem" @click="openModal('diagnostics')">
+      <span class="sm-ico">🩺</span>
+      <span class="sm-name">Diagnostics</span>
+    </button>
 
     <div class="sm-version" role="note">
       <span class="sm-ver-label">Version</span>

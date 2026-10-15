@@ -18,8 +18,12 @@ defineProps<{
   // Shared state owned by WorkspaceFilePanel.
   expanded: Record<string, FileEntry[]>
   renamingPath: string
-  // False for a guest of a shared chat: no rename or delete.
+  // False for a guest of a shared chat: no rename, delete or moving.
   canModify: boolean
+  canDuplicate: boolean
+  // The file being dragged, and the folder it would be dropped into.
+  dragPath: string
+  dropTarget: string
   // Actions (stable references passed down from the panel).
   isChanged: (path: string) => boolean
   iconFor: (entry: FileEntry) => string
@@ -29,6 +33,11 @@ defineProps<{
   cancelRename: () => void
   deleteEntry: (entry: FileEntry) => void
   downloadEntry: (entry: FileEntry) => void
+  duplicateEntry: (entry: FileEntry) => void
+  dragStart: (entry: FileEntry, e: DragEvent) => void
+  dragOver: (entry: FileEntry, e: DragEvent) => void
+  dropOn: (e: DragEvent) => void
+  dragEnd: () => void
 }>()
 
 // Two-way binding for the in-place rename input, threaded through the recursion.
@@ -42,9 +51,14 @@ const INDENT_PER_LEVEL = 14
 <template>
   <div
     class="fp-row"
-    :class="{ dir: entry.is_dir }"
+    :class="{ dir: entry.is_dir, dragging: dragPath === entry.path, 'drop-target': entry.is_dir && dropTarget === entry.path }"
     :style="{ paddingLeft: 6 + depth * INDENT_PER_LEVEL + 'px' }"
+    :draggable="canModify && !entry.is_dir && renamingPath !== entry.path"
     @click="openFile(entry)"
+    @dragstart="dragStart(entry, $event)"
+    @dragover="dragOver(entry, $event)"
+    @drop="dropOn($event)"
+    @dragend="dragEnd"
   >
     <span v-if="entry.is_dir" class="fp-caret" :class="{ open: !!expanded[entry.path] }" aria-hidden="true">›</span>
     <span v-else class="fp-caret-spacer"></span>
@@ -65,6 +79,9 @@ const INDENT_PER_LEVEL = 14
       <button @click="downloadEntry(entry)" :title="entry.is_dir ? 'Download as .zip' : 'Download'">⬇</button>
       <template v-if="canModify">
         <button @click="startRename(entry)" title="Rename">✎</button>
+        <button v-if="canDuplicate && !entry.is_dir" @click="duplicateEntry(entry)" title="Duplicate" aria-label="Duplicate">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" width="11" height="11"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke-linecap="round"/></svg>
+        </button>
         <button class="danger" @click="deleteEntry(entry)" title="Delete">🗑</button>
       </template>
     </span>
@@ -81,6 +98,9 @@ const INDENT_PER_LEVEL = 14
       :expanded="expanded"
       :renaming-path="renamingPath"
       :can-modify="canModify"
+      :can-duplicate="canDuplicate"
+      :drag-path="dragPath"
+      :drop-target="dropTarget"
       v-model:rename-value="renameValue"
       :is-changed="isChanged"
       :icon-for="iconFor"
@@ -90,6 +110,11 @@ const INDENT_PER_LEVEL = 14
       :cancel-rename="cancelRename"
       :delete-entry="deleteEntry"
       :download-entry="downloadEntry"
+      :duplicate-entry="duplicateEntry"
+      :drag-start="dragStart"
+      :drag-over="dragOver"
+      :drop-on="dropOn"
+      :drag-end="dragEnd"
     />
   </template>
 </template>
@@ -101,6 +126,8 @@ const INDENT_PER_LEVEL = 14
   white-space: nowrap; overflow: hidden; transition: background .1s;
 }
 .fp-row:hover { background: var(--surface2); }
+.fp-row.dragging { opacity: .45; }
+.fp-row.drop-target { background: var(--surface2); box-shadow: inset 0 0 0 1.5px var(--accent); }
 .fp-caret {
   display: inline-flex; align-items: center; justify-content: center; width: 12px;
   color: var(--text3); font-size: 13px; flex-shrink: 0; transition: transform .12s;
@@ -124,6 +151,7 @@ const INDENT_PER_LEVEL = 14
   padding: 1px 5px; font-size: 11px; border: none; border-radius: 4px;
   background: none; color: var(--text2); cursor: pointer;
 }
+.fp-row-actions svg { display: block; }
 .fp-row-actions button:hover { background: var(--surface3); color: var(--text); }
 .fp-row-actions button.danger:hover { background: rgba(218,63,63,.14); color: var(--red); }
 </style>

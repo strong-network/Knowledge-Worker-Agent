@@ -664,6 +664,134 @@ export async function fetchVersionInfo(): Promise<VersionInfo> {
   return res.json()
 }
 
+// ── Diagnostics ──
+// Read-only troubleshooting data. The server redacts credentials before
+// anything reaches here.
+export interface DiagnosticsLastRun {
+  at: string
+  duration_ms: number
+  ok: boolean
+  error?: string
+  skipped: boolean
+  skip_reason?: string
+  stale: boolean
+  stale_reason?: string
+  commit: { hash: string; date: string; subject: string } | null
+  counts: Record<string, number>
+  warnings: string[]
+}
+
+export interface DiagnosticsReport {
+  generated_at: string
+  app: {
+    version: string
+    build_time: string
+    go_version: string
+    platform: string
+    started_at: string
+    uptime_seconds: number
+    status: string
+    opencode_ready: boolean
+    backend: 'run' | 'serve'
+  }
+  opencode: {
+    version: string
+    pinned: string
+    matches_pin: boolean
+    bin: string
+    log_dir: string
+    config_dir: string
+    platform_dir: string
+  }
+  config: {
+    enabled: boolean
+    project: string
+    source: string
+    source_kind: '' | 'git' | 'local'
+    last_run: DiagnosticsLastRun | null
+    applied: DiagnosticsLastRun | null
+    refresh: RefreshState | null
+    hidden: { kind: 'agent' | 'skill' | 'connector'; name: string }[]
+    kept_defaults: string[]
+  }
+  providers: {
+    mode: string
+    fallback_reason?: string
+    items: {
+      id: string
+      label: string
+      authenticated: boolean
+      reachability: '' | 'ok' | 'unreachable'
+      note?: string
+      checked_at?: string
+      models: number
+    }[]
+    model_count: number
+    default_model: string
+    presets: Record<string, string>
+  }
+  connectors: {
+    total: number
+    on: number
+    connected: number
+    not_connected: string[]
+    assigned: number
+    status_known: boolean
+  }
+  settings: { name: string; value: string; from?: string }[]
+  old_settings: string[]
+  paths: { label: string; path: string }[]
+}
+
+export interface DiagnosticsDisk {
+  path: string
+  free_bytes: number
+  total_bytes: number
+  items: { label: string; path: string; bytes: number; partial: boolean }[]
+}
+
+export type LogSource = 'kwa' | 'opencode'
+
+export interface LogTail {
+  source: LogSource
+  paths: string[]
+  lines: string[]
+  truncated: boolean
+}
+
+async function diagnosticsJSON<T>(path: string): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, { cache: 'no-store' })
+  if (!res.ok) throw new Error(`Diagnostics request failed (${res.status})`)
+  return res.json() as Promise<T>
+}
+
+export const fetchDiagnostics = () => diagnosticsJSON<DiagnosticsReport>('/api/diagnostics')
+export const fetchDiagnosticsDisk = () => diagnosticsJSON<DiagnosticsDisk>('/api/diagnostics/disk')
+export const fetchDiagnosticsLog = (source: LogSource, lines = 1000) =>
+  diagnosticsJSON<LogTail>(`/api/diagnostics/log?source=${source}&lines=${lines}`)
+export const diagnosticsLogDownloadUrl = (source: LogSource) =>
+  `${BASE}/api/diagnostics/log?source=${source}&download=1`
+
+export interface RefreshState {
+  running: boolean
+  step?: string
+  started_at: string
+  finished_at?: string
+  ok: boolean
+  error?: string
+}
+
+export const fetchRefreshState = () =>
+  diagnosticsJSON<{ refresh: RefreshState | null }>('/api/diagnostics/refresh-config').then((r) => r.refresh)
+
+// Starts a refresh of the central configuration; it runs in the background.
+export async function startConfigRefresh(): Promise<RefreshState> {
+  const res = await fetch(`${BASE}/api/diagnostics/refresh-config`, { method: 'POST' })
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(body.error || `Refresh failed to start (${res.status})`)
+  return body.refresh
+}
+
 // File APIs
 export interface BrowseResponse {
   path: string
@@ -754,6 +882,21 @@ export async function renamePath(src: string, dest: string): Promise<string> {
   return data.path
 }
 
+// Copies a file beside itself (foo.txt -> foo_copy.txt) and returns the copy's path.
+export async function duplicatePath(src: string): Promise<string> {
+  const res = await fetch(`${BASE}/api/files/duplicate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ src }),
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `Failed to duplicate: ${res.statusText}`)
+  }
+  const data = await res.json()
+  return data.path
+}
+
 export async function uploadFiles(files: FileList | File[], targetDir?: string): Promise<UploadResponse> {
   const formData = new FormData()
   if (targetDir) formData.append('target_dir', targetDir)
@@ -771,6 +914,38 @@ export function downloadFileUrl(path: string): string {
 
 export function rawFileUrl(path: string): string {
   return `${BASE}/api/files/raw?path=${encodeURIComponent(path)}`
+}
+
+// A PDF of a PowerPoint, Word or Excel file, converted by LibreOffice.
+export function officePreviewUrl(path: string): string {
+  return `${BASE}/api/files/office-preview?path=${encodeURIComponent(path)}`
+}
+
+export interface OfficeInstallStatus {
+  installing: boolean
+  stage?: 'starting' | 'downloading' | 'unpacking' | 'checking'
+  done?: number
+  total?: number
+  error?: string
+}
+
+export interface OfficeStatus {
+  available: boolean
+  version: string
+  download_mb: number
+  installed_mb: number
+  install: OfficeInstallStatus
+}
+
+export async function fetchOfficeStatus(): Promise<OfficeStatus> {
+  const res = await fetch(`${BASE}/api/office/status`, { cache: 'no-store' })
+  if (!res.ok) throw new Error(`Failed to read the LibreOffice status: ${res.statusText}`)
+  return res.json()
+}
+
+export async function installOffice(): Promise<void> {
+  const res = await fetch(`${BASE}/api/office/install`, { method: 'POST' })
+  if (!res.ok) throw new Error(`Failed to start the LibreOffice install: ${res.statusText}`)
 }
 
 // SSE streaming for chat

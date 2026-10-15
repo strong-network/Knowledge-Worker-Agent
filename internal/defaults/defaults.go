@@ -37,6 +37,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -89,6 +90,32 @@ func (m *manifest) save(targetDir string) error {
 func sha256Hex(b []byte) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
+}
+
+// KeptEditedFiles lists, relative to targetDir, the retired default files that
+// are still on disk because the user edited them. Read-only: after
+// RetireLegacyDefaults, the manifest holds nothing else.
+func KeptEditedFiles(targetDir string) []string {
+	var out []string
+	for rel := range loadManifest(targetDir).Files {
+		if _, err := os.Stat(filepath.Join(targetDir, filepath.FromSlash(rel))); err == nil {
+			out = append(out, rel)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// BundledSkillNames returns the names of the skills InstallSkills writes.
+func BundledSkillNames() []string {
+	entries, _ := fs.ReadDir(skillsFS, skillsRoot)
+	var out []string
+	for _, e := range entries {
+		if e.IsDir() {
+			out = append(out, e.Name())
+		}
+	}
+	return out
 }
 
 // copyTree writes the embedded tree rooted at root into targetDir/root.

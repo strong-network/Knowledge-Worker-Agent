@@ -28,6 +28,7 @@ import (
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/daynotes"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/db"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/defaults"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/diagnostics"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/env"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/files"
 	gitops "github.com/strong-network/Knowledge-Worker-Agent/internal/git"
@@ -38,6 +39,7 @@ import (
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/mcpauth"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/migration"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/obsidianinstaller"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/office"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodeauth"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodeinstaller"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/projects"
@@ -134,6 +136,7 @@ func curateVertexModels(list []string) []string {
 var (
 	version   = "dev"
 	buildTime = "unknown"
+	startedAt = time.Now()
 )
 
 // bootstrap status flags. The HTTP server starts before opencode is fully
@@ -242,6 +245,24 @@ func main() {
 
 	stopHeartbeat := workspaceheartbeat.Start(context.Background(), chat.HasActiveTasks)
 	defer stopHeartbeat()
+
+	diagnostics.Configure(diagnostics.Sources{
+		Version:       version,
+		BuildTime:     buildTime,
+		StartedAt:     startedAt,
+		Status:        getStatus,
+		OpencodeReady: opencodeReady.Load,
+		ServerBackend: serverBackendEnabled(),
+		OpencodeBin:   func() string { return config.OpencodeBin },
+		Models: func() []string {
+			opencodeModelsMu.RLock()
+			defer opencodeModelsMu.RUnlock()
+			return append([]string(nil), opencodeModels...)
+		},
+		LogFile:       logFilePath(),
+		UserConfigDir: opencodeConfigDir(),
+	})
+	diagnostics.SetConfigRefresher(refreshCentralConfig)
 
 	// Run all heavy initialization (opencode install/verify, obsidian install,
 	// MCP defaults, model discovery) in the background so the HTTP listener
@@ -486,9 +507,10 @@ func bootstrap() {
 	// startup pass, for a workspace that already has a token in env or on disk.
 	ensureGitHubMCP()
 
-	// Vertex AI (google-vertex provider): seed GOOGLE_VERTEX_PROJECT/LOCATION so
-	// child opencode processes light up the provider. The model-cache refresh
-	// after a "Sign in with Google Cloud" (gcloud ADC) flow is hooked above.
+	// Vertex AI (google-vertex provider): seed GOOGLE_VERTEX_PROJECT/LOCATION and
+	// GOOGLE_CLOUD_PROJECT so child opencode processes light up the provider. The
+	// model-cache refresh after a "Sign in with Google Cloud" (gcloud ADC) flow
+	// is hooked above.
 	vertexauth.EnsureEnv()
 
 	if obsRes.Bin != "" {
@@ -577,20 +599,49 @@ func warnCentralConfigUnprovisioned() {
 // OPENCODE_CONFIG_DIR so every subsequently spawned/served opencode process
 // layers the platform-owned config above the user's Global. Failures are
 // logged but non-fatal: chat still works from the user's own config.
-func runMaterializer() {
+func runMaterializer() (materializer.Result, error) {
 	opts := materializer.Options{Log: os.Stdout}.FromEnv(opencodeConfigDir())
 	res, err := materializer.Run(opts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "  ⚠ Central configuration: %v\n", err)
-		return
+		return res, err
 	}
 	if res.Skipped || res.ConfigDir == "" {
-		return
+		return res, nil
 	}
 	// Export the platform-owned dir so child opencode processes pick it up.
 	if err := os.Setenv(materializer.EnvConfigDir, res.ConfigDir); err != nil {
 		fmt.Fprintf(os.Stderr, "  ⚠ Central configuration: set %s: %v\n", materializer.EnvConfigDir, err)
 	}
+	return res, nil
+}
+
+// refreshCentralConfig fetches and re-applies the central configuration while
+// the server runs (Diagnostics > Configuration), then repeats the startup
+// steps that read it. Agents and the dictation vocabulary are read from disk
+// when used, so they need nothing more.
+func refreshCentralConfig(step func(string)) error {
+	fmt.Println("  ↻ Central configuration: refresh requested")
+	step("Fetching and applying the configuration")
+	res, err := runMaterializer()
+	if err != nil {
+		return err
+	}
+	if res.Skipped {
+		return fmt.Errorf("skipped: %s", res.SkipReason)
+	}
+	// The skills picker caches its list for up to half an hour.
+	chat.InvalidateSkillCache()
+	step("Updating model providers and models")
+	refreshOpencodeModels()
+	providers.ProbeAllInBackground()
+	step("Updating connectors")
+	mcp.EnsureProvisionedStubs(os.Stderr)
+	go mcpauth.RefreshAllStatuses()
+	// A running `opencode serve` reads its config only at startup.
+	chat.ReloadServerAgents()
+	fmt.Println("  ✓ Central configuration: refreshed")
+	return nil
 }
 
 // opencodeConfigDir returns OpenCode's global config directory, where it
@@ -908,6 +959,11 @@ func registerRoutes(mux *http.ServeMux) {
 
 	// Core API
 	mux.HandleFunc("GET /api/version", handleVersion)
+	mux.HandleFunc("GET /api/diagnostics", diagnostics.HandleReport)
+	mux.HandleFunc("GET /api/diagnostics/disk", diagnostics.HandleDisk)
+	mux.HandleFunc("GET /api/diagnostics/log", diagnostics.HandleLog)
+	mux.HandleFunc("GET /api/diagnostics/refresh-config", diagnostics.HandleRefreshState)
+	mux.HandleFunc("POST /api/diagnostics/refresh-config", diagnostics.HandleRefreshStart)
 	voice.RegisterRoutes(mux)
 	mux.HandleFunc("POST /api/activity", workspaceheartbeat.HandleActivity)
 	mux.HandleFunc("GET /api/models", handleModels)
@@ -996,6 +1052,9 @@ func registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/files/upload", files.HandleFileUpload)
 	mux.HandleFunc("GET /api/files/download", files.HandleFileDownload)
 	mux.HandleFunc("GET /api/files/raw", files.HandleFileRaw)
+	mux.HandleFunc("GET /api/files/office-preview", office.HandlePreview)
+	mux.HandleFunc("GET /api/office/status", office.HandleStatus)
+	mux.HandleFunc("POST /api/office/install", office.HandleInstall)
 
 	// Git sync (status/pull/push). All three operate on a path supplied by
 	// the client; status is best-effort and returns is_repo=false outside a

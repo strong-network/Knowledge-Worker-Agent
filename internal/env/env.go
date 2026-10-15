@@ -86,6 +86,16 @@ func Names(name string) []string {
 	return append([]string{name}, oldNames[name]...)
 }
 
+// Renamed returns the settings that also have old names, sorted.
+func Renamed() []string {
+	out := make([]string, 0, len(oldNames))
+	for name := range oldNames {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // OldInUse lists each old name that's set, sorted, with the name to use
 // instead.
 func OldInUse() []string {

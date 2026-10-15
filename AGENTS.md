@@ -17,7 +17,7 @@ them to a Vue 3 single-page app over Server-Sent Events (SSE).
   `//go:embed`. No CGO, no shared libraries. The release image installs it as
   `/usr/bin/knowledge-worker-agent`.
 - **Go module:** `github.com/strong-network/Knowledge-Worker-Agent`, **Go 1.27** (`go.mod`), with a
-  toolchain floor of `go1.27.1`.
+  toolchain floor of `go1.27.2`.
 - **Only direct Go dependency:** `modernc.org/sqlite v1.34.5` (pure-Go SQLite); everything else
   is the standard library. `NOTICE` lists what the binary contains.
 - **Version:** the binary reports `<VERSION file>-<short git SHA>` (for example `1.2.0-a1b2c3d`),
@@ -46,14 +46,16 @@ whole product.
 | `internal/opencodeinstaller/`, `internal/opencodeembed/` | Installs the pinned opencode release, verified by SHA-256; the release binary embeds a fallback copy | **Security-relevant**: supply chain |
 | `internal/opencodeauth/`, `internal/vertexauth/`, `internal/providers/` | Model provider sign-in (GitHub Copilot device flow, Google Cloud), API keys, and which providers and preset models the workspace offers | **Security-relevant**: credentials, written to opencode's credential store |
 | `internal/sessions/` | Session & chat HTTP handlers, SSE dispatch loop, prompt queue, answer forwarding | |
-| `internal/files/` | File-manager handlers: browse/view/save/upload/download/rename/move/delete | **Security-relevant**: filesystem access |
+| `internal/files/` | File-manager handlers: browse/view/save/upload/download/rename/move/duplicate/delete | **Security-relevant**: filesystem access |
+| `internal/diagnostics/` | Settings → Diagnostics: `GET /api/diagnostics` (versions, status, central configuration and its last run, hidden and kept items, providers, connectors, settings), `/disk` and `/log` (the ends of the server's and opencode's logs), and `POST /api/diagnostics/refresh-config`, which re-applies the central configuration in the background, one refresh at a time | **Security-relevant**: reads logs and settings; everything returned goes through `Redact` |
 | `internal/workdirs/` | The only gate for deleting chat folders: session delete, tidy-up and sweeps all go through it | **Security-relevant**: deletes files |
 | `internal/git/` | Git status/changes/pull/push/commit/clone over a client-supplied path | **Security-relevant**: exec `git` |
 | `internal/mcpauth/` | Drives opencode's MCP OAuth commands (`opencode mcp auth`, `logout`, `list`) | **Security-relevant**: external identity providers |
-| `internal/materializer/` | Central configuration: at startup, clones or reads the configuration repository and writes the project's agents, skills, context, connectors, providers and vocabularies into a platform-owned opencode config folder | **Security-relevant**: exec `git`, writes config |
+| `internal/materializer/` | Central configuration: at startup and on a refresh from Diagnostics, clones or reads the configuration repository and writes the project's agents, skills, context, connectors, providers and vocabularies into a platform-owned opencode config folder, built beside the current one and swapped in | **Security-relevant**: exec `git`, writes config |
 | `internal/workspaceapps/` | Chat sharing: client for the workspace sidecar's Workspace App routes (`/var/strong-network/socks/sidecar-ipc`). Calls carry the owner's platform token, read per request from the `cloud_editor_user_token` header the platform proxy injects; `GET /api/share/platform` is a read-only probe of that path | **Security-relevant**: handles the owner's platform credential — never store, log or return it |
 | `internal/guest/` | Chat sharing: the guest surface — a **separate listener** (`127.0.0.1:8766`) with its own mux, reached by coworkers through the Workspace App. Only its own routes exist; every session route 404s unless the chat is shared; POSTs require `Origin` to equal the share URL's origin; turn frames pass an allow-list (`Frame`). With the owner's per-share toggles on, guests also answer permission requests (once or deny) and reach the chat's folder through `os.Root` — no delete/rename/move, hidden paths refused, home folder never — and guest prompts have a per-chat budget | **Security-relevant**: the one surface exposed beyond the owner. Must never import `internal/workspaceapps` or read the owner token (a test enforces this) |
 | `internal/obsidianinstaller/` | Installs the Obsidian MCP server via `npm install -g obsidian-mcp@<PinnedVersion>` | **Security-relevant**: supply chain |
+| `internal/office/` | Previews PowerPoint, Word and Excel files as PDF (`/api/files/office-preview`), converted by LibreOffice one at a time from a copy of the file and cached by the file's size and time; installs a pinned LibreOffice under `.system/libreoffice` on request (`/api/office/install`), where it survives a workspace restart | **Security-relevant**: process exec on files the agent wrote, supply chain |
 | `internal/voice/` | Dictation: `/api/voice/dictations` routes (owner listener only), audio held in memory, and the `whisper-server` engine it runs on loopback from a fresh `0700` directory with none of Knowledge Worker Agent's environment, tied to Knowledge Worker Agent's lifetime (`Pdeathsig`) and force-stopped when stuck. Reads the centrally assigned `vocabulary` artifacts for the engine's hint and corrections | **Security-relevant**: process exec, audio. Never log or persist audio or transcripts; the engine loads CPU code from its working directory, so that directory must stay private and empty |
 | `internal/config/` | Env-var config (`Init`), `SessionConfig`, `BuildOpencodeArgs`, agent discovery | Maps session config → opencode CLI flags |
 | `internal/db/` | SQLite persistence (sessions, messages, stats), idempotent migrations, FTS5 message index (`fts.go`) and the read-only retrieval queries (`recall.go`) | Parameterized queries only |
@@ -223,6 +225,11 @@ patterns documented here rather than the documented patterns themselves.
 - **Randomness:** `crypto/rand` for UUIDs (`chat.NewUUID`) and other identifiers — no
   `math/rand` for security-sensitive values. (`math/rand` appears only for non-security
   random-name shuffling in `internal/files`.)
+- **Diagnostics redaction:** the diagnostics routes return log lines, settings and error text,
+  so all of it passes through `diagnostics.Redact` (credentials in URLs, `key=value` and
+  `"key": "value"` forms of secret names, bearer and basic schemes, and known token shapes).
+  A setting whose name looks secret shows only `(set)`. Add a pattern there when a new
+  credential format appears.
 
 ### Sensitive data stores & external integrations
 - **SQLite** (`layout.Database`): chat sessions, message history, usage stats. No credentials are
@@ -231,6 +238,8 @@ patterns documented here rather than the documented patterns themselves.
   Copilot device flow (`internal/opencodeauth`).
 - **Model providers:** reached by opencode, with the credentials above.
 - **npm registry:** `npm install -g` for the Obsidian MCP server (`internal/obsidianinstaller`).
+- **The Document Foundation:** LibreOffice's download archive, when the user installs it for
+  previews (`internal/office`).
 - **Arbitrary MCP servers:** the client can register stdio servers (a command + args that
   opencode will later run) or remote servers (a URL) via `POST /api/mcp/servers`.
   `POST /api/mcp/probe` checks one before it's added: it fetches a URL the browser chose, with
@@ -245,7 +254,9 @@ patterns documented here rather than the documented patterns themselves.
   `models`, `mcp`), `cmd/server/providerprobe.go` (opencode), `internal/git/git.go` and
   `internal/materializer/repo.go` (`git`), `internal/mcp/probe.go` (a client-supplied stdio
   server command), `internal/obsidianinstaller` (`npm`, `node`), `internal/opencodeinstaller`
-  (the binary's `--version`, `ldd`), and `internal/voice/engine.go` (`whisper-server` on
+  (the binary's `--version`, `ldd`), `internal/office` (LibreOffice's `soffice --convert-to pdf`
+  in its own process group, killed with it on a timeout; `dpkg-deb -x` to unpack it), and
+  `internal/voice/engine.go` (`whisper-server` on
   `127.0.0.1`, and `--help` for the availability check; fixed arguments, absolute paths,
   minimal environment).
   - opencode runs with **`--dangerously-skip-permissions` by default**
@@ -274,6 +285,10 @@ patterns documented here rather than the documented patterns themselves.
   publishes no checksum files). A download that doesn't match is refused, and the embedded copy
   in the release binary is used only if it matches too. `Dockerfile.release` pins the same
   version and digests and checks them with `sha256sum -c`; a test keeps the two in agreement.
+- `internal/office` installs only LibreOffice `Version`, and only a download whose **SHA-256**
+  matches `bundleSHA` (published by The Document Foundation). The URL is the permanent archive's,
+  not `stable/`'s, which drops old releases. It unpacks 13 of the bundle's packages, checks that
+  the result starts, and only then moves it into place.
 - `internal/obsidianinstaller` installs `obsidian-mcp@<PinnedVersion>` with npm, which checks the
   registry's integrity hash. opencode itself installs its plugin runtime (`@opencode-ai/plugin`)
   from npm the first time it starts; that download is opencode's, not ours.
@@ -345,6 +360,11 @@ patterns documented here rather than the documented patterns themselves.
   panel and the document window. New file-type rendering goes there, not in `WorkspaceFilePanel.vue`
   (which owns browsing and *which* file is open, not how it is shown).
 - **i18n:** none — there is no internationalization framework in this repo.
+- **Bumping the version means more than `VERSION`.** In the same change, update `README.md`
+  (the two versioned `docker pull` lines and "The latest version is **X**") and the tag example
+  in `.github/RELEASING.md`; searching both files for the old version finds every place.
+  `TestReadmeDocumentsTheCurrentImageVersion` (`cmd/server/imageversion_test.go`) fails CI until
+  the README matches `VERSION`, so rerunning CI won't fix a bump that only touched `VERSION`.
 - **Dependency/build regen:** `make deps` (`go mod tidy && go mod download`); the frontend is
   rebuilt into `cmd/server/html/` by `make frontend`. There is no proto/codegen step.
 
@@ -395,14 +415,19 @@ names too.
   `go build ./cmd/server` requires running `make frontend` first to populate it.
 - **`make test` uses `go test ./... -v`** — `-v` makes output verbose; use `make test-short` for
   quiet runs.
-- **`go.mod` sets a toolchain floor** (`toolchain go1.27.1`), below which Go has known
+- **`go.mod` sets a toolchain floor** (`toolchain go1.27.2`), below which Go has known
   standard-library vulnerabilities. With the default `GOTOOLCHAIN=auto`, an older local Go
-  downloads and uses 1.27.1; `Dockerfile.release` sets `GOTOOLCHAIN=auto` because the `golang`
+  downloads and uses 1.27.2; `Dockerfile.release` sets `GOTOOLCHAIN=auto` because the `golang`
   images default to `local`. Keep `go 1.27.0` in `go.mod` unless intentionally bumping — `go mod
   tidy` writes the patch digit and will restore it — and raise
   the toolchain line when `govulncheck` reports a fixed Go release.
 - **Background bootstrap:** right after start, `/api/chat` and a few endpoints return 503
   (`requireOpencodeReady`) until opencode is verified — expected, not a bug.
+- **Don't put a message the UI must read in a 503.** A workspace proxy in front of the server
+  may drop the body of a 503 it doesn't recognise, so the browser gets the status with an empty
+  body. Use another status, such as 409, when the UI shows the JSON `error` or reads a field
+  (office preview, sharing, writing assistant). A 503 is fine where the status alone is the
+  signal: `requireOpencodeReady`, the startup migration and the guest app's "starting up".
 - **The release image** (`Dockerfile.release`) is based on `strongnetwork/cloud_editor_generic:2.3.9`
   and installs the binary as `/usr/bin/knowledge-worker-agent`, with `/usr/bin/chat`, its old name,
   as a link; `HEALTHCHECK` calls `/usr/bin/knowledge-worker-agent health` (which probes `/healthz`).

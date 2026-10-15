@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/env"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/layout"
@@ -51,6 +53,49 @@ type Result struct {
 	// Warnings describe artifact content that was accepted but partly ignored
 	// (e.g. an MCP artifact declaring "enabled"). The run succeeded.
 	Warnings []string
+	// Source is the configured repo source, as given (it may hold credentials).
+	Source string
+	// Stale is set when the repo could not be updated and an earlier clone was
+	// used; StaleReason says why.
+	Stale       bool
+	StaleReason string
+	// Commit is the config repo commit applied; zero when the source is not a
+	// git checkout of its own.
+	Commit Commit
+}
+
+// RunRecord is the outcome of a Run.
+type RunRecord struct {
+	At       time.Time
+	Duration time.Duration
+	Result   Result
+	Err      error
+}
+
+var lastRun struct {
+	sync.Mutex
+	rec, applied *RunRecord
+}
+
+// LastRun returns the outcome of the most recent Run in this process.
+func LastRun() (RunRecord, bool) {
+	lastRun.Lock()
+	defer lastRun.Unlock()
+	if lastRun.rec == nil {
+		return RunRecord{}, false
+	}
+	return *lastRun.rec, true
+}
+
+// LastApplied returns the most recent Run that applied a configuration: the
+// one in use, since a failed run leaves the previous one in place.
+func LastApplied() (RunRecord, bool) {
+	lastRun.Lock()
+	defer lastRun.Unlock()
+	if lastRun.applied == nil {
+		return RunRecord{}, false
+	}
+	return *lastRun.applied, true
 }
 
 // FromEnv builds Options from the environment, filling any zero fields.
@@ -96,8 +141,18 @@ func (o Options) FromEnv(userGlobalDir string) Options {
 // unconditionally at startup: when the project id or repo source is unset it
 // returns a Skipped result and makes no changes, so pre-control-plane
 // workspaces are unaffected.
-func Run(opts Options) (Result, error) {
-	res := Result{ProjectID: opts.ProjectID, ConfigDir: opts.ConfigDir, Counts: map[string]int{}}
+func Run(opts Options) (res Result, err error) {
+	started := time.Now()
+	defer func() {
+		rec := &RunRecord{At: started, Duration: time.Since(started), Result: res, Err: err}
+		lastRun.Lock()
+		lastRun.rec = rec
+		if err == nil && !res.Skipped {
+			lastRun.applied = rec
+		}
+		lastRun.Unlock()
+	}()
+	res = Result{ProjectID: opts.ProjectID, ConfigDir: opts.ConfigDir, Counts: map[string]int{}, Source: opts.RepoSource}
 
 	if opts.ProjectID == "" {
 		res.Skipped, res.SkipReason = true, "no project id ("+EnvProjectID+" unset)"
@@ -113,11 +168,15 @@ func Run(opts Options) (Result, error) {
 		return res, fmt.Errorf("materializer: no config dir (%s) resolved", EnvConfigDir)
 	}
 
-	repoDir, err := SyncRepo(opts.Log, opts.RepoSource, opts.CacheDir)
+	repoDir, stale, err := syncRepo(opts.Log, opts.RepoSource, opts.CacheDir)
 	if err != nil {
 		return res, fmt.Errorf("materializer: %w", err)
 	}
 	res.RepoDir = repoDir
+	if stale != nil {
+		res.Stale, res.StaleReason = true, stale.Error()
+	}
+	res.Commit = RepoCommit(repoDir)
 
 	data, err := os.ReadFile(filepath.Join(repoDir, "assignment.jsonc"))
 	if err != nil {

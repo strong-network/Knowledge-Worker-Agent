@@ -19,11 +19,11 @@ const VocabularyDir = "kwa-vocabulary"
 // Materialize writes the resolved artifact set for a project into the
 // platform-owned OpenCode config dir (configDir, i.e. OPENCODE_CONFIG_DIR).
 //
-// The materializer OWNS configDir end to end: it is wiped and rewritten on
-// every run so that artifacts no longer resolved (reassignments, retired IDs)
-// are removed, not just added. The user's Global (~/.config/opencode) is a
-// DIFFERENT directory and is never touched here; OpenCode's native per-key
-// merge layers this dir above it.
+// The materializer OWNS configDir end to end: it is replaced on every run, by a
+// copy built beside it and swapped in, so that artifacts no longer resolved
+// (reassignments, retired IDs) are removed, not just added. The user's Global
+// (~/.config/opencode) is a DIFFERENT directory and is never touched here;
+// OpenCode's native per-key merge layers this dir above it.
 //
 // Layout written:
 //
@@ -59,13 +59,20 @@ func Materialize(configDir, repoDir string, res *Resolved, userGlobalDir string)
 		return nil, fmt.Errorf("materialize: refusing to operate on unsafe path %q", absCfg)
 	}
 
-	// Own the dir: wipe and recreate.
-	if err := os.RemoveAll(absCfg); err != nil {
-		return nil, fmt.Errorf("materialize: clean config dir: %w", err)
-	}
-	if err := os.MkdirAll(absCfg, 0o755); err != nil {
+	// Own the dir: build its replacement beside it and swap it in at the end, so
+	// a failure part-way, or a refresh while chats run, never leaves it half written.
+	staging := absCfg + ".new"
+	_ = os.RemoveAll(staging)
+	_ = os.RemoveAll(absCfg + ".old")
+	if err := os.MkdirAll(staging, 0o755); err != nil {
 		return nil, fmt.Errorf("materialize: create config dir: %w", err)
 	}
+	swapped := false
+	defer func() {
+		if !swapped {
+			_ = os.RemoveAll(staging)
+		}
+	}()
 
 	// Accumulator for the merged opencode.json (mcp + provider fragments).
 	merged := map[string]any{"$schema": "https://opencode.ai/config.json"}
@@ -73,7 +80,7 @@ func Materialize(configDir, repoDir string, res *Resolved, userGlobalDir string)
 
 	// Agents -> configDir/agent/<basename>.md
 	for _, art := range res.ByKind[KindAgents] {
-		dst := filepath.Join(absCfg, "agent", filepath.Base(art.Path))
+		dst := filepath.Join(staging, "agent", filepath.Base(art.Path))
 		if err := copyFile(filepath.Join(repoDir, art.Path), dst); err != nil {
 			return nil, fmt.Errorf("materialize agent %s: %w", art.ID, err)
 		}
@@ -89,7 +96,7 @@ func Materialize(configDir, repoDir string, res *Resolved, userGlobalDir string)
 	// moved between the bundled defaults and the central config repo unchanged.
 	for _, art := range res.ByKind[KindSkills] {
 		name := filepath.Base(strings.TrimRight(art.Path, "/"))
-		dst := filepath.Join(absCfg, "skills", name)
+		dst := filepath.Join(staging, "skills", name)
 		if err := copyDir(filepath.Join(repoDir, art.Path), dst); err != nil {
 			return nil, fmt.Errorf("materialize skill %s: %w", art.ID, err)
 		}
@@ -98,7 +105,7 @@ func Materialize(configDir, repoDir string, res *Resolved, userGlobalDir string)
 	// Context -> configDir/context/<basename>.md, referenced via instructions.
 	for _, art := range res.ByKind[KindContext] {
 		rel := filepath.Join("context", filepath.Base(art.Path))
-		if err := copyFile(filepath.Join(repoDir, art.Path), filepath.Join(absCfg, rel)); err != nil {
+		if err := copyFile(filepath.Join(repoDir, art.Path), filepath.Join(staging, rel)); err != nil {
 			return nil, fmt.Errorf("materialize context %s: %w", art.ID, err)
 		}
 		instructions = append(instructions, rel)
@@ -108,7 +115,7 @@ func Materialize(configDir, repoDir string, res *Resolved, userGlobalDir string)
 	// assignment order, which is the order dictation merges them in.
 	for i, art := range res.ByKind[KindVocabulary] {
 		name := fmt.Sprintf("%03d-%s", i+1, filepath.Base(art.Path))
-		if err := copyFile(filepath.Join(repoDir, art.Path), filepath.Join(absCfg, VocabularyDir, name)); err != nil {
+		if err := copyFile(filepath.Join(repoDir, art.Path), filepath.Join(staging, VocabularyDir, name)); err != nil {
 			return nil, fmt.Errorf("materialize vocabulary %s: %w", art.ID, err)
 		}
 	}
@@ -155,13 +162,13 @@ func Materialize(configDir, repoDir string, res *Resolved, userGlobalDir string)
 		merged["instructions"] = dedupe(instructions)
 	}
 
-	if err := writeJSONFile(filepath.Join(absCfg, "opencode.json"), merged); err != nil {
+	if err := writeJSONFile(filepath.Join(staging, "opencode.json"), merged); err != nil {
 		return nil, fmt.Errorf("materialize opencode.json: %w", err)
 	}
 
 	// Selection metadata — carried, NOT materialized into opencode config.
 	meta := map[string]any{"mcp_default_on": res.MCPDefaultOn}
-	if err := writeJSONFile(filepath.Join(absCfg, "mcp-default-on.json"), meta); err != nil {
+	if err := writeJSONFile(filepath.Join(staging, "mcp-default-on.json"), meta); err != nil {
 		return nil, fmt.Errorf("materialize mcp-default-on.json: %w", err)
 	}
 
@@ -172,17 +179,36 @@ func Materialize(configDir, repoDir string, res *Resolved, userGlobalDir string)
 	if providerMeta == nil {
 		providerMeta = []ProviderMeta{}
 	}
-	if err := writeJSONFile(filepath.Join(absCfg, ProviderMetaFile), providerMetaFile{Providers: providerMeta}); err != nil {
+	if err := writeJSONFile(filepath.Join(staging, ProviderMetaFile), providerMetaFile{Providers: providerMeta}); err != nil {
 		return nil, fmt.Errorf("materialize %s: %w", ProviderMetaFile, err)
 	}
 	if mcpMeta == nil {
 		mcpMeta = []MCPMeta{}
 	}
-	if err := writeJSONFile(filepath.Join(absCfg, MCPMetaFile), mcpMetaFile{Servers: mcpMeta}); err != nil {
+	if err := writeJSONFile(filepath.Join(staging, MCPMetaFile), mcpMetaFile{Servers: mcpMeta}); err != nil {
 		return nil, fmt.Errorf("materialize %s: %w", MCPMetaFile, err)
 	}
 
+	if err := swapDir(staging, absCfg); err != nil {
+		return nil, fmt.Errorf("materialize: replace config dir: %w", err)
+	}
+	swapped = true
 	return warnings, nil
+}
+
+// swapDir replaces dir with staging. The two renames leave dir missing only
+// between them; if the second fails, the first is undone.
+func swapDir(staging, dir string) error {
+	old := dir + ".old"
+	if err := os.Rename(dir, old); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Rename(staging, dir); err != nil {
+		_ = os.Rename(old, dir)
+		return err
+	}
+	_ = os.RemoveAll(old)
+	return nil
 }
 
 // loadFragment reads and parses an opencode.json fragment (which may contain

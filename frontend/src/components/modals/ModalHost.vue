@@ -23,6 +23,7 @@ import SummarizeModal from './SummarizeModal.vue'
 import AgentBuilderModal from './AgentBuilderModal.vue'
 import ScheduledTaskModal from './ScheduledTaskModal.vue'
 import TidyUpModal from './TidyUpModal.vue'
+import DiagnosticsModal from './DiagnosticsModal.vue'
 import ShareModal from './ShareModal.vue'
 
 const ui = useUiStore()
@@ -77,6 +78,7 @@ function closeOnOverlay(e: MouseEvent) {
     <AgentBuilderModal v-if="ui.activeModal === 'agent-builder'" />
     <ScheduledTaskModal v-if="ui.activeModal === 'scheduled-task'" />
     <TidyUpModal v-if="ui.activeModal === 'tidy-up'" />
+    <DiagnosticsModal v-if="ui.activeModal === 'diagnostics'" />
     <ShareModal v-if="ui.activeModal === 'share'" />
   </div>
 </template>

@@ -2,7 +2,7 @@ module github.com/strong-network/Knowledge-Worker-Agent
 
 go 1.27.0
 
-toolchain go1.27.1
+toolchain go1.27.2
 
 require modernc.org/sqlite v1.60.1
 

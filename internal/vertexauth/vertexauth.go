@@ -100,14 +100,20 @@ func Location() string {
 	return defaultLocation
 }
 
-// EnsureEnv seeds GOOGLE_VERTEX_PROJECT / GOOGLE_VERTEX_LOCATION into the
-// current process environment (if unset) so child opencode processes, which
-// inherit os.Environ(), light up the google-vertex provider. Safe to call more
-// than once. Returns the effective project and location.
+// EnsureEnv seeds GOOGLE_VERTEX_PROJECT, GOOGLE_CLOUD_PROJECT and
+// GOOGLE_VERTEX_LOCATION into the current process environment (if unset) so
+// child opencode processes, which inherit os.Environ(), light up the
+// google-vertex provider. Safe to call more than once. Returns the effective
+// project and location.
 func EnsureEnv() (project, location string) {
 	project, location = Project(), Location()
 	if project != "" && os.Getenv("GOOGLE_VERTEX_PROJECT") == "" {
 		_ = os.Setenv("GOOGLE_VERTEX_PROJECT", project)
+	}
+	// Without it, Google's auth library looks the project up on every turn and
+	// waits about 15 seconds for a metadata server that isn't there.
+	if project != "" && os.Getenv("GOOGLE_CLOUD_PROJECT") == "" {
+		_ = os.Setenv("GOOGLE_CLOUD_PROJECT", project)
 	}
 	if os.Getenv("GOOGLE_VERTEX_LOCATION") == "" {
 		_ = os.Setenv("GOOGLE_VERTEX_LOCATION", location)
