@@ -4,15 +4,19 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/config"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/db"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/env/envtest"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/files"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodeauth"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/providers"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/vertexauth"
@@ -144,50 +148,40 @@ func TestRegisterRoutesNoDuplicates(t *testing.T) {
 	registerRoutes(mux)
 }
 
-// TestCurateVertexModels verifies that the Vertex model list is curated down
-// to the models we actually serve: allow-listed google-vertex identifiers are
-// kept, non-allow-listed google-vertex identifiers are dropped, non-vertex
-// identifiers pass through untouched, input order is preserved, and the result
-// is non-nil.
-func TestCurateVertexModels(t *testing.T) {
-	input := []string{
-		"google-vertex/claude-sonnet-5@default",       // allow-listed, keep
-		"google-vertex/claude-opus-5@default",         // allow-listed, keep
-		"google-vertex/claude-experimental-9@default", // not allow-listed, drop
-		"github-copilot/gpt-4o",                       // non-vertex, keep
-		"google-vertex/gemini-2.5-pro",                // allow-listed, keep
-		"google-vertex/gemini-0.0-imaginary",          // not allow-listed, drop
+func TestChatModel(t *testing.T) {
+	chat := opencodeauth.ModelDetail{ToolCall: true, OutputText: true, Status: "active"}
+	if !chatModel(chat) {
+		t.Error("a text model with tools was left out")
 	}
-	want := []string{
-		"google-vertex/claude-sonnet-5@default",
-		"google-vertex/claude-opus-5@default",
-		"github-copilot/gpt-4o",
-		"google-vertex/gemini-2.5-pro",
-	}
-
-	got := curateVertexModels(input)
-
-	if got == nil {
-		t.Fatal("curateVertexModels returned nil, want non-nil slice")
-	}
-	if len(got) != len(want) {
-		t.Fatalf("got %d models %v, want %d %v", len(got), got, len(want), want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("index %d: got %q, want %q (full: %v)", i, got[i], want[i], got)
+	for name, d := range map[string]opencodeauth.ModelDetail{
+		"no tools":   {OutputText: true},
+		"image":      {ToolCall: true, OutputText: true, OutputImage: true},
+		"speech":     {ToolCall: true, OutputAudio: true},
+		"deprecated": {ToolCall: true, OutputText: true, Status: "deprecated"},
+	} {
+		if chatModel(d) {
+			t.Errorf("%s model counted as a chat model", name)
 		}
 	}
 }
 
-// TestCurateVertexModelsEmpty ensures an empty input yields a non-nil, empty slice.
-func TestCurateVertexModelsEmpty(t *testing.T) {
-	got := curateVertexModels(nil)
-	if got == nil {
-		t.Fatal("curateVertexModels(nil) returned nil, want non-nil empty slice")
+// An unanswered check keeps a model's last answer, so a passing outage doesn't
+// empty the picker, nor bring back a model that was refused.
+func TestVertexAvailable(t *testing.T) {
+	ids := map[string]string{
+		"ok": "google-vertex/ok", "no": "google-vertex/no",
+		"flaky-was-ok": "google-vertex/flaky-was-ok", "flaky-new": "google-vertex/flaky-new",
 	}
-	if len(got) != 0 {
-		t.Fatalf("expected empty slice, got %v", got)
+	states := map[string]vertexauth.Availability{
+		"ok": vertexauth.Available, "no": vertexauth.Unavailable,
+		"flaky-was-ok": vertexauth.Unknown, "flaky-new": vertexauth.Unknown,
+	}
+	last := map[string]bool{"google-vertex/flaky-was-ok": true, "google-vertex/no": true}
+
+	got := sortedKeys(vertexAvailable(ids, states, last))
+	want := []string{"google-vertex/flaky-was-ok", "google-vertex/ok"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("got %v, want %v", got, want)
 	}
 }
 
@@ -352,5 +346,41 @@ func TestRegistryPresetsSkipsUndiscoveredNominations(t *testing.T) {
 	// to a dead model id; leaving it unset falls back to the session's model.
 	if got := registryPresets(reg, []string{"mistral-onprem/mistral-large"}); len(got) != 0 {
 		t.Errorf("got %v, want no presets", got)
+	}
+}
+
+// The owner's file routes keep shared files in step: a rename moves the
+// shared file's record with it, and a delete stops sharing it first.
+func TestFileRoutesKeepSharedFilesInStep(t *testing.T) {
+	setupServerTestDB(t)
+	t.Setenv("HOME", t.TempDir())
+	prevRename, prevDelete := files.AfterRename, files.BeforeDelete
+	t.Cleanup(func() { files.AfterRename, files.BeforeDelete = prevRename, prevDelete })
+	mux := http.NewServeMux()
+	registerRoutes(mux)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "report.html"), []byte("<p>Q3</p>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CreateSharedArtifact(db.SharedArtifact{ID: "a1", Folder: dir, RelPath: "report.html", Port: 1}); err != nil {
+		t.Fatal(err)
+	}
+	post := func(path string, body any) int {
+		b, _ := json.Marshal(body)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest("POST", path, bytes.NewReader(b)))
+		return rec.Code
+	}
+	if code := post("/api/files/rename", map[string]string{"src": filepath.Join(dir, "report.html"), "dest": filepath.Join(dir, "q3.html")}); code != http.StatusOK {
+		t.Fatalf("rename: %d", code)
+	}
+	if a, ok := db.GetSharedArtifact("a1"); !ok || a.RelPath != "q3.html" {
+		t.Fatalf("after the rename: %+v", a)
+	}
+	if code := post("/api/files/delete", map[string]string{"path": filepath.Join(dir, "q3.html")}); code != http.StatusOK {
+		t.Fatalf("delete: %d", code)
+	}
+	if _, ok := db.GetSharedArtifact("a1"); ok {
+		t.Error("the deleted file is still shared")
 	}
 }

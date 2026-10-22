@@ -2,7 +2,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, nextTick } from 'vue'
 import { useSessionsStore } from '../../stores/sessions'
 import { useChatStore } from '../../stores/chat'
 import { useUiStore } from '../../stores/ui'
@@ -11,6 +11,11 @@ import { confirmChatDelete } from '../../utils/confirmDelete'
 import { loadFlag, saveFlag, loadOverride, saveOverride } from '../../utils/sectionState'
 import { useShareStore } from '../../stores/share'
 import { useMe } from '../../composables/useMe'
+import ActionMenu, { type MenuEntry } from '../ActionMenu.vue'
+import TimerIcon from '../TimerIcon.vue'
+import { useNow } from '../../composables/useNow'
+import { timeLeft, timeLeftLong } from '../../utils/temporary'
+import type { Session } from '../../api'
 
 const sessionsStore = useSessionsStore()
 const chatStore = useChatStore()
@@ -36,6 +41,17 @@ function openShare(id: string) {
 
 const SHARED_KEY = 'sharedOpen'
 const sharedOverride = ref<boolean | null>(loadOverride(SHARED_KEY))
+
+// Temporary chats: their own group, each row with the time it has left.
+const TEMPORARY_KEY = 'temporaryOpen'
+const temporaryOverride = ref<boolean | null>(loadOverride(TEMPORARY_KEY))
+const now = useNow()
+const left = (s: Session) => timeLeft(s.expires_at ?? now.value, now.value)
+const leftLong = (s: Session) => timeLeftLong(s.expires_at ?? now.value, now.value)
+async function keepChat(id: string) {
+  contextMenuId.value = null
+  await sessionsStore.setTemporary(id, false)
+}
 
 // Open a chat from the sidebar list. Switching the session alone isn't enough
 // when a Project view is open: App.vue renders ProjectView while
@@ -98,6 +114,12 @@ function toggleShared() {
   saveOverride(SHARED_KEY, sharedOverride.value)
 }
 
+const temporaryOpen = computed(() => searching.value || temporaryOverride.value !== false)
+function toggleTemporary() {
+  temporaryOverride.value = !temporaryOpen.value
+  saveOverride(TEMPORARY_KEY, temporaryOverride.value)
+}
+
 function toggleStarred() {
   starredOverride.value = !starredOpen.value
   saveOverride(STARRED_KEY, starredOverride.value)
@@ -112,26 +134,86 @@ function onContextMenu(e: MouseEvent, id: string) {
   contextMenuId.value = id
 }
 
-function startRename(id: string, currentName: string) {
+function rowEl(id: string | undefined): HTMLElement | null {
+  return id ? document.querySelector<HTMLElement>(`#sessions-list .session-item[data-id="${CSS.escape(id)}"]`) : null
+}
+function focusRowMenu(id: string | undefined): boolean {
+  const button = rowEl(id)?.querySelector<HTMLElement>('.am-trigger')
+  button?.focus()
+  return !!button
+}
+
+async function startRename(id: string, currentName: string) {
   renameId.value = id
   renameValue.value = currentName
   contextMenuId.value = null
+  await nextTick()
+  const input = rowEl(id)?.querySelector<HTMLInputElement>('input')
+  input?.focus()
+  input?.select()
 }
 
-async function submitRename() {
-  if (renameId.value && renameValue.value.trim()) {
-    await sessionsStore.renameSession(renameId.value, renameValue.value.trim())
-  }
+// Enter saves and Escape cancels, and both hand focus back to the row's ⋯. A
+// click elsewhere saves and leaves focus where it went. A blank or unchanged
+// name keeps the old one.
+async function submitRename(refocus = false) {
+  const id = renameId.value
+  if (!id) return
+  const name = renameValue.value.trim()
+  const before = sessionsStore.sessions.find(s => s.id === id)?.name
   renameId.value = null
+  if (refocus) nextTick(() => focusRowMenu(id))
+  if (name && name !== before) await sessionsStore.renameSession(id, name)
+}
+function cancelRename() {
+  const id = renameId.value
+  renameId.value = null
+  if (id) nextTick(() => focusRowMenu(id))
 }
 
 async function deleteSession(id: string) {
   const session = sessionsStore.sessions.find(s => s.id === id)
-  const { ok, deleteNotes } = confirmChatDelete(session, 'Delete this session?')
-  if (ok) {
-    await sessionsStore.deleteSession(id, deleteNotes)
-  }
+  const { ok, deleteNotes } = confirmChatDelete(session)
   contextMenuId.value = null
+  if (!ok) return
+  // Focus goes to the next chat in the list, else the one before, else New chat.
+  const rows = Array.from(document.querySelectorAll<HTMLElement>('#sessions-list .session-item[data-id]'))
+    .filter(el => el.offsetParent)
+  const at = rows.findIndex(el => el.dataset.id === id)
+  const near = at < 0 ? undefined : (rows[at + 1] ?? rows[at - 1])?.dataset.id
+  await sessionsStore.deleteSession(id, deleteNotes)
+  await nextTick()
+  if (!focusRowMenu(near)) document.getElementById('new-chat-btn')?.focus()
+}
+
+// Star, Keep chat and Make temporary move the row to another group, where
+// it's drawn anew: focus follows it rather than dropping to the page.
+async function thenRefocus(id: string, done: Promise<unknown>) {
+  await done
+  await nextTick()
+  if (!document.activeElement || document.activeElement === document.body) focusRowMenu(id)
+}
+
+const actionsFor = (s: Session) => `Actions for "${s.name || 'Untitled'}"`
+// A row's ⋯ menu. A temporary chat can only be kept, renamed or deleted.
+function rowItems(s: Session): MenuEntry[] {
+  const del: MenuEntry = { label: 'Delete', danger: true, action: () => deleteSession(s.id) }
+  const rename: MenuEntry = { label: 'Rename', action: () => startRename(s.id, s.name) }
+  if (s.temporary) return [{ label: 'Keep chat', action: () => thenRefocus(s.id, keepChat(s.id)) }, rename, 'divider', del]
+  const items: MenuEntry[] = [
+    { label: s.favorite ? 'Remove star' : 'Star', action: () => thenRefocus(s.id, toggleFavorite(s.id, !!s.favorite)) },
+    rename,
+  ]
+  if (sharingAvailable.value) items.push({ label: 'Share', action: () => openShare(s.id) })
+  if (!s.deprecated) {
+    items.push({
+      label: 'Make temporary',
+      unavailable: s.shared ? 'Stop sharing first. Shared chats are always saved.' : undefined,
+      action: () => thenRefocus(s.id, sessionsStore.setTemporary(s.id, true)),
+    })
+  }
+  items.push('divider', del)
+  return items
 }
 
 async function togglePin(id: string, pinned: boolean) {
@@ -171,6 +253,7 @@ async function toggleFavorite(id: string, favorite: boolean) {
           class="session-item favorite"
           :class="{ active: s.id === sessionsStore.currentSessionId, deprecated: s.deprecated }"
           @click="openChat(s.id)"
+          :data-id="s.id"
           @contextmenu="onContextMenu($event, s.id)"
         >
           <div class="si-body">
@@ -180,9 +263,9 @@ async function toggleFavorite(id: string, favorite: boolean) {
               v-model="renameValue"
               class="form-input"
               style="font-size:12px;padding:3px 6px"
-              @keydown.enter="submitRename"
-              @keydown.esc="renameId = null"
-              @blur="submitRename"
+              @keydown.enter.prevent="submitRename(true)"
+              @keydown.esc="cancelRename"
+              @blur="submitRename()"
               autofocus
             />
             <div class="si-meta">
@@ -193,10 +276,7 @@ async function toggleFavorite(id: string, favorite: boolean) {
             </div>
           </div>
           <div class="si-actions" v-if="renameId !== s.id">
-            <button class="si-btn star active" @click.stop="toggleFavorite(s.id, s.favorite || false)" title="Unstar">★</button>
-            <button v-if="sharingAvailable" class="si-btn" @click.stop="openShare(s.id)" :title="s.shared ? 'Sharing' : 'Share'" :aria-label="(s.shared ? 'Sharing ' : 'Share ') + (s.name || 'Untitled')">🔗</button>
-            <button class="si-btn" @click.stop="startRename(s.id, s.name)" title="Rename">✏️</button>
-            <button class="si-btn danger" @click.stop="deleteSession(s.id)" title="Delete">🗑</button>
+            <ActionMenu :items="rowItems(s)" :label="actionsFor(s)" :menu-label="actionsFor(s)" />
           </div>
         </div>
       </template>
@@ -214,6 +294,7 @@ async function toggleFavorite(id: string, favorite: boolean) {
           class="session-item pinned"
           :class="{ active: s.id === sessionsStore.currentSessionId, deprecated: s.deprecated }"
           @click="openChat(s.id)"
+          :data-id="s.id"
           @contextmenu="onContextMenu($event, s.id)"
         >
           <div class="si-body">
@@ -223,9 +304,9 @@ async function toggleFavorite(id: string, favorite: boolean) {
               v-model="renameValue"
               class="form-input"
               style="font-size:12px;padding:3px 6px"
-              @keydown.enter="submitRename"
-              @keydown.esc="renameId = null"
-              @blur="submitRename"
+              @keydown.enter.prevent="submitRename(true)"
+              @keydown.esc="cancelRename"
+              @blur="submitRename()"
               autofocus
             />
             <div class="si-meta">
@@ -236,10 +317,7 @@ async function toggleFavorite(id: string, favorite: boolean) {
             </div>
           </div>
           <div class="si-actions" v-if="renameId !== s.id">
-            <button class="si-btn star" :class="{ active: s.favorite }" @click.stop="toggleFavorite(s.id, s.favorite || false)" :title="s.favorite ? 'Unstar' : 'Star'">{{ s.favorite ? '★' : '☆' }}</button>
-            <button v-if="sharingAvailable" class="si-btn" @click.stop="openShare(s.id)" :title="s.shared ? 'Sharing' : 'Share'" :aria-label="(s.shared ? 'Sharing ' : 'Share ') + (s.name || 'Untitled')">🔗</button>
-            <button class="si-btn" @click.stop="startRename(s.id, s.name)" title="Rename">✏️</button>
-            <button class="si-btn danger" @click.stop="deleteSession(s.id)" title="Delete">🗑</button>
+            <ActionMenu :items="rowItems(s)" :label="actionsFor(s)" :menu-label="actionsFor(s)" />
           </div>
         </div>
       </template>
@@ -262,6 +340,7 @@ async function toggleFavorite(id: string, favorite: boolean) {
         class="session-item"
         :class="{ active: s.id === sessionsStore.currentSessionId, deprecated: s.deprecated }"
         @click="openChat(s.id)"
+        :data-id="s.id"
         @contextmenu="onContextMenu($event, s.id)"
       >
         <div class="si-body">
@@ -271,9 +350,9 @@ async function toggleFavorite(id: string, favorite: boolean) {
             v-model="renameValue"
             class="form-input"
             style="font-size:12px;padding:3px 6px"
-            @keydown.enter="submitRename"
-            @keydown.esc="renameId = null"
-            @blur="submitRename"
+            @keydown.enter.prevent="submitRename(true)"
+            @keydown.esc="cancelRename"
+            @blur="submitRename()"
             autofocus
           />
           <div class="si-meta">
@@ -284,10 +363,49 @@ async function toggleFavorite(id: string, favorite: boolean) {
           </div>
         </div>
         <div class="si-actions" v-if="renameId !== s.id">
-          <button class="si-btn star" :class="{ active: s.favorite }" @click.stop="toggleFavorite(s.id, s.favorite || false)" :title="s.favorite ? 'Unstar' : 'Star'">{{ s.favorite ? '★' : '☆' }}</button>
-          <button v-if="sharingAvailable" class="si-btn" @click.stop="openShare(s.id)" :title="s.shared ? 'Sharing' : 'Share'" :aria-label="(s.shared ? 'Sharing ' : 'Share ') + (s.name || 'Untitled')">🔗</button>
-          <button class="si-btn" @click.stop="startRename(s.id, s.name)" title="Rename">✏️</button>
-          <button class="si-btn danger" @click.stop="deleteSession(s.id)" title="Delete">🗑</button>
+          <ActionMenu :items="rowItems(s)" :label="actionsFor(s)" :menu-label="actionsFor(s)" />
+        </div>
+      </div>
+
+      <!-- Temporary chats: not in the history, deleted after 24 hours without a message -->
+      <button
+        class="group-header"
+        v-if="sessionsStore.sortedSessions.temporary.length"
+        :aria-expanded="temporaryOpen"
+        @click="toggleTemporary"
+      >
+        <span class="gh-caret" :class="{ open: temporaryOpen }" aria-hidden="true">›</span>
+        <span class="gh-label">Temporary</span>
+        <span class="gh-count">{{ sessionsStore.sortedSessions.temporary.length }}</span>
+      </button>
+      <div
+        v-show="temporaryOpen"
+        v-for="s in sessionsStore.sortedSessions.temporary"
+        :key="s.id"
+        class="session-item temporary"
+        :class="{ active: s.id === sessionsStore.currentSessionId, deprecated: s.deprecated }"
+        @click="openChat(s.id)"
+        :data-id="s.id"
+        @contextmenu="onContextMenu($event, s.id)"
+      >
+        <div class="si-body">
+          <div class="si-label" v-if="renameId !== s.id"><span v-if="needsYou(s.id)" class="needs-dot" title="Waiting for you"></span><span v-else-if="isWorking(s.id)" class="streaming-dot" title="Working"></span>{{ s.name || "Untitled" }}<span class="sr-only">, temporary chat, deleted in {{ leftLong(s) }}</span></div>
+          <input
+            v-else
+            v-model="renameValue"
+            class="form-input"
+            style="font-size:12px;padding:3px 6px"
+            @keydown.enter.prevent="submitRename(true)"
+            @keydown.esc="cancelRename"
+            @blur="submitRename()"
+            autofocus
+          />
+          <div class="si-meta">
+            <span class="temp-left" aria-hidden="true"><TimerIcon :size="11" />{{ left(s) }}</span>
+          </div>
+        </div>
+        <div class="si-actions" v-if="renameId !== s.id">
+          <ActionMenu :items="rowItems(s)" :label="actionsFor(s)" :menu-label="actionsFor(s)" />
         </div>
       </div>
 
@@ -309,6 +427,7 @@ async function toggleFavorite(id: string, favorite: boolean) {
         class="session-item"
         :class="{ active: s.id === sessionsStore.currentSessionId, deprecated: s.deprecated }"
         @click="openChat(s.id)"
+        :data-id="s.id"
         @contextmenu="onContextMenu($event, s.id)"
       >
         <div class="si-body">
@@ -318,9 +437,9 @@ async function toggleFavorite(id: string, favorite: boolean) {
             v-model="renameValue"
             class="form-input"
             style="font-size:12px;padding:3px 6px"
-            @keydown.enter="submitRename"
-            @keydown.esc="renameId = null"
-            @blur="submitRename"
+            @keydown.enter.prevent="submitRename(true)"
+            @keydown.esc="cancelRename"
+            @blur="submitRename()"
             autofocus
           />
           <div class="si-meta">
@@ -331,10 +450,7 @@ async function toggleFavorite(id: string, favorite: boolean) {
           </div>
         </div>
         <div class="si-actions" v-if="renameId !== s.id">
-          <button class="si-btn star" :class="{ active: s.favorite }" @click.stop="toggleFavorite(s.id, s.favorite || false)" :title="s.favorite ? 'Unstar' : 'Star'">{{ s.favorite ? '★' : '☆' }}</button>
-          <button v-if="sharingAvailable" class="si-btn" @click.stop="openShare(s.id)" :title="s.shared ? 'Sharing' : 'Share'" :aria-label="(s.shared ? 'Sharing ' : 'Share ') + (s.name || 'Untitled')">🔗</button>
-          <button class="si-btn" @click.stop="startRename(s.id, s.name)" title="Rename">✏️</button>
-          <button class="si-btn danger" @click.stop="deleteSession(s.id)" title="Delete">🗑</button>
+          <ActionMenu :items="rowItems(s)" :label="actionsFor(s)" :menu-label="actionsFor(s)" />
         </div>
       </div>
 
@@ -406,6 +522,7 @@ button.group-header:hover { color: var(--text2); }
   color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 .here { color: var(--green); }
+.temp-left { display: inline-flex; align-items: center; gap: 4px; }
 .list-empty {
   padding: 20px; text-align: center; color: var(--text3); font-size: 12px;
 }
@@ -441,41 +558,30 @@ button.group-header:hover { color: var(--text2); }
   text-transform: uppercase; letter-spacing: .04em;
 }
 .session-item.deprecated .si-label { opacity: .6; }
-/* The buttons overlay the row rather than taking a column in its flex flow.
-   As a flex item they reserved ~79px of a 255px row permanently — a third of
-   the width given to controls that are invisible until you hover — which left
-   the name, the one thing people scan for, truncated at about 15 characters.
-   Out of flow, the name gets the full width and the buttons cover only its
-   tail, only while that row is actually hovered or focused.
+/* The ⋯ overlays the end of the row rather than taking a column in its flex
+   flow, so the name, the one thing people scan for, gets the full width. It
+   shows only while the row is hovered, holds focus or has its menu open.
 
-   pointer-events: none is what makes hiding them safe. opacity:0 alone still
-   hit-tests, so an invisible button strip would otherwise sit over the title in
-   every resting row. It does NOT make the buttons unreachable by accident on
-   touch: Chrome applies :hover on touchstart, so a tap over the strip reveals
-   them and the click lands on a button at touchend. That behaviour is identical
-   before and after this change (verified by tapping the same point on both
-   builds — both raise the delete confirmation), so it is pre-existing and left
-   alone here rather than quietly redesigned. */
+   pointer-events: none is what makes hiding it safe: opacity: 0 alone still
+   hit-tests, so an invisible button would sit over the end of the title in
+   every resting row. */
 .si-actions {
   position: absolute;
   right: 6px;
-  /* Stretched to the row rather than centred on it. Sized to the buttons, the
-     strip stopped 5px below the top of the name and the glyphs poked out over
-     it, so the covered text read as struck through. */
+  /* Stretched to the row rather than centred on it, so the covered end of the
+     name is hidden whole rather than poking out above and below. */
   top: 4px;
   bottom: 4px;
   display: flex;
   align-items: center;
-  gap: 2px;
   opacity: 0;
   pointer-events: none;
   transition: opacity .1s;
   background: var(--hover);
   border-radius: 5px;
 }
-/* Fades the name out beneath the buttons instead of letting glyphs collide
-   with them. Sits immediately left of the button strip and shares its
-   background, so the text disappears into the row rather than being cut. */
+/* Fades the name out beneath the ⋯ instead of cutting it. Sits immediately
+   left of it and shares its background. */
 .si-actions::before {
   content: '';
   position: absolute;
@@ -486,17 +592,16 @@ button.group-header:hover { color: var(--text2); }
   background: linear-gradient(to right, transparent, var(--hover));
 }
 .session-item:hover .si-actions,
-.session-item:focus-within .si-actions { opacity: 1; pointer-events: auto; }
-.si-btn {
-  background: none; border: none; color: var(--text3); cursor: pointer;
-  font-size: 13px; padding: 3px 5px; border-radius: 4px; transition: all .1s; line-height: 1;
+.session-item:focus-within .si-actions,
+.si-actions:has(.am.open) { opacity: 1; pointer-events: auto; }
+.session-item:has(.am.open) { background: var(--hover); color: var(--text); }
+/* Touch screens have no hover, so the ⋯ always shows there, and the name
+   stops short of it instead of fading under it. */
+@media (pointer: coarse) {
+  .session-item { padding-right: 36px; }
+  .si-actions { opacity: 1; pointer-events: auto; background: none; }
+  .si-actions::before { display: none; }
 }
-.si-btn:hover { color: var(--text); background: var(--surface3); }
-.si-btn.danger:hover { color: var(--red); background: rgba(248,81,73,.1); }
-.si-btn.star { color: var(--text3); font-size: 15px; }
-.si-btn.star:hover { color: #facc15; background: rgba(250,204,21,.1); }
-.si-btn.star.active { color: #facc15; opacity: 1; }
-.session-item.favorite .si-btn.star { color: #facc15; }
 /* Working indicator on a session row: a plain spinner, matched to the label's
    type size so the title does not shift when it appears. */
 .streaming-dot {

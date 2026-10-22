@@ -11,11 +11,13 @@ import { useProvidersStore } from './stores/providers'
 import { useShareStore } from './stores/share'
 import { BACKEND_UNAVAILABLE_EVENT, checkBackendReady, fetchActiveStreams } from './api'
 import MigrationBanner from './components/MigrationBanner.vue'
+import DiskSpaceBanner from './components/DiskSpaceBanner.vue'
 import { useActivityMonitor } from './composables/useActivityMonitor'
 import AppSidebar from './components/sidebar/AppSidebar.vue'
 import ChatView from './components/chat/ChatView.vue'
 import ProjectView from './components/chat/ProjectView.vue'
 import ScheduledTasksView from './components/scheduled/ScheduledTasksView.vue'
+import ArtifactsView from './components/artifacts/ArtifactsView.vue'
 import ModalHost from './components/modals/ModalHost.vue'
 import ToastNotification from './components/ToastNotification.vue'
 import BackendDownPage from './components/BackendDownPage.vue'
@@ -216,8 +218,10 @@ onBeforeUnmount(() => {
     <div id="sidebar-overlay" :class="{ show: ui.sidebarOpen }" @click="ui.closeSidebar()" />
     <main id="main">
       <MigrationBanner />
+      <DiskSpaceBanner />
       <ProjectView v-if="ui.activeView === 'project'" />
       <ScheduledTasksView v-else-if="ui.activeView === 'scheduled'" />
+      <ArtifactsView v-else-if="ui.activeView === 'artifacts'" />
       <ChatView v-else />
     </main>
     <ModalHost />

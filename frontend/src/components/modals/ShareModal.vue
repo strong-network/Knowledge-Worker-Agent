@@ -13,6 +13,7 @@ import {
 import { formatRelativeTime } from '../../utils/time'
 import { formatDisplayPath } from '../../utils/paths'
 import { confirmStopSharing } from '../../utils/confirmDelete'
+import { PASTE_LINK_HINT } from '../../utils/shareLinks'
 import MemberPicker from './MemberPicker.vue'
 
 // Sharing one chat. The audience belongs to the Workspace App, so it
@@ -37,6 +38,7 @@ const choice = ref<'project' | 'members'>('members')
 const picked = ref<number[]>([])
 const announcement = ref('')
 const copied = ref(false)
+const pasteHint = ref(false)
 const linkInput = ref<HTMLInputElement | null>(null)
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
@@ -127,7 +129,8 @@ async function copyLink() {
   try {
     await navigator.clipboard.writeText(url)
     copied.value = true
-    announce('Link copied.')
+    pasteHint.value = true
+    announce(`Link copied. ${PASTE_LINK_HINT}`)
     setTimeout(() => { copied.value = false }, 2000)
   } catch {
     // No clipboard access (an insecure context): leave the link selected.
@@ -252,9 +255,11 @@ onMounted(() => {
               :value="st.share_url"
               aria-label="Link to this chat"
               @focus="($event.target as HTMLInputElement).select()"
+              @copy="pasteHint = true"
             />
             <button class="share-btn-ghost" @click="copyLink">{{ copied ? 'Copied' : 'Copy link' }}</button>
           </div>
+          <p v-if="st.share_url && pasteHint" class="share-paste-hint">{{ PASTE_LINK_HINT }}</p>
           <p v-if="st.share_url && !st.online" class="share-alert">
             The link won't open yet: the workspace app for shared chats is not online.
           </p>
@@ -415,6 +420,10 @@ onMounted(() => {
   color: var(--text);
 }
 
+.share-paste-hint {
+  font-size: 12px; margin: 8px 0 0; padding: 8px 12px; border-radius: 7px; line-height: 1.45;
+  border: 1px solid var(--border); border-left: 3px solid var(--accent); background: var(--surface2); color: var(--text);
+}
 .share-link { display: flex; gap: 8px; }
 .share-link .form-input { flex: 1; min-width: 0; font-size: 12px; }
 

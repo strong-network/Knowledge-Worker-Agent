@@ -130,9 +130,15 @@ func cheapestModelFor(providerID string) string {
 // opencode, because opencode reports every upstream failure as a generic
 // "UnknownError" — which cannot tell a user that their organization's VPC
 // Service Controls perimeter is refusing the request, the one thing they need
-// to know to act.
-func probeVertex(ctx context.Context, _ string) error {
-	return vertexauth.CheckReachable(ctx)
+// to know to act. It calls the address and headers opencode is configured with,
+// which an AI gateway in front of Vertex replaces.
+func probeVertex(ctx context.Context, id string) error {
+	base, headers := providers.RequestConfig(id)
+	model := strings.TrimPrefix(cheapestModelFor(id), id+"/")
+	if !strings.HasPrefix(model, "claude-") {
+		model = ""
+	}
+	return vertexauth.CheckReachable(ctx, vertexauth.Target{BaseURL: base, Headers: headers, Model: model})
 }
 
 // installProviderProbes wires the probes and the sign-out actions, and arranges

@@ -167,8 +167,8 @@ func HandleUpdateSessionConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body.Close()
 
-	// Capture the pre-merge Temporary value: it is a creation-time-only decision
-	// and must never change via a mid-chat config update.
+	// Capture the pre-merge Temporary value: it changes only through
+	// HandleSetTemporary, which checks first that the chat may be deleted.
 	wasTemporary := cfg.Temporary
 
 	// Merge: serialize existing, overlay new fields, deserialize back
@@ -183,8 +183,7 @@ func HandleUpdateSessionConfig(w http.ResponseWriter, r *http.Request) {
 	cfg.Backend = config.NormalizeBackend(cfg.Backend)
 
 	// Invariants:
-	//  - Temporary is creation-only: restore the original value regardless of
-	//    what the client sent.
+	//  - Temporary keeps its value whatever the client sent.
 	cfg.Temporary = wasTemporary
 	//  - Keep is mutually exclusive with Temporary.
 	if cfg.Temporary {
@@ -278,6 +277,22 @@ func HandleExportSession(w http.ResponseWriter, r *http.Request) {
 
 func HandleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	sid := r.PathValue("session_id")
+	notesDeleted, err := deleteChat(sid, strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("notes")), "delete"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true,
+		// Echoed so the caller can confirm the consent choice took effect
+		// rather than assuming it did.
+		"notes_deleted": notesDeleted,
+	})
+}
+
+// deleteChat deletes a chat with its messages, its own folder and opencode's
+// copy, and stops anything running in it. It returns how many day notes went.
+func deleteChat(sid string, deleteNotes bool) (int, error) {
 	// Read the config before the row goes away: once the session is deleted
 	// nothing records which directory belonged to it.
 	cfg, _ := db.GetSessionConfig(sid)
@@ -307,7 +322,7 @@ func HandleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	// they wanted gone. A retention default that cannot be overridden at the
 	// moment of deletion is not a default, it is a trap.
 	notesDeleted := 0
-	if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("notes")), "delete") {
+	if deleteNotes {
 		n, err := db.DeleteSessionNotes(sid)
 		if err != nil {
 			// Reported, not fatal: the user asked for the chat to go.
@@ -323,8 +338,7 @@ func HandleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := db.DeleteSession(sid); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return notesDeleted, err
 	}
 	// Workspace hygiene: delete the auto-created per-chat folder too. Leaving it behind
 	// stranded it permanently — with no session row it was invisible in the UI
@@ -336,12 +350,7 @@ func HandleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	// And delete opencode's own copy of the conversation, which nothing else
 	// ever reclaims.
 	chat.DeleteOpencodeSession(ocSession)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ok": true,
-		// Echoed so the caller can confirm the consent choice took effect
-		// rather than assuming it did.
-		"notes_deleted": notesDeleted,
-	})
+	return notesDeleted, nil
 }
 
 // HandleStopSession stops an in-flight chat turn for a session without
@@ -374,6 +383,10 @@ func HandlePinSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg, _ := db.GetSessionConfig(sid)
+	if cfg.Temporary && !cfg.Pinned {
+		http.Error(w, "Temporary chats can't be pinned. Keep the chat first.", http.StatusConflict)
+		return
+	}
 	cfg.Pinned = !cfg.Pinned
 	db.UpdateSessionConfig(sid, cfg)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "pinned": cfg.Pinned})
@@ -386,6 +399,10 @@ func HandleFavoriteSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg, _ := db.GetSessionConfig(sid)
+	if cfg.Temporary && !cfg.Favorite {
+		http.Error(w, "Temporary chats can't be starred. Keep the chat first.", http.StatusConflict)
+		return
+	}
 	cfg.Favorite = !cfg.Favorite
 	db.UpdateSessionConfig(sid, cfg)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "favorite": cfg.Favorite})
@@ -457,6 +474,10 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 	browserSID := strings.TrimSpace(body.SessionID)
 	if browserSID == "" {
 		browserSID = chat.NewUUID()
+	}
+	if !admitMessage(browserSID) {
+		http.Error(w, expiredMessage, http.StatusGone)
+		return
 	}
 	if !db.SessionExists(browserSID) {
 		db.CreateSession(browserSID, config.DefaultSessionConfig())
@@ -530,6 +551,10 @@ func HandleQueueList(w http.ResponseWriter, r *http.Request) {
 // active it starts one immediately.
 func HandleQueueAdd(w http.ResponseWriter, r *http.Request) {
 	sid := r.PathValue("session_id")
+	if !admitMessage(sid) {
+		http.Error(w, expiredMessage, http.StatusGone)
+		return
+	}
 	if !db.SessionExists(sid) {
 		http.Error(w, "Session not found", http.StatusNotFound)
 		return

@@ -49,7 +49,8 @@ type providerMetaEntry struct {
 		Help      string `json:"help"`
 		HelpURL   string `json:"helpUrl"`
 	} `json:"auth"`
-	Presets map[string]string `json:"presets"`
+	Presets   map[string]string `json:"presets"`
+	Endpoints []Endpoint        `json:"endpoints"`
 }
 
 type providerMetaDoc struct {
@@ -62,7 +63,13 @@ type providerMetaDoc struct {
 // whatever the config repo assigned — unless nothing usable resolved, in which
 // case it falls back to the built-ins and says so.
 func Resolve() Registry {
-	return stampReach(resolveRegistry())
+	reg := stampReach(resolveRegistry())
+	if cfg := endpointConfig(); len(cfg) > 0 {
+		for i, p := range reg.Providers {
+			reg.Providers[i] = withEndpoints(p, cfg)
+		}
+	}
+	return reg
 }
 
 // stampReach adds the cached probe verdict to every provider, so a caller never
@@ -257,6 +264,21 @@ func secretReady(ref string) bool {
 // declaredProviderIDs returns the ids in the materialized opencode.json's
 // "provider" block.
 func declaredProviderIDs(path string) (map[string]bool, error) {
+	block, err := readProviderBlocks(path)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]bool, len(block))
+	for _, id := range sortedIDs(block) {
+		if strings.TrimSpace(id) != "" {
+			out[id] = true
+		}
+	}
+	return out, nil
+}
+
+// readProviderBlocks returns the "provider" block of a materialized opencode.json.
+func readProviderBlocks(path string) (map[string]any, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -269,13 +291,22 @@ func declaredProviderIDs(path string) (map[string]bool, error) {
 		return nil, fmt.Errorf("parse materialized config: %w", err)
 	}
 	block, _ := doc["provider"].(map[string]any)
-	out := make(map[string]bool, len(block))
-	for _, id := range sortedIDs(block) {
-		if strings.TrimSpace(id) != "" {
-			out[id] = true
-		}
+	return block, nil
+}
+
+// configuredBlock returns one provider's block from the platform
+// configuration, or nil when it declares none.
+func configuredBlock(providerID string) map[string]any {
+	dir := configDirFn()
+	if dir == "" {
+		return nil
 	}
-	return out, nil
+	blocks, err := readProviderBlocks(filepath.Join(dir, "opencode.json"))
+	if err != nil {
+		return nil
+	}
+	b, _ := blocks[providerID].(map[string]any)
+	return b
 }
 
 // readProviderMeta reads the sidecar, preserving order. A missing or malformed

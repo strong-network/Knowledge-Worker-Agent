@@ -153,6 +153,8 @@ func fixture(t *testing.T) (h, root, ourDB string) {
 		`CREATE TABLE sessions (id TEXT PRIMARY KEY, config TEXT)`,
 		`CREATE TABLE projects (id TEXT PRIMARY KEY, workspace_path TEXT)`,
 		`CREATE TABLE scheduled_tasks (id TEXT PRIMARY KEY, workdir TEXT)`,
+		`CREATE TABLE shared_artifacts (id TEXT PRIMARY KEY, folder TEXT, rel_path TEXT)`,
+		`CREATE TABLE artifact_fixes (id TEXT PRIMARY KEY, folder TEXT, rel_path TEXT)`,
 		`CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, content TEXT)`,
 		`INSERT INTO sessions VALUES ('s1', '{"model":"m","workdir":"`+filepath.Join(h, "Chats", "chat-a")+`","add_dirs":["`+filepath.Join(h, "Projects", "p")+`"]}')`,
 		`INSERT INTO sessions VALUES ('s2', '{"workdir":"`+filepath.Join(h, "chat-old")+`"}')`,
@@ -160,6 +162,8 @@ func fixture(t *testing.T) (h, root, ourDB string) {
 		`INSERT INTO sessions VALUES ('s4', '{"workdir":"`+filepath.Join(h, "Chats", "chat-gone")+`"}')`,
 		`INSERT INTO projects VALUES ('p1', '`+filepath.Join(h, "Projects", "p")+`')`,
 		`INSERT INTO scheduled_tasks VALUES ('t1', '`+filepath.Join(h, "Scheduled Tasks", "task")+`')`,
+		`INSERT INTO shared_artifacts VALUES ('a1', '`+filepath.Join(h, "Chats", "chat-a")+`', 'notes.md')`,
+		`INSERT INTO artifact_fixes VALUES ('f1', '`+filepath.Join(h, "Chats", "chat-a")+`', 'notes.md')`,
 		`INSERT INTO messages (session_id, content) VALUES ('s1', 'look at `+filepath.Join(h, "Projects", "p")+`')`,
 	)
 	write(t, filepath.Join(h, ".copilot-web.db.backups", "20260930T000000Z.db"), "snapshot")
@@ -401,6 +405,8 @@ func TestRunMovesEverything(t *testing.T) {
 		`"workdir":"` + filepath.Join(root, "Chats", "chat-gone") + `"`,
 		"projects [p1 " + filepath.Join(root, "Projects", "p") + "]",
 		"scheduled_tasks [t1 " + filepath.Join(root, "Scheduled Tasks", "task") + "]",
+		"shared_artifacts [a1 " + filepath.Join(root, "Chats", "chat-a") + " notes.md]",
+		"artifact_fixes [f1 " + filepath.Join(root, "Chats", "chat-a") + " notes.md]",
 		"look at " + filepath.Join(h, "Projects", "p"), // history isn't rewritten
 	} {
 		if !strings.Contains(dump, want) {

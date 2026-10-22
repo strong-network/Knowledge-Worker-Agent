@@ -909,12 +909,11 @@ type SessionConfig struct {
 	// instructions. They layer on top of the global system preamble
 	// for every chat in the project. Empty for loose (non-project) chats.
 	ProjectInstructions string `json:"project_instructions"`
-	// Temporary marks a chat as throwaway: it is never backed up to a
-	// durable store and is purged after a short inactivity window. This is a
-	// creation-time-only decision made in the composer — a durable store is
-	// never provisioned for a Temporary chat, so it cannot be toggled on later
-	// (there would be nothing to remove). Chat-only; projects are durable by
-	// definition and cannot be Temporary.
+	// Temporary marks a chat that isn't kept in the chat history: it is never
+	// backed up to a durable store, and it is deleted 24 hours after the last
+	// message from the user or the agent. Set when the chat is created or
+	// through PUT /api/sessions/{id}/temporary, never by a config update.
+	// Chat-only; projects can't be temporary.
 	Temporary bool `json:"temporary"`
 	// Keep marks a chat as exempt from inactivity cleanup, retained
 	// indefinitely. Mutually exclusive with Temporary. For a chat that belongs

@@ -2,15 +2,17 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUpdated, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onUpdated, nextTick } from 'vue'
 import { renderMarkdown, highlightCode } from '../../composables/useMarkdown'
 import { formatRelativeTime, formatAbsoluteTime } from '../../utils/time'
 import { useNow } from '../../composables/useNow'
 import { toolActionLabel, toolSubject } from '../../utils/toolLabels'
 import { formatTokens, formatCost } from '../../utils/format'
-import { isTodoTool } from '../../utils/todos'
+import { isTodoTool, latestTodos } from '../../utils/todos'
 import { isSkillTool, skillNameFromArgs, isForcedSkill } from '../../utils/skills'
 import type { ToolCall, UsageInfo } from '../../stores/chat'
+import AgentAvatar, { type AvatarState, type WorkFace, workFaceFor } from './AgentAvatar.vue'
+import TurnPlan from './TurnPlan.vue'
 
 function formatToolOutput(output: any): string {
   if (!output) return ''
@@ -45,17 +47,49 @@ const props = defineProps<{
   usage?: UsageInfo | null
   // Who a user message is from, when that is not simply "You" (a guest of a shared chat).
   authorLabel?: string
+  // The chat's newest reply: only its avatar moves, and only it shows a plan.
+  newest?: boolean
+  // Its turn has just ended well.
+  finished?: boolean
+  // The user is writing the next prompt.
+  typing?: boolean
 }>()
 
-// The running label has two phases. Until the agent has taken a step or called
-// a tool it is still deciding what to do, which is worth distinguishing from
-// actually doing it — a long pause before any tool appears reads as stuck
-// otherwise.
-const busyLabel = computed(() =>
-  (props.stepCount || 0) > 0 || (props.toolCalls?.length || 0) > 0
-    ? 'Working on it...'
-    : 'Thinking about it...',
+// The running label has two phases, and the avatar follows them. Until the
+// agent has taken a step, called a tool or written anything it is still
+// deciding what to do, which is worth distinguishing from actually doing it —
+// a long pause before any tool appears reads as stuck otherwise.
+const working = computed(() =>
+  (props.stepCount || 0) > 0 || (props.toolCalls?.length || 0) > 0 || !!props.content,
 )
+const busyLabel = computed(() => (working.value ? 'Working on it...' : 'Thinking about it...'))
+
+const avatarState = computed<AvatarState>(() => {
+  if (!props.newest) return 'static'
+  if (props.streaming) return working.value ? 'working' : 'thinking'
+  return props.finished ? 'finished' : 'idle'
+})
+
+// While the turn runs, the avatar shows the agent's latest event: text, or the kind of tool.
+// Calls are only appended or updated in place, so the last one that changed is the latest.
+const work = ref<WorkFace>('spinner')
+watch(
+  () => (props.newest && props.streaming ? (props.toolCalls || []).map(t => `${t.callId}\n${t.args || ''}`) : []),
+  (calls, before = []) => {
+    for (let i = calls.length - 1; i >= 0; i--) {
+      if (calls[i] === before[i]) continue
+      const tool = props.toolCalls![i]
+      work.value = workFaceFor(tool.name, tool.mcpServer)
+      return
+    }
+  },
+  { immediate: true },
+)
+watch(() => props.content.length, (length, before) => {
+  if (props.newest && props.streaming && length > before) work.value = 'type'
+})
+
+const plan = computed(() => (props.newest ? latestTodos(props.toolCalls || []) : null))
 
 const now = useNow()
 const relativeTime = computed(() => formatRelativeTime(props.createdAt, now.value))
@@ -111,10 +145,9 @@ const connectorNames = computed(() => {
 })
 
 // Todo (`todowrite`) calls are deliberately excluded from this list. The plan
-// they carry is already rendered — live and in full — by the Plan & progress
-// panel, so a second copy here was duplicate information that also inflated the
-// "Tools (n)" count with rows the user has no reason to open. The calls stay in
-// the store untouched; that panel is what reads them.
+// they carry is already rendered — live and in full — at the top of the reply,
+// so a second copy here was duplicate information that also inflated the
+// "Tools (n)" count with rows the user has no reason to open.
 //
 // Skill and connector calls are excluded for the same reason: their own bars
 // render them, and counting them here would report work this list no longer
@@ -301,14 +334,12 @@ onMounted(() => {
     <div class="msg-meta">
       <div class="msg-avatar" :class="role">
         <template v-if="role === 'user'">U</template>
-        <svg v-else width="13" height="13" viewBox="0 0 32 32" fill="none">
-          <circle cx="12" cy="16" r="2.5" fill="white"/>
-          <circle cx="20" cy="16" r="2.5" fill="white"/>
-        </svg>
+        <AgentAvatar v-else :state="avatarState" :work="work" :typing="typing" />
       </div>
       <div class="msg-role">{{ role === 'user' ? (authorLabel || 'You') : 'Knowledge Worker Agent' }}</div>
       <div v-if="relativeTime" class="msg-time" :title="absoluteTime">{{ relativeTime }}</div>
     </div>
+    <TurnPlan v-if="plan" :items="plan" :running="streaming" />
     <!-- Skills, connectors and tools for this turn. These annotate the answer
          rather than being it, so they read as plain secondary lines above it —
          no icons, no boxes. Skills stay open (the line is the whole content);
@@ -467,13 +498,13 @@ onMounted(() => {
   animation: fadeUp .18s ease;
 }
 .msg-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+/* The agent's pixel face needs 32 px to read (28 px on phones). */
 .msg-avatar {
-  width: 26px; height: 26px; border-radius: 50%;
+  width: 32px; height: 32px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
-  font-size: 12px; flex-shrink: 0; font-weight: 700;
+  font-size: 14px; flex-shrink: 0; font-weight: 700;
 }
 .msg-avatar.user { background: var(--accent); color: #fff; }
-.msg-avatar.assistant { background: #03a9f1; }
 .msg-role { font-size: 13px; font-weight: 600; }
 .msg-time { font-size: 11px; color: var(--text2); margin-left: auto; }
 
@@ -668,7 +699,7 @@ button.turn-bar:hover { color: var(--text2); background: var(--surface2); }
   .msg-bubble :deep(h1) { font-size: 18px; }
   .msg-bubble :deep(h2) { font-size: 16px; }
   .msg-meta { gap: 6px; }
-  .msg-avatar { width: 22px; height: 22px; font-size: 11px; }
+  .msg-avatar { width: 28px; height: 28px; font-size: 13px; }
   .msg-role { font-size: 12px; }
   .msg-time { font-size: 10px; }
   .tool-row { font-size: 12px; }

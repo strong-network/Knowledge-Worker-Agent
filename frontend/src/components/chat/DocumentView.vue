@@ -13,7 +13,7 @@
 // changing it); this component owns everything about showing and editing it.
 import { ref, computed, watch, onBeforeUnmount, nextTick } from 'vue'
 import { ownerFileApi, type FileApi } from '../../api/files'
-import { fetchOfficeStatus, installOffice, type OfficeInstallStatus } from '../../api'
+import { fetchOfficeStatus, installOffice, type OfficeInstallStatus, type PreviewLink } from '../../api'
 import { renderMarkdown, highlightCode } from '../../composables/useMarkdown'
 import { parseCsv } from '../../utils/csv'
 import { triggerDownload } from '../../utils/download'
@@ -97,6 +97,61 @@ watch([renderedMarkdown, viewMode], () => {
 // this a re-open after an edit would show the browser's cached copy.
 function previewUrl(path: string): string {
   return `${files.value.rawUrl(path)}&v=${Date.now()}`
+}
+
+// ── HTML with scripts on ──
+// The owner's HTML previews run their scripts on the preview's own origin, by a
+// link from the server; without one, scripts are off and the server says why.
+const scripted = ref<PreviewLink | null>(null)
+const scriptedSrc = ref('')
+const scriptsOff = ref('')
+// No "loaded" from the frame in time: most likely an expired sign-in, whose
+// page can't be framed, so offer the preview in a tab of its own.
+const frameStuck = ref(false)
+const scriptedFrame = ref<HTMLIFrameElement | null>(null)
+let loadedTimer: number | undefined
+
+function showScripted(link: PreviewLink) {
+  scripted.value = link
+  frameStuck.value = false
+  window.clearTimeout(loadedTimer)
+  // A new src reloads the frame, which serves the file as it is now.
+  scriptedSrc.value = `${link.url}?v=${Date.now()}`
+  loadedTimer = window.setTimeout(() => { frameStuck.value = true }, 10000)
+}
+
+function onPreviewMessage(e: MessageEvent) {
+  const link = scripted.value
+  if (!link || e.origin !== link.origin || e.source !== scriptedFrame.value?.contentWindow || e.data !== 'kwa-preview-loaded') return
+  window.clearTimeout(loadedTimer)
+  frameStuck.value = false
+}
+window.addEventListener('message', onPreviewMessage)
+
+function clearHtml() {
+  window.clearTimeout(loadedTimer)
+  scripted.value = null
+  scriptedSrc.value = ''
+  scriptsOff.value = ''
+  frameStuck.value = false
+  htmlUrl.value = ''
+}
+
+async function showHtml(path: string) {
+  clearHtml()
+  const get = files.value.previewLink
+  if (get) {
+    try {
+      const link = await get(path)
+      if (props.path !== path) return
+      showScripted(link)
+      return
+    } catch (e) {
+      if (props.path !== path) return
+      scriptsOff.value = e instanceof Error ? e.message : String(e)
+    }
+  }
+  htmlUrl.value = previewUrl(path)
 }
 
 // The version of the file the PDF, HTML or image view shows. Those render what
@@ -218,7 +273,7 @@ async function load() {
   teardownEditor()
   imageDataUrl.value = ''
   pdfUrl.value = ''
-  htmlUrl.value = ''
+  clearHtml()
   editorContent.value = ''
   originalContent = ''
   shownVersion = ''
@@ -273,8 +328,8 @@ async function load() {
     } else if (['html', 'htm'].includes(e)) {
       // Rendered by default: seeing the finished page is the point. The
       // source is one click away for anyone who wants to edit it.
-      htmlUrl.value = previewUrl(path)
       viewMode.value = 'html'
+      await showHtml(path)
     } else if (['csv', 'tsv'].includes(e)) {
       // Same reasoning: a table is what the data is, and quoted fields and
       // embedded commas make the raw text the harder way to read it.
@@ -317,6 +372,13 @@ async function reload() {
       // Straight to the new bytes, without blanking the frame first.
       shownVersion = version
       pdfUrl.value = previewUrl(path)
+      return
+    }
+    // The same link serves the new version, while it has a while to run.
+    const link = scripted.value
+    if (viewMode.value === 'html' && link && Date.parse(link.expires) - Date.now() > 60_000) {
+      shownVersion = version
+      showScripted(link)
       return
     }
     await load()
@@ -415,8 +477,8 @@ function togglePreviewMode() {
     // preview stale content. Say so rather than showing the old version as if
     // it were the new one.
     if (dirty.value) { ;(window as any).showToast?.('Save to see your changes in the preview') }
-    htmlUrl.value = previewUrl(props.path)
     viewMode.value = 'html'
+    void showHtml(props.path)
   } else if (isCsv.value) {
     viewMode.value = 'csv'
   } else {
@@ -445,7 +507,12 @@ function downloadOpen() {
   if (props.path) triggerDownload(files.value.downloadUrl(props.path))
 }
 
-onBeforeUnmount(() => { teardownEditor(); stopInstallPoll() })
+onBeforeUnmount(() => {
+  teardownEditor()
+  stopInstallPoll()
+  window.clearTimeout(loadedTimer)
+  window.removeEventListener('message', onPreviewMessage)
+})
 
 defineExpose({ reload, reopen, save })
 </script>
@@ -485,22 +552,39 @@ defineExpose({ reload, reopen, save })
         oversight. Verified in-browser before leaving it as-is.
       -->
       <iframe v-else-if="viewMode === 'pdf'" class="fp-pdf" :src="pdfUrl" :title="name"></iframe>
-      <!--
-        sandbox="" (no allow-* tokens) is load-bearing, not decoration: it gives the
-        document an opaque origin AND blocks script execution. Scripts are the whole
-        risk here — the panel renders files the agent wrote, and this API has no auth,
-        so a script inside a previewed page could otherwise call it back and delete
-        the user's files. The server sends a matching CSP on the same response, so the
-        page also can't phone home through <img>/<link>. Do not add allow-scripts.
-      -->
-      <iframe
-        v-else-if="viewMode === 'html'"
-        class="fp-html"
-        sandbox=""
-        referrerpolicy="no-referrer"
-        :src="htmlUrl"
-        :title="name"
-      ></iframe>
+      <div v-else-if="viewMode === 'html'" class="fp-html-wrap">
+        <p v-if="scriptsOff" class="fp-html-note" role="status">{{ scriptsOff }}</p>
+        <p v-if="scripted && frameStuck" class="fp-html-note" role="status">
+          The preview didn't load here. Your sign-in may have expired.
+          <a class="fp-btn" :href="scripted.url" target="_blank" rel="noopener noreferrer">Open in a new tab</a>
+        </p>
+        <!-- No sandbox: the preview origin is the boundary, and the file runs sandboxed in its page
+             there. A sandbox here would make that page's origin opaque, which its frame-ancestors refuses. -->
+        <iframe
+          v-if="scripted"
+          ref="scriptedFrame"
+          class="fp-html"
+          referrerpolicy="no-referrer"
+          :src="scriptedSrc"
+          :title="name"
+        ></iframe>
+        <!--
+          sandbox="" (no allow-* tokens) is load-bearing, not decoration: it gives the
+          document an opaque origin AND blocks script execution. Scripts are the whole
+          risk here — the panel renders files the agent wrote, and this API has no auth,
+          so a script inside a previewed page could otherwise call it back and delete
+          the user's files. The server sends a matching CSP on the same response, so the
+          page also can't phone home through <img>/<link>. Do not add allow-scripts.
+        -->
+        <iframe
+          v-else-if="htmlUrl"
+          class="fp-html"
+          sandbox=""
+          referrerpolicy="no-referrer"
+          :src="htmlUrl"
+          :title="name"
+        ></iframe>
+      </div>
       <!--
         CSV renders as a table. Cells are bound as text, never v-html: a
         spreadsheet column is a perfectly ordinary place to find a string that
@@ -624,6 +708,13 @@ defineExpose({ reload, reopen, save })
 /* White backing: pages assume a white canvas, and a dark panel behind a
    transparent body would make black body text unreadable. */
 .fp-html { flex: 1; width: 100%; border: none; background: #fff; }
+.fp-html-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.fp-html-note {
+  margin: 0; padding: 8px 12px; font-size: 12px; line-height: 1.5; color: var(--text2);
+  background: color-mix(in srgb, var(--orange) 12%, transparent); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.fp-html-note .fp-btn { text-decoration: none; }
 
 /* ── CSV table preview ── */
 /* min-height: 0 is load-bearing *here*: this element's overflow is `visible`,

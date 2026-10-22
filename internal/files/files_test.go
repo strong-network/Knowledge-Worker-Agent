@@ -741,3 +741,48 @@ func TestRouteRegistrationNoConflicts(t *testing.T) {
 		mux.HandleFunc(p, func(http.ResponseWriter, *http.Request) {})
 	}
 }
+
+// The hooks see absolute paths: a rename after it succeeds, a delete before
+// anything is removed. Neither runs when the route fails.
+func TestRenameAndDeleteRunTheirHooks(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.html"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "taken.html"), []byte("y"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	prevRename, prevDelete := AfterRename, BeforeDelete
+	t.Cleanup(func() { AfterRename, BeforeDelete = prevRename, prevDelete })
+	AfterRename = func(src, dest string) { calls = append(calls, "rename "+src+" "+dest) }
+	BeforeDelete = func(r *http.Request, path string) {
+		_, err := os.Stat(path)
+		calls = append(calls, "delete "+path+" "+map[bool]string{true: "still there", false: "gone"}[err == nil])
+	}
+	post := func(h http.HandlerFunc, body any) int {
+		b, _ := json.Marshal(body)
+		rec := httptest.NewRecorder()
+		h(rec, httptest.NewRequest("POST", "/", bytes.NewReader(b)))
+		return rec.Code
+	}
+	if code := post(HandleFileRename, map[string]string{"src": filepath.Join(dir, "a.html"), "dest": filepath.Join(dir, "taken.html")}); code != http.StatusConflict {
+		t.Fatalf("rename onto a file: %d", code)
+	}
+	if code := post(HandleFileMove, map[string]string{"src": filepath.Join(dir, "a.html"), "dest": filepath.Join(dir, "sub", "b.html")}); code != http.StatusOK {
+		t.Fatalf("move: %d", code)
+	}
+	if code := post(HandleFileDelete, map[string]string{"path": filepath.Join(dir, "gone.html")}); code != http.StatusNotFound {
+		t.Fatalf("delete a missing file: %d", code)
+	}
+	if code := post(HandleFileDelete, map[string]string{"path": filepath.Join(dir, "sub")}); code != http.StatusOK {
+		t.Fatalf("delete: %d", code)
+	}
+	want := []string{
+		"rename " + filepath.Join(dir, "a.html") + " " + filepath.Join(dir, "sub", "b.html"),
+		"delete " + filepath.Join(dir, "sub") + " still there",
+	}
+	if strings.Join(calls, "\n") != strings.Join(want, "\n") {
+		t.Errorf("hooks:\n%s\nwant\n%s", strings.Join(calls, "\n"), strings.Join(want, "\n"))
+	}
+}

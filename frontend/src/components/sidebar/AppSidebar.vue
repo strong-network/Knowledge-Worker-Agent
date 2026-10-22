@@ -11,6 +11,7 @@ import SessionList from './SessionList.vue'
 import SearchBar from './SearchBar.vue'
 import ProjectsSection from './ProjectsSection.vue'
 import ScheduledTasksSection from './ScheduledTasksSection.vue'
+import ArtifactsSection from './ArtifactsSection.vue'
 import SettingsMenu from './SettingsMenu.vue'
 
 const sessionsStore = useSessionsStore()
@@ -235,6 +236,8 @@ function startResize(e: PointerEvent) {
         <ProjectsSection />
 
         <ScheduledTasksSection />
+
+        <ArtifactsSection />
 
         <SessionList />
 

@@ -186,6 +186,48 @@ func TestMaterializeWritesProviderSidecar(t *testing.T) {
 	if m.Presets["default"] != "onprem/large" || m.Presets["small"] != "onprem/small" {
 		t.Errorf("presets = %v", m.Presets)
 	}
+	if len(m.Endpoints) != 2 || m.Endpoints[0].ID != "us" || m.Endpoints[1].URL != "https://eu.models.acme.example.com" {
+		t.Errorf("endpoints = %+v", m.Endpoints)
+	}
+	// The placeholder is opencode's to resolve, so it must arrive untouched.
+	opts, _ := prov["onprem"].(map[string]any)["options"].(map[string]any)
+	if opts["baseURL"] != "{env:KWA_ENDPOINT_ONPREM}/v1" {
+		t.Errorf("baseURL = %v", opts["baseURL"])
+	}
+}
+
+func TestTakeProviderMetaEndpoints(t *testing.T) {
+	frag := map[string]any{
+		"provider": map[string]any{"gw": map[string]any{}},
+		"kwa": map[string]any{"endpoints": []any{
+			map[string]any{"id": "na", "label": "US", "url": "https://na.example.com"},
+			map[string]any{"id": "no-url"},
+			map[string]any{"url": "https://no-id.example.com"},
+			"not an object",
+			map[string]any{"id": "eu", "url": "https://eu.example.com"},
+		}},
+	}
+	got := takeProviderMeta(frag)
+	if len(got) != 1 {
+		t.Fatalf("got %+v", got)
+	}
+	want := []ProviderEndpoint{
+		{ID: "na", Label: "US", URL: "https://na.example.com"},
+		{ID: "eu", URL: "https://eu.example.com"},
+	}
+	if len(got[0].Endpoints) != len(want) {
+		t.Fatalf("endpoints = %+v, want %+v", got[0].Endpoints, want)
+	}
+	for i := range want {
+		if got[0].Endpoints[i] != want[i] {
+			t.Errorf("endpoint %d = %+v, want %+v", i, got[0].Endpoints[i], want[i])
+		}
+	}
+
+	frag = map[string]any{"provider": map[string]any{"gw": map[string]any{}}, "kwa": map[string]any{"endpoints": "nope"}}
+	if got := takeProviderMeta(frag); got[0].Endpoints != nil {
+		t.Errorf("malformed list kept: %+v", got[0].Endpoints)
+	}
 }
 
 // TestMaterializeAlwaysWritesTheSidecar: an empty array distinguishes

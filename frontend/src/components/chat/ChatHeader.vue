@@ -2,7 +2,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onMounted } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useSessionsStore } from '../../stores/sessions'
 import { useChatStore } from '../../stores/chat'
 import { useUiStore } from '../../stores/ui'
@@ -11,6 +11,12 @@ import { useGitSync } from '../../composables/useGitSync'
 import { fetchMe } from '../../api'
 import { useMe } from '../../composables/useMe'
 import { useShareStore } from '../../stores/share'
+import { useNow } from '../../composables/useNow'
+import { timeLeft, timeLeftLong, lastHour, deletionNote } from '../../utils/temporary'
+import { vTip } from '../../directives/tip'
+import { confirmChatDelete } from '../../utils/confirmDelete'
+import TimerIcon from '../TimerIcon.vue'
+import ActionMenu, { type MenuEntry } from '../ActionMenu.vue'
 
 const sessionsStore = useSessionsStore()
 const chatStore = useChatStore()
@@ -26,6 +32,28 @@ const titleInput = ref('')
 const titleInputEl = ref<HTMLInputElement | null>(null)
 
 const currentSession = computed(() => sessionsStore.currentSession)
+
+// Temporary chats: the time left, and Keep chat to save it to the history.
+const now = useNow()
+const expiresAt = computed(() => (currentSession.value?.temporary ? currentSession.value.expires_at ?? null : null))
+const left = computed(() => (expiresAt.value === null ? '' : timeLeft(expiresAt.value, now.value)))
+const leftLong = computed(() => (expiresAt.value === null ? '' : timeLeftLong(expiresAt.value, now.value)))
+const finalHour = computed(() => expiresAt.value !== null && lastHour(expiresAt.value, now.value))
+const deletion = computed(() => (expiresAt.value === null ? '' : deletionNote(expiresAt.value, now.value)))
+// Touch screens get no tooltips, so a tap says it instead.
+function explainDeletion() {
+  ;(window as any).showToast?.(deletion.value, 6000)
+}
+const keeping = ref(false)
+async function keepChat() {
+  if (!currentSession.value || keeping.value) return
+  keeping.value = true
+  try {
+    await sessionsStore.setTemporary(currentSession.value.id, false)
+  } finally {
+    keeping.value = false
+  }
+}
 const sessionTitle = computed(() => currentSession.value?.name || 'Untitled chat')
 const workspacePath = computed(() => currentSession.value?.workspace || '')
 
@@ -80,8 +108,42 @@ function openSettings() {
   ui.openModal('session-settings')
 }
 
-async function startEditTitle() {
+// ── Files ──
+// Shown once the chat has files. Beside the chat it shows and hides the Files
+// widget; on a narrow screen, where there's no room beside the chat, it opens
+// the files over it. Its dot counts what the widget marks new or updated.
+function useMedia(query: string) {
+  const mq = window.matchMedia(query)
+  const matches = ref(mq.matches)
+  const update = (e: MediaQueryListEvent) => { matches.value = e.matches }
+  mq.addEventListener('change', update)
+  onBeforeUnmount(() => mq.removeEventListener('change', update))
+  return matches
+}
+const filesOver = useMedia('(max-width: 900px)')
+// Below this the button is its icon alone, so it gets a tooltip.
+const filesIconOnly = useMedia('(max-width: 640px)')
+const hasFiles = computed(() => ui.filesRevealed(workspacePath.value))
+const filesShown = computed(() => (filesOver.value ? ui.mobileFilesOpen : !ui.filesHidden))
+// The name starts with the visible label, and the tooltip says the same.
+const filesName = computed(() => (ui.fileChangeCount ? `Files, ${ui.fileChangeCount} new or updated` : 'Files'))
+function toggleFiles() {
+  if (filesOver.value) ui.toggleMobileFiles()
+  else ui.toggleFilesPanel()
+}
+
+// Rename starts from the title or from the ⋯ menu. Enter and Escape hand
+// focus back to whichever it was; a click elsewhere leaves it where it went.
+const titleBtn = ref<HTMLButtonElement | null>(null)
+const chatMenu = ref<InstanceType<typeof ActionMenu> | null>(null)
+let renameFromMenu = false
+function refocusAfterRename() {
+  void nextTick(() => (renameFromMenu ? chatMenu.value?.focus() : titleBtn.value?.focus()))
+}
+
+async function startEditTitle(fromMenu = false) {
   if (!currentSession.value) return
+  renameFromMenu = fromMenu
   titleInput.value = currentSession.value.name || ''
   editingTitle.value = true
   await nextTick()
@@ -89,9 +151,10 @@ async function startEditTitle() {
   titleInputEl.value?.select()
 }
 
-async function commitTitle() {
+async function commitTitle(refocus = false) {
   if (!editingTitle.value) return
   editingTitle.value = false
+  if (refocus) refocusAfterRename()
   const newName = titleInput.value.trim()
   const session = currentSession.value
   if (!session || !newName || newName === session.name) return
@@ -100,13 +163,35 @@ async function commitTitle() {
 
 function cancelEditTitle() {
   editingTitle.value = false
+  refocusAfterRename()
+}
+
+// Deleting the open chat. Focus goes to the message box of whatever opens next.
+async function deleteChat() {
+  const s = currentSession.value
+  if (!s) return
+  const project = currentProject.value
+  const { ok, deleteNotes } = confirmChatDelete(s, project
+    ? 'Delete this chat? The shared project workspace and its files are not affected — only the conversation is removed.'
+    : undefined)
+  if (!ok) return
+  try {
+    await sessionsStore.deleteSession(s.id, deleteNotes)
+  } catch (e) {
+    console.error(e)
+    ;(window as any).showToast?.(`Couldn't delete "${s.name || 'Untitled chat'}". Try again.`)
+    return
+  }
+  if (project) void Promise.all([projectsStore.loadProjectChats(project.id), projectsStore.refreshProject(project.id)])
+  await nextTick()
+  document.getElementById('prompt-input')?.focus()
 }
 
 // Reset edit state if session changes
 watch(() => sessionsStore.currentSessionId, () => { editingTitle.value = false })
 
 // SecurSpaces workspace info (env-derived) — used to build "Open in VSCode" link.
-const { baseDir } = useMe()
+const { me, baseDir } = useMe()
 const workspaceId = ref('')
 const appsDomain = ref('')
 onMounted(async () => {
@@ -125,6 +210,34 @@ function openInVscode() {
   if (!vscodeUrl.value) return
   window.open(vscodeUrl.value, '_blank', 'noopener,noreferrer')
 }
+
+// The ⋯ menu: what can be done with the open chat. On a phone, where the
+// sidebar is a drawer, it's the only place for most of these.
+const chatItems = computed<MenuEntry[]>(() => {
+  const s = currentSession.value
+  if (!s) return []
+  const items: MenuEntry[] = []
+  if (me.value.sharing_available === true) {
+    items.push(s.temporary
+      ? { label: 'Share', unavailable: 'Keep the chat to share it', action: () => {} }
+      : { label: 'Share', action: () => share.openModal(s.id) })
+  }
+  items.push(s.temporary
+    ? { label: 'Keep chat', description: "Save this chat to your history so it isn't deleted", action: () => { void keepChat() } }
+    : { label: s.favorite ? 'Remove star' : 'Star', action: () => { void sessionsStore.favoriteSession(s.id, !s.favorite) } })
+  items.push({ label: 'Rename', action: () => { void startEditTitle(true) } })
+  if (!s.temporary && !s.deprecated) {
+    items.push({
+      label: 'Make temporary',
+      unavailable: s.shared ? 'Stop sharing first. Shared chats are always saved.' : undefined,
+      action: () => { void sessionsStore.setTemporary(s.id, true) },
+    })
+  }
+  items.push({ label: 'Chat settings', action: openSettings })
+  if (vscodeUrl.value) items.push({ label: 'Open folder in VS Code', action: openInVscode })
+  items.push('divider', { label: 'Delete chat', danger: true, action: () => { void deleteChat() } })
+  return items
+})
 </script>
 
 <template>
@@ -144,17 +257,22 @@ function openInVscode() {
           ref="titleInputEl"
           v-model="titleInput"
           class="title-input"
-          @keydown.enter="commitTitle"
+          aria-label="Chat name"
+          @keydown.enter.prevent="commitTitle(true)"
           @keydown.esc="cancelEditTitle"
-          @blur="commitTitle"
+          @blur="commitTitle()"
         />
         <button
           v-else
+          ref="titleBtn"
           class="chat-title"
           :title="sessionTitle + ' — click to rename'"
-          @click="startEditTitle"
+          @click="startEditTitle()"
         >
           {{ sessionTitle }}
+          <template v-if="currentSession?.favorite">
+            <span class="title-star" aria-hidden="true">★</span><span class="sr-only">, starred</span>
+          </template>
           <span class="title-edit-hint">✎</span>
         </button>
         <button
@@ -168,7 +286,31 @@ function openInVscode() {
           </svg>
           In {{ currentProject.name }}
         </button>
+        <button
+          v-if="expiresAt !== null"
+          type="button"
+          class="temp-pill"
+          :class="{ 'last-hour': finalHour }"
+          :aria-label="`Temporary chat, ${leftLong} left`"
+          :aria-description="deletion"
+          v-tip="deletion"
+          @click="explainDeletion"
+        >
+          <TimerIcon :size="12" />
+          <span class="temp-word">Temporary ·</span>{{ left }} left
+        </button>
         <div class="hdr-actions">
+          <button
+            v-if="expiresAt !== null"
+            type="button"
+            class="keep-btn"
+            :disabled="keeping"
+            v-tip="'Save this chat to your history so it isn\'t deleted'"
+            @click="keepChat"
+          >
+            <TimerIcon :size="14" off />
+            <span>Keep chat</span>
+          </button>
           <button
             v-if="currentSession?.shared"
             class="here-pill"
@@ -184,29 +326,29 @@ function openInVscode() {
             <span>Stop</span>
           </button>
           <button
-            class="icon-btn files-btn"
-            :class="{ active: ui.mobileFilesOpen }"
-            @click="ui.toggleMobileFiles()"
-            :title="ui.mobileFilesOpen ? 'Close files' : 'Browse files'"
-            :aria-label="ui.mobileFilesOpen ? 'Close files' : 'Browse files'"
-            :aria-pressed="ui.mobileFilesOpen"
+            v-if="hasFiles"
+            type="button"
+            class="files-btn"
+            :aria-label="filesName"
+            :aria-pressed="filesShown"
+            v-tip="filesIconOnly ? filesName : undefined"
+            @click="toggleFiles"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
               <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
+            <span class="files-label">Files</span>
+            <span v-if="ui.fileChangeCount" class="files-dot" aria-hidden="true"></span>
           </button>
-          <button
-            v-if="vscodeUrl"
-            class="icon-btn vscode-btn"
-            @click="openInVscode"
-            :title="'Open ' + (workspacePath || baseDir) + ' in VSCode'"
-            aria-label="Open in VSCode"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">
-              <path d="M17.5 2.5 21 4v16l-3.5 1.5L9 13.6 4.5 17 2 15.5V8.5L4.5 7 9 10.4l8.5-7.9zm-.5 4.4L11.7 12l5.3 5.1V6.9zM4.6 12 7 14l2.6-2-2.6-2-2.4 2z"/>
-            </svg>
-          </button>
-          <button class="icon-btn" @click="openSettings" title="Session settings" aria-label="Session settings">⚙</button>
+          <ActionMenu
+            v-if="currentSession"
+            ref="chatMenu"
+            variant="toolbar"
+            label="More actions"
+            menu-label="Chat actions"
+            tip="More actions"
+            :items="chatItems"
+          />
         </div>
       </div>
 
@@ -435,6 +577,7 @@ function openInVscode() {
   flex: 0 1 auto;
 }
 .chat-title:hover { background: var(--surface2); }
+.title-star { color: #facc15; font-size: 13px; }
 .title-edit-hint {
   font-size: 11px; color: var(--text3); opacity: 0; transition: opacity .15s;
 }
@@ -473,12 +616,22 @@ function openInVscode() {
 .stop-btn:hover { color: var(--text); border-color: var(--text2); background: var(--surface2); }
 .icon-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 
-/* Files shortcut — mobile/portrait only. On desktop the file panel is docked
-   next to the chat, so this would be redundant. */
-.files-btn { display: none; }
-
-@media (max-width: 900px) {
-  .files-btn { display: inline-flex; align-items: center; justify-content: center; }
+.files-btn {
+  position: relative;
+  display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 11px;
+  border: 1px solid var(--border); border-radius: 8px; background: none;
+  color: var(--text2); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+  white-space: nowrap; transition: background .15s, border-color .15s, color .15s;
+}
+.files-btn:hover { color: var(--text); border-color: var(--text2); background: var(--surface2); }
+.files-btn[aria-pressed="true"] {
+  color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+.files-dot {
+  position: absolute; top: -4px; right: -4px;
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--accent); border: 2px solid var(--surface);
 }
 @media (max-width: 768px) {
   #chat-header { padding: 8px 10px; gap: 8px; min-height: 48px; }
@@ -494,6 +647,32 @@ function openInVscode() {
 }
 @media (max-width: 560px) {
   .mini-btn { padding: 3px 6px; font-size: 11px; }
+}
+.temp-pill {
+  display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
+  padding: 3px 9px; border-radius: 999px; font: inherit; font-size: 12px; font-weight: 600;
+  border: 1px dashed var(--text3); background: var(--surface2); color: var(--text2);
+  white-space: nowrap; cursor: default;
+}
+.temp-pill.last-hour {
+  border-color: var(--orange); color: var(--text);
+  background: color-mix(in srgb, var(--orange) 14%, var(--surface));
+}
+.temp-pill.last-hour :deep(svg) { color: var(--orange); }
+.keep-btn {
+  display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface);
+  color: var(--text); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+  white-space: nowrap; transition: background .15s, border-color .15s;
+}
+.keep-btn:hover:not(:disabled) { background: var(--surface2); border-color: var(--text2); }
+.keep-btn:disabled { opacity: .6; cursor: default; }
+@media (max-width: 640px) {
+  .temp-word { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .files-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .files-btn { width: 34px; padding: 0; justify-content: center; }
+  .keep-btn { width: 34px; padding: 0; justify-content: center; }
+  .keep-btn span { display: none; }
 }
 .here-pill {
   display: inline-flex; align-items: center; gap: 6px;

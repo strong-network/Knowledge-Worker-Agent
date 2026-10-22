@@ -24,7 +24,9 @@ import AgentBuilderModal from './AgentBuilderModal.vue'
 import ScheduledTaskModal from './ScheduledTaskModal.vue'
 import TidyUpModal from './TidyUpModal.vue'
 import DiagnosticsModal from './DiagnosticsModal.vue'
+import DiskSpaceModal from './DiskSpaceModal.vue'
 import ShareModal from './ShareModal.vue'
+import ArtifactShareModal from './ArtifactShareModal.vue'
 
 const ui = useUiStore()
 
@@ -79,6 +81,8 @@ function closeOnOverlay(e: MouseEvent) {
     <ScheduledTaskModal v-if="ui.activeModal === 'scheduled-task'" />
     <TidyUpModal v-if="ui.activeModal === 'tidy-up'" />
     <DiagnosticsModal v-if="ui.activeModal === 'diagnostics'" />
+    <DiskSpaceModal v-if="ui.activeModal === 'disk-space'" />
     <ShareModal v-if="ui.activeModal === 'share'" />
+    <ArtifactShareModal v-if="ui.activeModal === 'artifact-share'" />
   </div>
 </template>

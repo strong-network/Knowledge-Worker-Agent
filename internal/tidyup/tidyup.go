@@ -201,6 +201,9 @@ func cleanupChat(sid string) error {
 		return tidyError("chat is shared; stop sharing it first")
 	}
 	cfg, _ := db.GetSessionConfig(sid)
+	if cfg.Workdir != "" && db.FolderHasSharedArtifact(filepath.Clean(cfg.Workdir)) {
+		return tidyError("a file in this chat is shared; stop sharing it first")
+	}
 	// Read before the row goes away; it is the only record of opencode's copy.
 	ocSession := db.GetOpencodeSession(sid)
 	chat.StopSession(sid)
@@ -235,7 +238,7 @@ func cleanupOrphan(path string) error {
 	if !ok {
 		return errOrphanScanUnavailable
 	}
-	if len(known) == 0 || known[abs] {
+	if len(known) == 0 || known[abs] || db.FolderHasSharedArtifact(abs) {
 		// Either the session set is unusable — in which case everything looks
 		// orphaned — or this directory belongs to a live chat after all.
 		return errUnknownOrphan

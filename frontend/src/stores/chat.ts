@@ -6,10 +6,11 @@ import { ref, computed, reactive, nextTick, toRaw } from 'vue'
 import {
   streamChat, attachChat, respondPermission,
   fetchSessionQueue, addToSessionQueue, removeFromSessionQueue, clearSessionQueue,
-  isBackendUnavailableError, stopChat, fetchHistory, followEvents,
+  isBackendUnavailableError, stopChat, fetchHistory, followEvents, ChatGoneError, TEMPORARY_MS,
   type ServerQueuedPrompt, type PermissionResponse, type UsageInfo, type Message,
 } from '../api'
 import { useSessionsStore } from './sessions'
+import { useUiStore } from './ui'
 import { useNotifications } from '../composables/useNotifications'
 import { TurnFollower, type TurnStart } from '../utils/turnFollower'
 import { useShareStore } from './share'
@@ -78,6 +79,8 @@ export interface SessionChatState {
   turnId: string | null
   // The live turn came from /events: someone else started it.
   followed: boolean
+  // Turns that ended with their done frame and no error; stopped ones don't count.
+  completedTurns: number
 }
 
 function newState(): SessionChatState {
@@ -94,6 +97,7 @@ function newState(): SessionChatState {
     stepCount: 0,
     turnId: null,
     followed: false,
+    completedTurns: 0,
   }
 }
 
@@ -152,6 +156,10 @@ export const useChatStore = defineStore('chat', () => {
   const stepCount = computed<number>(() => {
     const id = currentId()
     return id ? states.value.get(id)?.stepCount || 0 : 0
+  })
+  const completedTurns = computed<number>(() => {
+    const id = currentId()
+    return id ? states.value.get(id)?.completedTurns || 0 : 0
   })
   // The open chat's live turn is someone else's.
   const streamingFollowed = computed(() => {
@@ -264,11 +272,22 @@ export const useChatStore = defineStore('chat', () => {
     resetState(s)
     s.streaming = true
 
+    // New chat's Temporary chat toggle applies to the chat its first message starts.
+    const ui = useUiStore()
+    if (ui.newChatTemporary && !sessionsStore.messages.get(sessionId)?.length) {
+      ui.newChatTemporary = false
+      if (!(await sessionsStore.setTemporary(sessionId, true, true))) {
+        s.streaming = false
+        return
+      }
+    }
+
     // Name the session from the first prompt so the sidebar entry is not left
     // as "New chat". This is a placeholder: the server generates a title from
     // the prompt's intent and replaces it (see the 'title' event). Flagged as
     // automatic so it doesn't count as the user naming the chat.
     const session = sessionsStore.sessions.find(x => x.id === sessionId)
+    if (session?.temporary) session.expires_at = Date.now() + TEMPORARY_MS
     if (session && (session.name === 'New chat' || session.name === 'New Chat' || !session.name)) {
       const label = prompt.slice(0, 45) + (prompt.length > 45 ? '…' : '')
       session.name = label
@@ -305,6 +324,10 @@ export const useChatStore = defineStore('chat', () => {
         console.error(`[session ${sessionId}] Stream error:`, err)
         s.streaming = false
         pumpFollower(sessionId!)
+        if (err instanceof ChatGoneError) {
+          void sessionsStore.moveToNewChat(sessionId!, prompt, err.message)
+          return
+        }
         if (isBackendUnavailableError(err)) {
           s.errorMessage = err.message
           removeEmptyAssistantPlaceholder(sessionId!)
@@ -922,6 +945,7 @@ export const useChatStore = defineStore('chat', () => {
   function finalize(sessionId: string) {
     const sessionsStore = useSessionsStore()
     const s = getState(sessionId)
+    if (s.streaming && !s.errorMessage) s.completedTurns += 1
     s.streaming = false
     if (s.streamingContent) {
       sessionsStore.updateLastAssistantMessage(sessionId, s.streamingContent)
@@ -1040,7 +1064,7 @@ export const useChatStore = defineStore('chat', () => {
   return {
     // reactive proxies for the active session
     streaming, streamingContent, toolCalls, currentQuestion, currentPermission, errorMessage, queuedMessage, queuedMessages,
-    stepCount, streamingFollowed,
+    stepCount, completedTurns, streamingFollowed,
     // global helpers
     anyStreaming, isStreamingSession, getState,
     // actions

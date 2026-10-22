@@ -5,6 +5,7 @@ package db
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"time"
 
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/config"
@@ -75,6 +76,8 @@ func ReviewCandidates(now time.Time, idleFor time.Duration) (items []TidyItem, t
 		return items, 0
 	}
 	cutoff := now.Add(-idleFor)
+	// A chat whose folder holds a shared file is in use, like a shared chat.
+	sharedFolders := SharedArtifactFolders()
 
 	rows, err := DB.Query(`
 		SELECT s.id, s.config, s.updated_at, s.tidy_snooze_until,
@@ -108,7 +111,7 @@ func ReviewCandidates(now time.Time, idleFor time.Duration) (items []TidyItem, t
 		}
 		var cfg config.SessionConfig
 		_ = json.Unmarshal([]byte(cfgJSON), &cfg)
-		if cfg.Keep {
+		if cfg.Keep || sharedFolders[filepath.Clean(cfg.Workdir)] {
 			continue
 		}
 

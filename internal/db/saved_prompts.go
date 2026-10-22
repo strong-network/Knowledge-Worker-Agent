@@ -90,6 +90,12 @@ func metaSet(key, value string) error {
 	return err
 }
 
+// GetAppMeta returns a value from the app_meta key-value table.
+func GetAppMeta(key string) (string, bool) { return metaGet(key) }
+
+// SetAppMeta stores a value in the app_meta key-value table.
+func SetAppMeta(key, value string) error { return metaSet(key, value) }
+
 // SeedDefaultSavedPromptsOnce inserts the built-in starter chips the first time
 // it is called (tracked via app_meta), and is a no-op afterwards. This makes a
 // brand-new user start with the defaults while a user who deleted all

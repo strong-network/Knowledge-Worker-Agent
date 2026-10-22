@@ -15,6 +15,16 @@ import (
 	"strings"
 )
 
+// Target is where a reachability check sends its request. The zero value is
+// Vertex itself, with the default probe model.
+type Target struct {
+	// BaseURL replaces Vertex's address up to and including
+	// ".../publishers/anthropic/models", as opencode's baseURL option does.
+	BaseURL string
+	Headers map[string]string
+	Model   string
+}
+
 // CheckReachable tests whether this workspace can actually call Vertex, as
 // opposed to merely holding credentials for it.
 //
@@ -27,28 +37,39 @@ import (
 //
 // A refusal is returned with Google's own message, because "prohibited by
 // organization's policy" is the only part of this a user can act on.
-func CheckReachable(ctx context.Context) error {
+func CheckReachable(ctx context.Context, target Target) error {
 	token, err := accessToken(ctx)
 	if err != nil {
 		return fmt.Errorf("could not obtain Google credentials: %v", err)
 	}
 
-	project, location := Project(), Location()
-	if project == "" {
-		return fmt.Errorf("no Vertex project is configured")
+	base := strings.TrimRight(target.BaseURL, "/")
+	if base == "" {
+		project, location := Project(), Location()
+		if project == "" {
+			return fmt.Errorf("no Vertex project is configured")
+		}
+		base = fmt.Sprintf("https://%s/v1/projects/%s/locations/%s/publishers/anthropic/models",
+			apiHost(location), project, location)
 	}
-	url := fmt.Sprintf(
-		"https://%s/v1/projects/%s/locations/%s/publishers/anthropic/models/%s:streamRawPredict",
-		apiHost(location), project, location, reachProbeModel)
+	model := target.Model
+	if model == "" {
+		model = reachProbeModel
+	}
+	url := base + "/" + model + ":streamRawPredict"
 
-	body, _ := json.Marshal(map[string]any{
-		"anthropic_version": "vertex-2023-10-16",
-		"max_tokens":        1,
-		"messages":          []map[string]string{{"role": "user", "content": "hi"}},
-	})
+	body, _ := json.Marshal(struct {
+		MaxTokens int                 `json:"max_tokens"`
+		Messages  []map[string]string `json:"messages"`
+		// Last: a gateway in front of Vertex may only remove it from there.
+		AnthropicVersion string `json:"anthropic_version"`
+	}{1, []map[string]string{{"role": "user", "content": "hi"}}, "vertex-2023-10-16"})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return err
+	}
+	for k, v := range target.Headers {
+		req.Header.Set(k, v)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")

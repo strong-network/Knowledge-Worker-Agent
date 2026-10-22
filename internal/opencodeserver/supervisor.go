@@ -102,7 +102,7 @@ type Options struct {
 	Hostname string        // default 127.0.0.1
 	Password string        // default: a random secret generated per process
 	IdleTTL  time.Duration // default 10m; <=0 disables reaping
-	Env      []string      // default os.Environ()
+	Env      []string      // default: the environment when each server starts
 }
 
 // NewSupervisor builds a Supervisor. It does not start any process; instances
@@ -120,16 +120,12 @@ func NewSupervisor(opts Options) *Supervisor {
 	if idle == 0 {
 		idle = 10 * time.Minute
 	}
-	env := opts.Env
-	if env == nil {
-		env = os.Environ()
-	}
 	return &Supervisor{
 		bin:       opts.Bin,
 		hostname:  hostname,
 		password:  password,
 		idleTTL:   idle,
-		env:       env,
+		env:       opts.Env,
 		instances: map[string]*instance{},
 	}
 }
@@ -204,7 +200,11 @@ func (s *Supervisor) start(ctx context.Context, dir string) (*instance, error) {
 		"--port", fmt.Sprintf("%d", port),
 	)
 	cmd.Dir = dir
-	cmd.Env = append(append([]string{}, s.env...),
+	env := s.env
+	if env == nil {
+		env = os.Environ()
+	}
+	cmd.Env = append(append([]string{}, env...),
 		"OPENCODE_SERVER_PASSWORD="+s.password,
 		"OPENCODE_SERVER_USERNAME=opencode",
 	)

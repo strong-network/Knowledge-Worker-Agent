@@ -13,8 +13,10 @@ import {
   removeProviderKey,
   signOutProvider,
   probeProvider,
+  setProviderEndpoint,
   type GitHubPatStatus,
   type ModelProvider,
+  type ProviderEndpoint,
 } from '../../api'
 
 const ui = useUiStore()
@@ -91,6 +93,37 @@ async function retest(p: ModelProvider) {
 }
 
 const confirmingSignOut = ref('')
+
+// ── Regional endpoints ──
+const choosingRegion = ref('')
+
+function latencyText(e: ProviderEndpoint): string {
+  if (!e.measured) return 'not measured'
+  if (!e.reachable) return 'not reachable'
+  return `${e.latencyMs} ms`
+}
+
+function autoOptionText(p: ModelProvider): string {
+  const active = p.endpoints?.find(e => e.id === p.endpoint)
+  return p.endpointAuto && active ? `Automatic — ${active.label}` : 'Automatic (fastest)'
+}
+
+async function chooseRegion(p: ModelProvider, event: Event) {
+  const endpoint = (event.target as HTMLSelectElement).value
+  if (choosingRegion.value) return
+  choosingRegion.value = p.id
+  actionError.value = ''
+  try {
+    const res = await setProviderEndpoint(p.id, endpoint)
+    if (res.error) actionError.value = res.error
+  } catch (e: any) {
+    actionError.value = e?.message || String(e)
+  } finally {
+    // Refreshed even on failure, so the picker shows what is really in use.
+    await providers.refresh()
+    choosingRegion.value = ''
+  }
+}
 
 async function doSignOut(p: ModelProvider) {
   if (signingOut.value) return
@@ -301,6 +334,22 @@ async function removeGitHubPat() {
               target="_blank"
               rel="noopener noreferrer"
             >How to get a key</a>
+          </div>
+          <div v-if="p.endpoints?.length" class="acc-region">
+            <label :for="`region-${p.id}`">Region</label>
+            <select
+              :id="`region-${p.id}`"
+              class="acc-region-select"
+              :value="p.endpointAuto ? 'auto' : p.endpoint"
+              :disabled="!!choosingRegion"
+              @change="chooseRegion(p, $event)"
+            >
+              <option value="auto">{{ autoOptionText(p) }}</option>
+              <option v-for="e in p.endpoints" :key="e.id" :value="e.id">
+                {{ e.label }} — {{ latencyText(e) }}
+              </option>
+            </select>
+            <span v-if="choosingRegion === p.id" class="acc-region-busy">Measuring…</span>
           </div>
         </div>
         <div class="acc-action">
@@ -581,6 +630,27 @@ async function removeGitHubPat() {
   white-space: nowrap;
 }
 .acc-help-link:hover { text-decoration: underline; }
+
+.acc-region {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text2);
+}
+.acc-region-select {
+  min-width: 0;
+  max-width: 100%;
+  font-size: 12px;
+  padding: 4px 8px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.acc-region-select:disabled { opacity: .6; }
+.acc-region-busy { color: var(--text3); }
 
 .acc-action {
   display: flex;

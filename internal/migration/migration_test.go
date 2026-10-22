@@ -246,17 +246,21 @@ func TestScanStoredPaths(t *testing.T) {
 		`CREATE TABLE sessions (id TEXT, config TEXT)`,
 		`CREATE TABLE projects (id TEXT, workspace_path TEXT)`,
 		`CREATE TABLE scheduled_tasks (id TEXT, workdir TEXT)`,
+		`CREATE TABLE shared_artifacts (id TEXT, folder TEXT, rel_path TEXT)`,
+		`CREATE TABLE artifact_fixes (id TEXT, folder TEXT, rel_path TEXT)`,
 		`INSERT INTO sessions VALUES ('1', '{"workdir":"`+filepath.Join(h, "Chats", "chat-a")+`","add_dirs":["`+filepath.Join(h, "Projects", "p")+`"]}')`,
 		`INSERT INTO sessions VALUES ('2', '{"workdir":"`+h+`"}')`,
 		`INSERT INTO sessions VALUES ('3', 'not json')`,
 		`INSERT INTO projects VALUES ('p', '`+filepath.Join(h, "Projects", "p")+`')`,
 		`INSERT INTO scheduled_tasks VALUES ('t', '')`,
+		`INSERT INTO shared_artifacts VALUES ('a', '`+filepath.Join(h, "Chats", "chat-a")+`', 'report.html')`,
+		`INSERT INTO artifact_fixes VALUES ('f', '`+filepath.Join(h, "Chats", "chat-a")+`', 'report.html')`,
 	)
 	got, err := ScanStoredPaths(db, NewPlan())
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]int{"sessions.workdir": 1, "sessions.add_dirs": 1, "projects.workspace_path": 1}
+	want := map[string]int{"sessions.workdir": 1, "sessions.add_dirs": 1, "projects.workspace_path": 1, "shared_artifacts.folder": 1, "artifact_fixes.folder": 1}
 	if len(got.Rewritten) != len(want) || got.Kept != 1 {
 		t.Errorf("got %+v, want %v and 1 kept", got, want)
 	}

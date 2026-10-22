@@ -1,9 +1,9 @@
 // Copyright 2026 Citrix Systems, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Shared helpers for the agent's "Plan & progress" todo checklist. The todo
-// list arrives as the input of a `todowrite`/`TodoWrite` tool call. These are
-// used both inline (MessageBubble) and by the floating GoalsPanel.
+// Shared helpers for the agent's plan (its todo checklist). The todo list
+// arrives as the input of a `todowrite`/`TodoWrite` tool call, and is shown at
+// the top of the newest reply (TurnPlan).
 
 export type TodoItem = {
   content: string
@@ -39,6 +39,16 @@ export function parseTodos(raw?: string): TodoItem[] | null {
     })
   }
   return out.length ? out : null
+}
+
+// The newest todo list among a turn's tool calls; a todoread carries none.
+export function latestTodos(calls: Array<{ name: string; args?: string }>): TodoItem[] | null {
+  for (let i = calls.length - 1; i >= 0; i--) {
+    if (!isTodoTool(calls[i].name)) continue
+    const items = parseTodos(calls[i].args)
+    if (items) return items
+  }
+  return null
 }
 
 export function todoIcon(status: string): string {

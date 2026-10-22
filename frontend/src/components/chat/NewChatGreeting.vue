@@ -4,6 +4,11 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useMe } from '../../composables/useMe'
+import TimerIcon from '../TimerIcon.vue'
+import { TEMPORARY_ABOUT } from '../../utils/temporary'
+
+// temporary: the chat about to start is a temporary chat.
+defineProps<{ temporary?: boolean }>()
 
 // The headline on a new chat. Addressing the user by name makes the blank
 // page feel like it is waiting for them rather than for anyone.
@@ -19,7 +24,12 @@ const headline = computed(() =>
 </script>
 
 <template>
-  <h1 class="nc-greeting">{{ headline }}</h1>
+  <div v-if="temporary" class="nc-temporary">
+    <span class="nc-timer" aria-hidden="true"><TimerIcon :size="20" /></span>
+    <h1 class="nc-greeting">Temporary chat</h1>
+    <p class="nc-about">{{ TEMPORARY_ABOUT }}</p>
+  </div>
+  <h1 v-else class="nc-greeting">{{ headline }}</h1>
 </template>
 
 <style scoped>
@@ -37,5 +47,18 @@ const headline = computed(() =>
   color: var(--text);
   text-align: center;
   text-wrap: balance;
+}
+.nc-temporary {
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  padding: 0 16px;
+}
+.nc-timer {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 44px; height: 44px; border-radius: 12px;
+  border: 1px dashed var(--text3); color: var(--text2);
+}
+.nc-about {
+  margin: 0; max-width: 440px;
+  font-size: 14px; line-height: 1.5; color: var(--text2); text-align: center;
 }
 </style>

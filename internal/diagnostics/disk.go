@@ -34,6 +34,23 @@ type DiskItem struct {
 // sizeBudget bounds each walk, so a large folder can't stall the dialog.
 const sizeBudget = 4 * time.Second
 
+// LowSpaceShare is the share of the disk below which free space is low.
+const LowSpaceShare = 0.05
+
+// Space is free and total space on the disk holding the Knowledge Worker Agent folder.
+type Space struct{ Free, Total uint64 }
+
+// DiskSpace measures it without walking any folder, so it's cheap to poll.
+func DiskSpace() Space {
+	free, total := diskSpace(layout.Root())
+	return Space{Free: free, Total: total}
+}
+
+// Low reports whether less than LowSpaceShare of the disk is free. An unknown size isn't low.
+func (s Space) Low() bool {
+	return s.Total > 0 && float64(s.Free) < LowSpaceShare*float64(s.Total)
+}
+
 // CollectDisk measures the disk. It walks folders, so it is slower than Collect.
 func CollectDisk() Disk {
 	root, system := layout.Root(), layout.System()

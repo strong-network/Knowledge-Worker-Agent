@@ -6,6 +6,8 @@ import { ref, computed } from 'vue'
 import * as api from '../api'
 import type { Session, Message, SessionConfig, AgentInfo } from '../api'
 import { useChatStore } from './chat'
+import { useUiStore } from './ui'
+import { countWord } from '../utils/temporary'
 
 function ensureArray<T>(val: T[] | null | undefined): T[] {
   return Array.isArray(val) ? val : []
@@ -53,25 +55,28 @@ export const useSessionsStore = defineStore('sessions', () => {
     const q = searchQuery.value.trim().toLowerCase()
     const match = (s: Session) =>
       !q || (s.name || '').toLowerCase().includes(q)
-    const favorites = sessions.value.filter(s => s.favorite && match(s))
-    const pinned = sessions.value.filter(s => !s.favorite && s.pinned && match(s))
+    // Temporary chats aren't in the history: they have a group of their own.
+    const temporary = sessions.value.filter(s => s.temporary && !s.task_id && match(s))
+    const favorites = sessions.value.filter(s => !s.temporary && s.favorite && match(s))
+    const pinned = sessions.value.filter(s => !s.temporary && !s.favorite && s.pinned && match(s))
     // Scheduled tasks: chats created by a scheduled task are surfaced under the sidebar's
     // "Scheduled tasks" section, so keep them out of the Recent list here.
     // Chat sharing: shared chats get their own section above Recent. A starred or
     // pinned one stays where it is and carries the badge instead.
     const shared = sessions.value.filter(
-      s => s.shared && !s.favorite && !s.pinned && !s.task_id && match(s),
+      s => s.shared && !s.temporary && !s.favorite && !s.pinned && !s.task_id && match(s),
     )
     const unpinned = sessions.value.filter(
-      s => !s.favorite && !s.pinned && !s.shared && !s.task_id && match(s),
+      s => !s.temporary && !s.favorite && !s.pinned && !s.shared && !s.task_id && match(s),
     )
     const byDate = (a: Session, b: Session) =>
       new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
     favorites.sort(byDate)
     pinned.sort(byDate)
     shared.sort(byDate)
+    temporary.sort(byDate)
     unpinned.sort(byDate)
-    return { favorites, pinned, shared, unpinned }
+    return { favorites, pinned, shared, temporary, unpinned }
   })
 
   // Whether the user has any starred chats — drives the adaptive default of
@@ -83,7 +88,8 @@ export const useSessionsStore = defineStore('sessions', () => {
   const searchHasNoMatches = computed(() => {
     if (!searchQuery.value.trim()) return false
     const g = sortedSessions.value
-    return g.favorites.length === 0 && g.pinned.length === 0 && g.shared.length === 0 && g.unpinned.length === 0
+    return g.favorites.length === 0 && g.pinned.length === 0 && g.shared.length === 0 &&
+      g.temporary.length === 0 && g.unpinned.length === 0
   })
 
   function setSearchQuery(q: string) {
@@ -92,6 +98,7 @@ export const useSessionsStore = defineStore('sessions', () => {
 
   async function loadSessions() {
     try {
+      const before = sessions.value
       sessions.value = await api.fetchSessions()
       // Seed per-session drafts from the server response so the textarea
       // shows what the user had typed last time without an extra round-trip.
@@ -100,9 +107,100 @@ export const useSessionsStore = defineStore('sessions', () => {
           drafts.value.set(s.id, s.draft)
         }
       }
+      await noticeExpired(before)
     } catch (e) {
       console.error('Failed to load sessions:', e)
     }
+  }
+
+  function toast(msg: string, ms = 6000) {
+    ;(window as any).showToast?.(msg, ms)
+  }
+
+  function forget(id: string) {
+    cancelPendingDraft(id)
+    messages.value.delete(id)
+    drafts.value.delete(id)
+    try { useChatStore().dropSession(id) } catch {}
+  }
+
+  async function openNewChat() {
+    useUiStore().newChatTemporary = false
+    await createSession({ name: 'New chat' })
+  }
+
+  // The server deletes a temporary chat when its time runs out. Chats that were
+  // due and are no longer listed went that way.
+  async function noticeExpired(before: Session[]) {
+    const here = new Set(sessions.value.map(s => s.id))
+    const soon = Date.now() + 60_000
+    const gone = before.filter(s => s.temporary && !here.has(s.id) && (s.expires_at ?? 0) <= soon)
+    if (!gone.length) return
+    gone.forEach(s => forget(s.id))
+    toast(gone.length === 1
+      ? `Deleted the temporary chat "${gone[0].name || 'Untitled'}" after 24 hours of inactivity`
+      : `Deleted ${countWord(gone.length)} temporary chats after 24 hours of inactivity`)
+    if (gone.some(s => s.id === currentSessionId.value)) await openNewChat()
+  }
+
+  // Look again once a temporary chat is due, so its deletion shows here too.
+  let lastDueCheck = 0
+  function checkDue() {
+    const now = Date.now()
+    if (now - lastDueCheck < 30_000) return
+    if (!sessions.value.some(s => s.temporary && (s.expires_at ?? Infinity) <= now)) return
+    lastDueCheck = now
+    void loadSessions()
+  }
+  if (typeof window !== 'undefined') {
+    window.setInterval(checkDue, 15_000)
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) checkDue() })
+  }
+
+  // Make temporary (on) or Keep chat (off), and say what happened. quiet skips
+  // the confirmation, for a chat started temporary from New chat.
+  async function setTemporary(id: string, on: boolean, quiet = false): Promise<boolean> {
+    const s = sessions.value.find(x => x.id === id)
+    const title = `"${s?.name || 'Untitled'}"`
+    try {
+      const st = await api.setSessionTemporary(id, on)
+      if (s) {
+        s.temporary = st.temporary
+        s.expires_at = st.temporary ? Date.now() + st.expires_in * 1000 : undefined
+        s.favorite = st.favorite
+        s.pinned = st.pinned
+      }
+      if (!quiet) {
+        toast(on
+          ? `${title} is now temporary. It's deleted after 24 hours of inactivity.`
+          : `Kept ${title}. It's saved to your chat history.`)
+      }
+      return true
+    } catch (e) {
+      if (e instanceof api.SessionError && e.status === 404) {
+        await loadSessions()
+        if (!s?.temporary) toast(e.message)
+      } else if (e instanceof api.SessionError && e.status === 409) {
+        toast(e.message)
+      } else {
+        toast(on ? `Couldn't make ${title} temporary. Try again.` : `Couldn't keep ${title}. Try again.`)
+      }
+      return false
+    }
+  }
+
+  // A message went to a temporary chat deleted meanwhile: it moves to a new
+  // temporary chat, ready to send.
+  async function moveToNewChat(id: string, prompt: string, reason: string) {
+    const wasOpen = currentSessionId.value === id
+    forget(id)
+    sessions.value = sessions.value.filter(s => s.id !== id)
+    if (wasOpen) {
+      await createSession({ name: 'New chat' })
+      useUiStore().newChatTemporary = true
+      if (currentSessionId.value) setDraft(currentSessionId.value, prompt)
+    }
+    toast(`${reason} Your message is in a new chat, ready to send.`, 8000)
   }
 
   async function loadModels() {
@@ -352,6 +450,7 @@ export const useSessionsStore = defineStore('sessions', () => {
     currentProjectId,
     loadSessions, loadModels, loadAgents, agentName, switchSession, loadHistory,
     createSession, deleteSession, renameSession, pinSession, favoriteSession,
+    setTemporary, moveToNewChat,
     addMessage, updateLastAssistantMessage, setLastAssistantToolCalls,
     setLastAssistantUsage, undoLast,
     setDraft, clearDraft, flushDraft,

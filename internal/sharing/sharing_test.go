@@ -531,3 +531,18 @@ func TestFilesAreRefusedForTheHomeFolder(t *testing.T) {
 		t.Errorf("a refused change was half-applied: %+v", o)
 	}
 }
+
+// A temporary chat can't be shared: it would be deleted under its guests.
+func TestStartRefusesATemporaryChat(t *testing.T) {
+	p := fakePlatform(t)
+	if err := db.CreateSession("t1", config.SessionConfig{Temporary: true}); err != nil {
+		t.Fatal(err)
+	}
+	code, _, body := do(t, "PUT", "/api/sessions/t1/share", "", true)
+	if code != http.StatusConflict || !strings.Contains(body, "Temporary chats can't be shared. Keep the chat first.") {
+		t.Fatalf("start = %d %s", code, body)
+	}
+	if p.count("create") != 0 || db.SessionShared("t1") {
+		t.Errorf("a temporary chat was shared: %d apps made, shared=%v", p.count("create"), db.SessionShared("t1"))
+	}
+}

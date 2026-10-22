@@ -7,6 +7,7 @@ import { useSessionsStore } from '../../stores/sessions'
 import { useUiStore } from '../../stores/ui'
 import { getSessionConfig, updateSessionConfig } from '../../api'
 import type { SessionConfig } from '../../api'
+import { TEMPORARY_SHORT } from '../../utils/temporary'
 
 const sessionsStore = useSessionsStore()
 const ui = useUiStore()
@@ -18,6 +19,11 @@ const workspace = ref('')
 const systemPrompt = ref('')
 const yolo = ref(false)
 const permissions = ref<Record<string, boolean>>({})
+const temporary = ref(!!sessionsStore.currentSession?.temporary)
+// A chat other people use can't be made temporary; the server checks shared files.
+const temporaryBlocked = computed(() =>
+  sessionsStore.currentSession?.shared && !temporary.value ? 'Stop sharing first. Shared chats are always saved.' : '',
+)
 
 onMounted(async () => {
   sessionsStore.loadAgents()
@@ -59,7 +65,8 @@ async function save() {
     permissions: Object.keys(permissions.value).length ? permissions.value : undefined,
     agent: agent.value || undefined,
   }
-  await updateSessionConfig(sessionsStore.currentSessionId, config)
+  const id = sessionsStore.currentSessionId
+  await updateSessionConfig(id, config)
   // Update local state
   const s = sessionsStore.currentSession
   if (s) {
@@ -68,7 +75,9 @@ async function save() {
     if (config.workspace) s.workspace = config.workspace
   }
   ui.closeModal()
-  ;(window as any).showToast?.('Settings saved')
+  // Making it temporary or keeping it says so itself.
+  if (temporary.value !== !!s?.temporary) await sessionsStore.setTemporary(id, temporary.value)
+  else (window as any).showToast?.('Settings saved')
 }
 </script>
 
@@ -113,6 +122,18 @@ async function save() {
       <label class="form-label">System prompt</label>
       <textarea v-model="systemPrompt" class="form-textarea" rows="3" placeholder="Optional..."></textarea>
     </div>
+    <div v-if="!sessionsStore.currentSessionDeprecated" class="form-group">
+      <label class="temp-row" :class="{ blocked: temporaryBlocked }">
+        <span>
+          <span class="temp-label">Temporary chat</span>
+          <span class="temp-desc">{{ temporaryBlocked || TEMPORARY_SHORT }}</span>
+        </span>
+        <span class="toggle">
+          <input type="checkbox" v-model="temporary" :disabled="!!temporaryBlocked" aria-label="Temporary chat">
+          <span class="slider"></span>
+        </span>
+      </label>
+    </div>
 
     <div class="modal-footer">
       <button class="btn btn-ghost" @click="ui.closeModal()">Cancel</button>
@@ -120,3 +141,14 @@ async function save() {
     </div>
   </div>
 </template>
+
+<style scoped>
+.temp-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 12px; background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 8px; cursor: pointer;
+}
+.temp-row.blocked { cursor: default; }
+.temp-label { display: block; font-size: 13px; font-weight: 500; }
+.temp-desc { display: block; font-size: 11px; color: var(--text2); margin-top: 2px; }
+</style>

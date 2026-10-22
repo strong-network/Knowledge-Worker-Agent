@@ -17,9 +17,10 @@ them to a Vue 3 single-page app over Server-Sent Events (SSE).
   `//go:embed`. No CGO, no shared libraries. The release image installs it as
   `/usr/bin/knowledge-worker-agent`.
 - **Go module:** `github.com/strong-network/Knowledge-Worker-Agent`, **Go 1.27** (`go.mod`), with a
-  toolchain floor of `go1.27.2`.
-- **Only direct Go dependency:** `modernc.org/sqlite v1.34.5` (pure-Go SQLite); everything else
-  is the standard library. `NOTICE` lists what the binary contains.
+  toolchain floor of `go1.27.3`.
+- **Direct Go dependencies:** `modernc.org/sqlite` (pure-Go SQLite), and for shared files
+  `golang.org/x/net` (its HTML tokenizer, for the check) and `github.com/yuin/goldmark` (Markdown);
+  everything else is the standard library. `NOTICE` lists what the binary contains.
 - **Version:** the binary reports `<VERSION file>-<short git SHA>` (for example `1.2.0-a1b2c3d`),
   injected at build time (`-X main.version`); surfaced via `GET /api/version` (`app` field) and
   shown in the Settings menu. `frontend/package.json` stays at `1.0.0`.
@@ -39,13 +40,13 @@ whole product.
 |------|-----------|-------|
 | `cmd/server/` | Main entry point: `main.go` (route registration, bootstrap, model discovery), `health.go` (probe subcommand) | Embeds `cmd/server/html/` |
 | `cmd/server/html/` | **Generated** — Vite build output of the frontend | Do not hand-edit (see §9) |
-| `internal/defaults/` | Embedded bundles installed at startup into `~/.config/opencode`, in **every** workspace (not gated on `KWA_CENTRAL_CONFIG`): `skills/` (the pdf/docx/pptx/xlsx document skills — the capability floor for reading an attached file) and `plugin/` (OpenCode plugins that keep chat working; `pdf-guard.js` drops attachments the provider can't accept, which would otherwise poison a session's history permanently). Both are platform-owned: always overwritten, never manifest-tracked. The old content bundle (agents, product context, `AGENTS.md`, product-specific skills) is **retired**: central configuration provides that now, and `RetireLegacyDefaults` removes it from workspaces that already have it, preserving user-edited files | `//go:embed all:skills` + `all:plugin` |
+| `internal/defaults/` | Embedded bundles installed at startup into `~/.config/opencode`, in **every** workspace (not gated on `KWA_CENTRAL_CONFIG`): `skills/` (the pdf/docx/pptx/xlsx document skills — the capability floor for reading an attached file — and `reports-and-dashboards`, which teaches the agent to build reports and dashboards that the preview and shared files can show as written; a copy central configuration assigns under the same name hides it) and `plugin/` (OpenCode plugins that keep chat working; `pdf-guard.js` drops attachments the provider can't accept, which would otherwise poison a session's history permanently). Both are platform-owned: always overwritten, never manifest-tracked. The old content bundle (agents, product context, `AGENTS.md`, product-specific skills) is **retired**: central configuration provides that now, and `RetireLegacyDefaults` removes it from workspaces that already have it, preserving user-edited files | `//go:embed all:skills` + `all:plugin` |
 | `internal/mcp/` | MCP server management: the `mcp` block of opencode's `opencode.json`. opencode handles MCP OAuth itself (`internal/mcpauth` drives its commands) | **Security-relevant**: tokens, external IdPs |
 | `internal/chat/` | Chat backend lifecycle (`RunStream`), opencode JSONL parser (`ParseOpencodeJSONL`), `opencode serve` event translation (`server_stream.go`), process registry, stream buffering | **Security-relevant**: process exec |
 | `internal/opencodeserver/` | Server mode: supervises long-lived `opencode serve` processes, one per working folder, and adapts their HTTP/SSE events | **Security-relevant**: process exec |
 | `internal/opencodeinstaller/`, `internal/opencodeembed/` | Installs the pinned opencode release, verified by SHA-256; the release binary embeds a fallback copy | **Security-relevant**: supply chain |
 | `internal/opencodeauth/`, `internal/vertexauth/`, `internal/providers/` | Model provider sign-in (GitHub Copilot device flow, Google Cloud), API keys, and which providers and preset models the workspace offers | **Security-relevant**: credentials, written to opencode's credential store |
-| `internal/sessions/` | Session & chat HTTP handlers, SSE dispatch loop, prompt queue, answer forwarding | |
+| `internal/sessions/` | Session & chat HTTP handlers, SSE dispatch loop, prompt queue, answer forwarding, and temporary chats: a once-a-minute sweeper deletes one 24 hours after its last message, unless a turn is running | **Security-relevant**: deletes chats, through `workdirs` |
 | `internal/files/` | File-manager handlers: browse/view/save/upload/download/rename/move/duplicate/delete | **Security-relevant**: filesystem access |
 | `internal/diagnostics/` | Settings → Diagnostics: `GET /api/diagnostics` (versions, status, central configuration and its last run, hidden and kept items, providers, connectors, settings), `/disk` and `/log` (the ends of the server's and opencode's logs), and `POST /api/diagnostics/refresh-config`, which re-applies the central configuration in the background, one refresh at a time | **Security-relevant**: reads logs and settings; everything returned goes through `Redact` |
 | `internal/workdirs/` | The only gate for deleting chat folders: session delete, tidy-up and sweeps all go through it | **Security-relevant**: deletes files |
@@ -53,7 +54,9 @@ whole product.
 | `internal/mcpauth/` | Drives opencode's MCP OAuth commands (`opencode mcp auth`, `logout`, `list`) | **Security-relevant**: external identity providers |
 | `internal/materializer/` | Central configuration: at startup and on a refresh from Diagnostics, clones or reads the configuration repository and writes the project's agents, skills, context, connectors, providers and vocabularies into a platform-owned opencode config folder, built beside the current one and swapped in | **Security-relevant**: exec `git`, writes config |
 | `internal/workspaceapps/` | Chat sharing: client for the workspace sidecar's Workspace App routes (`/var/strong-network/socks/sidecar-ipc`). Calls carry the owner's platform token, read per request from the `cloud_editor_user_token` header the platform proxy injects; `GET /api/share/platform` is a read-only probe of that path | **Security-relevant**: handles the owner's platform credential — never store, log or return it |
-| `internal/guest/` | Chat sharing: the guest surface — a **separate listener** (`127.0.0.1:8766`) with its own mux, reached by coworkers through the Workspace App. Only its own routes exist; every session route 404s unless the chat is shared; POSTs require `Origin` to equal the share URL's origin; turn frames pass an allow-list (`Frame`). With the owner's per-share toggles on, guests also answer permission requests (once or deny) and reach the chat's folder through `os.Root` — no delete/rename/move, hidden paths refused, home folder never — and guest prompts have a per-chat budget | **Security-relevant**: the one surface exposed beyond the owner. Must never import `internal/workspaceapps` or read the owner token (a test enforces this) |
+| `internal/guest/` | Chat sharing: the guest surface — a **separate listener** (`127.0.0.1:8766`) with its own mux, reached by coworkers through the Workspace App. Only its own routes exist; every session route 404s unless the chat is shared; POSTs require `Origin` to equal the share URL's origin; turn frames pass an allow-list (`Frame`). With the owner's per-share toggles on, guests also answer permission requests (once or deny) and reach the chat's folder through `os.Root` — no delete/rename/move, hidden paths refused, home folder never — and guest prompts have a per-chat budget | **Security-relevant**: exposed beyond the owner. Must never import `internal/workspaceapps` or read the owner token (a test enforces this) |
+| `internal/fileshare/` | Sharing one file from a chat (an "artifact" in the UI): each shared file gets a port of its own from `KWA_ARTIFACT_PORTS` (default `8770-8799`) and a Workspace App on it, shared with the people the owner chose. Owner routes `/api/artifacts`; platform calls carry the owner's token, read per request. Sharing refuses an HTML or Markdown file that isn't self-contained (`internal/fileshare/check`: what it loads from the internet or from other files, as advice for the owner; the viewer's content policy is the boundary). A shared file follows renames and moves in the owner's file routes, and stops being shared before a delete, through hooks in `internal/files` (`AfterRename`, `BeforeDelete`) set in `main.go`. With `KWA_ARTIFACT_PORTS=off`, no shared file is served at startup; each is kept, shows as turned off, and is served again once sharing is back on. A file that isn't self-contained can be fixed in the background (`/api/artifacts/fixes`): a temporary chat, in a folder of its own, works on a copy of the file and the files it loads; the fixed file replaces the original only if it passes the check and the original hasn't changed meanwhile, and the original is kept in `.system/artifact-backups`. A fix still running when the server stops is marked failed at the next start. Preview links (`POST /api/files/preview-link`) run an HTML file's scripts on the preview listener, published by an app named `Knowledge Worker Agent preview` on `KWA_PREVIEW_PORT` (default `8769`) with nobody in its audience, created on first use. `GET /api/artifacts/can-share?folder=&file=` tells the agent whether files in a chat's folder can be shared (sharing on, the nearest chat folder not only a temporary chat's) and what the check finds in a file there; the reports-and-dashboards skill asks it through `KWA_URL`, which `main.go` exports to child processes. `internal/fileshare/check/skill_test.go` fails when the check gains a rule the skill doesn't name | **Security-relevant**: handles the owner's platform credential and decides what is published |
+| `internal/fileshare/viewer/` | What coworkers reach for a shared file: one listener per shared file on `127.0.0.1:<port>`, GET only, serving that one file and a small viewer page. The file is read through `os.Root` in its chat's folder (no hidden paths; HTML, Markdown, PDF and images up to 25 MB); HTML runs under a policy that refuses every load and connection, sandboxed without the page's origin, with a short script put first (`links.go`) that opens links to web pages in a new tab: followed in the frame, the viewer page refuses them. Downloads are the file as written. Markdown is rendered on the server (`internal/fileshare/markdown`: goldmark, GitHub flavour) without the HTML written into it, and served under the same policy with no scripts. Also the owner's preview listener: an HTML file the owner opens in the app, served only by a link made for it (one hour, in memory) and framed by the app | **Security-relevant**: exposed beyond the owner. Must never import `internal/workspaceapps` or read the owner token (a test enforces this) |
 | `internal/obsidianinstaller/` | Installs the Obsidian MCP server via `npm install -g obsidian-mcp@<PinnedVersion>` | **Security-relevant**: supply chain |
 | `internal/office/` | Previews PowerPoint, Word and Excel files as PDF (`/api/files/office-preview`), converted by LibreOffice one at a time from a copy of the file and cached by the file's size and time; installs a pinned LibreOffice under `.system/libreoffice` on request (`/api/office/install`), where it survives a workspace restart | **Security-relevant**: process exec on files the agent wrote, supply chain |
 | `internal/voice/` | Dictation: `/api/voice/dictations` routes (owner listener only), audio held in memory, and the `whisper-server` engine it runs on loopback from a fresh `0700` directory with none of Knowledge Worker Agent's environment, tied to Knowledge Worker Agent's lifetime (`Pdeathsig`) and force-stopped when stuck. Reads the centrally assigned `vocabulary` artifacts for the engine's hint and corrections | **Security-relevant**: process exec, audio. Never log or persist audio or transcripts; the engine loads CPU code from its working directory, so that directory must stay private and empty |
@@ -73,7 +76,7 @@ user's own agents), `connectors` (which connectors are on per chat), `daynotes` 
 `tidyup` (abandoned chat folders), and `workspaceheartbeat` (keep-alive reports to the platform).
 
 Most security-relevant directories: `internal/files`, `internal/workdirs`, `internal/git`,
-`internal/chat`, `internal/mcp`, `internal/guest`, `internal/opencodeinstaller`, `internal/voice`.
+`internal/chat`, `internal/mcp`, `internal/guest`, `internal/fileshare`, `internal/opencodeinstaller`, `internal/voice`.
 
 ---
 
@@ -148,6 +151,8 @@ Browser (Vue SPA)  ──HTTP/SSE──>  Go server (cmd/server, default 127.0.0
                                       ├─ reads/writes: SQLite DB             (modernc.org/sqlite, WAL)
                                       └─ HTTP out: github.com / npm / model providers / MCP servers
 Coworkers ──Workspace App──> guest listener (127.0.0.1:8766), shared chats only
+Coworkers ──Workspace App──> shared-file listeners (127.0.0.1:8770-8799), one file each
+Owner ──────Workspace App──> preview listener (127.0.0.1:8769), HTML files by one-hour link
 ```
 
 - **Startup is non-blocking.** `main()` starts the HTTP listener immediately, then a background
@@ -193,6 +198,16 @@ patterns documented here rather than the documented patterns themselves.
 - **Coworkers → guest listener.** Chat sharing adds a second, separate listener on
   `127.0.0.1:8766` (`internal/guest`), which the platform's Workspace App exposes to coworkers
   the owner picked. It serves shared chats only and requires a matching `Origin` on writes.
+- **Coworkers → shared-file listeners.** Sharing a single file adds a listener per shared file
+  (`internal/fileshare/viewer`), each on its own port and Workspace App, so each file has its own
+  audience, enforced by the platform proxy. A listener serves its one file and nothing else, GET
+  only; the file can't load or send anything (its content policy is the boundary, not the check
+  that runs before sharing).
+- **Owner → preview listener.** An HTML file the owner opens in the app runs its scripts on a
+  listener of its own (`internal/fileshare/viewer`, `127.0.0.1:8769`), never on the app's origin,
+  where a script could reach the owner's API. Its Workspace App has nobody in its audience, and it
+  serves a file only through a link made for it (random, one hour, in memory), under the
+  shared-file policy.
 - **Server → opencode / git / npm / whisper-server (child processes).** All process execution
   uses `exec.Command` with **argument vectors — never a shell** (`sh -c`), so classic shell
   injection via prompt or arguments does not apply. The chat prompt is passed as the last
@@ -415,9 +430,9 @@ names too.
   `go build ./cmd/server` requires running `make frontend` first to populate it.
 - **`make test` uses `go test ./... -v`** — `-v` makes output verbose; use `make test-short` for
   quiet runs.
-- **`go.mod` sets a toolchain floor** (`toolchain go1.27.2`), below which Go has known
+- **`go.mod` sets a toolchain floor** (`toolchain go1.27.3`), below which Go has known
   standard-library vulnerabilities. With the default `GOTOOLCHAIN=auto`, an older local Go
-  downloads and uses 1.27.2; `Dockerfile.release` sets `GOTOOLCHAIN=auto` because the `golang`
+  downloads and uses 1.27.3; `Dockerfile.release` sets `GOTOOLCHAIN=auto` because the `golang`
   images default to `local`. Keep `go 1.27.0` in `go.mod` unless intentionally bumping — `go mod
   tidy` writes the patch digit and will restore it — and raise
   the toolchain line when `govulncheck` reports a fixed Go release.
@@ -442,7 +457,8 @@ names too.
 - `frontend/node_modules/`, `build/` — build artifacts (git-ignored).
 - `internal/defaults/skills/**` and `internal/defaults/plugin/**` — the only content the binary
   still ships into `~/.config/opencode`. `skills/` holds the four document-handling skills
-  (pdf, docx, pptx, xlsx) that let the workspace read an attached file; `plugin/` holds OpenCode
+  (pdf, docx, pptx, xlsx) that let the workspace read an attached file, and
+  `reports-and-dashboards`, which states the rules of the preview and shared files; `plugin/` holds OpenCode
   plugins that run inside opencode and change its behaviour. Both install in every workspace
   (central-config or not), are always overwritten rather than preserved on edit, and are kept out
   of the defaults manifest so `RetireLegacyDefaults` can never remove them. The skills are

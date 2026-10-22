@@ -15,8 +15,8 @@ import {
 //
 // It replaces useOpencodeAuthStore and useVertexAuthStore, which between them
 // hard-coded the assumption that there are exactly two providers. Anything
-// derived from "is the assistant connected" — the sign-in banner, the Files and
-// Plan widgets, the Settings menu badge — reads this store, so a workspace
+// derived from "is the assistant connected" — the sign-in banner, the Files
+// widget, the Settings menu badge — reads this store, so a workspace
 // running on a config-declared provider is not permanently told it is
 // disconnected.
 //
