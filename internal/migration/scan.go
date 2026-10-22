@@ -85,6 +85,8 @@ func ScanStoredPaths(dbPath string, p Plan) (StoredPaths, error) {
 	for _, q := range []struct{ field, query string }{
 		{"projects.workspace_path", `SELECT workspace_path FROM projects`},
 		{"scheduled_tasks.workdir", `SELECT workdir FROM scheduled_tasks`},
+		{"shared_artifacts.folder", `SELECT folder FROM shared_artifacts`},
+		{"artifact_fixes.folder", `SELECT folder FROM artifact_fixes`},
 	} {
 		rows, err := db.Query(q.query)
 		if err != nil {

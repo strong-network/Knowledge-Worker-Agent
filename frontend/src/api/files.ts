@@ -3,8 +3,8 @@
 
 import {
   browseFiles, browseEntries, viewFile, saveFile, createDirectory, deletePath, renamePath,
-  duplicatePath, uploadFiles, downloadFileUrl, rawFileUrl, officePreviewUrl,
-  type FileEntry, type FileViewResponse, type UploadResponse,
+  duplicatePath, uploadFiles, downloadFileUrl, rawFileUrl, officePreviewUrl, previewLink,
+  type FileEntry, type FileViewResponse, type UploadResponse, type PreviewLink,
 } from './index'
 
 // How the file components reach files, so one set of components serves the
@@ -24,6 +24,24 @@ export interface FileApi {
   duplicate?: (path: string) => Promise<string>
   // Absent for guests, whose office files show the download instead.
   officePreviewUrl?: (path: string) => string
+  // Absent for guests, whose HTML previews keep scripts off.
+  previewLink?: (path: string) => Promise<PreviewLink>
+}
+
+// Sharing a file from the Files widget: the owner's only. Without share, the
+// widget only marks what's shared (the project view, which has no chat).
+export interface FileSharing {
+  marker(path: string): { label: string; attention: boolean } | null
+  // How many shared files are at path or inside it.
+  sharedIn(path: string): number
+  // The server has moved or stopped them: re-read what's shared.
+  changed(): void
+  // Whether a fix is making the file self-contained.
+  fixing?: (path: string) => boolean
+  canShare?: (entry: FileEntry) => boolean
+  share?: (entry: FileEntry) => void
+  // Why Share can't be used here, when share is absent but canShare isn't.
+  shareBlocked?: string
 }
 
 export const ownerFileApi: FileApi = {
@@ -38,6 +56,7 @@ export const ownerFileApi: FileApi = {
   remove: deletePath,
   duplicate: duplicatePath,
   officePreviewUrl,
+  previewLink,
 }
 
 // The guest routes answer failures with {error}, written for the guest.

@@ -130,6 +130,17 @@ body {
 }
 #toast.show { opacity:1; transform:translateY(0); }
 
+/* ── Tooltip (v-tip) ── */
+.kwa-tip {
+  position: fixed; top: 0; left: 0; z-index: 1000; max-width: 280px;
+  padding: 6px 10px; border-radius: 7px; font-size: 12.5px; line-height: 1.4;
+  background: var(--text); color: var(--bg);
+  box-shadow: 0 4px 14px rgba(0,0,0,.25);
+  pointer-events: none; opacity: 0; visibility: hidden; transition: opacity .12s, visibility .12s;
+}
+.kwa-tip.show { opacity: 1; visibility: visible; }
+@media (prefers-reduced-motion: reduce) { .kwa-tip { transition: none; } }
+
 /* ── Screen-reader only ──
    For live regions and labels that must be announced but not drawn. Not
    `display:none` or `visibility:hidden`, which remove the node from the

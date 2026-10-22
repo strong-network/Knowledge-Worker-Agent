@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -205,6 +206,41 @@ func migrate() error {
 		PRIMARY KEY (session_id, day)
 	);
 	CREATE INDEX IF NOT EXISTS idx_session_notes_day ON session_notes(day);
+
+	-- A file shared on its own, served on its own port (internal/fileshare).
+	-- folder is the chat's folder and rel_path the file inside it. No foreign key:
+	-- a chat deleted with its folder kept (a project's or a task's) leaves the
+	-- file shared, with session_id cleared.
+	CREATE TABLE IF NOT EXISTS shared_artifacts (
+		id             TEXT PRIMARY KEY,
+		folder         TEXT NOT NULL,
+		rel_path       TEXT NOT NULL,
+		session_id     TEXT,
+		port           INTEGER NOT NULL UNIQUE,
+		allow_download INTEGER NOT NULL DEFAULT 0,
+		shared_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE (folder, rel_path)
+	);
+
+	CREATE TABLE IF NOT EXISTS artifact_fixes (
+		id             TEXT PRIMARY KEY,
+		folder         TEXT NOT NULL,
+		rel_path       TEXT NOT NULL,
+		fix_session_id TEXT NOT NULL,
+		source_sha256  TEXT NOT NULL,
+		state          TEXT NOT NULL,
+		problem        TEXT NOT NULL DEFAULT '',
+		findings       TEXT NOT NULL DEFAULT '',
+		started_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+		finished_at    DATETIME
+	);
+
+	-- Temporary chats deleted for inactivity, so a late message gets an answer
+	-- instead of silently starting a new chat with the same id.
+	CREATE TABLE IF NOT EXISTS expired_chats (
+		id         TEXT PRIMARY KEY,
+		expired_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
 	`
 	if _, err := DB.Exec(schema); err != nil {
 		return err
@@ -213,6 +249,12 @@ func migrate() error {
 		return err
 	}
 	if err := ensureSessionsColumns(); err != nil {
+		return err
+	}
+	if err := startTemporaryClocks(); err != nil {
+		return err
+	}
+	if err := ensureSharedArtifactColumns(); err != nil {
 		return err
 	}
 	if err := ensureScheduledTaskColumns(); err != nil {
@@ -236,7 +278,7 @@ func migrate() error {
 func CreateSession(id string, cfg config.SessionConfig) error {
 	cfg.Backend = config.NormalizeBackend(cfg.Backend)
 	cfgJSON, _ := json.Marshal(cfg)
-	_, err := DB.Exec(`INSERT INTO sessions (id, config) VALUES (?, ?)`, id, string(cfgJSON))
+	_, err := DB.Exec(`INSERT INTO sessions (id, config, activity_at) VALUES (?, ?, CURRENT_TIMESTAMP)`, id, string(cfgJSON))
 	return err
 }
 
@@ -250,6 +292,30 @@ func GetSessionConfig(id string) (config.SessionConfig, error) {
 	json.Unmarshal([]byte(cfgJSON), &cfg)
 	cfg.Backend = config.NormalizeBackend(cfg.Backend)
 	return cfg, nil
+}
+
+// ChatFolders maps each chat's folder to whether a chat that isn't temporary
+// works in it.
+func ChatFolders() map[string]bool {
+	out := map[string]bool{}
+	rows, err := DB.Query(`SELECT config FROM sessions`)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var raw string
+		if rows.Scan(&raw) != nil {
+			continue
+		}
+		var cfg config.SessionConfig
+		if json.Unmarshal([]byte(raw), &cfg) != nil || strings.TrimSpace(cfg.Workdir) == "" {
+			continue
+		}
+		dir := filepath.Clean(cfg.Workdir)
+		out[dir] = out[dir] || !cfg.Temporary
+	}
+	return out
 }
 
 func UpdateSessionConfig(id string, cfg config.SessionConfig) error {
@@ -322,7 +388,7 @@ func AddTurnMessage(sessionID, role, content, usage, turnID string) error {
 		sessionID, role, content, usage, nullable(turnID),
 	)
 	if err == nil {
-		DB.Exec(`UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`, sessionID)
+		DB.Exec(`UPDATE sessions SET updated_at = CURRENT_TIMESTAMP, activity_at = CURRENT_TIMESTAMP WHERE id = ?`, sessionID)
 	}
 	return err
 }
@@ -447,6 +513,10 @@ type SessionListItem struct {
 	ProjectID      string `json:"project_id"`
 	ProjectStarred bool   `json:"project_starred"`
 	Draft          string `json:"draft"`
+	// Temporary chats are deleted ExpiresIn seconds from now unless someone
+	// adds a message. A relative time, so a browser's wrong clock can't move it.
+	Temporary bool  `json:"temporary"`
+	ExpiresIn int64 `json:"expires_in"`
 	// TaskID is set when this chat was produced by a scheduled task run.
 	// Such chats are surfaced under the Scheduled tasks section, not
 	// in Recent chats. Empty for ordinary chats.
@@ -472,7 +542,8 @@ func ListSessions() []SessionListItem {
 			(SELECT r.task_id FROM task_runs r WHERE r.session_id = s.id ORDER BY r.created_at ASC LIMIT 1) as task_id,
 			(SELECT COUNT(*) FROM session_notes n WHERE n.session_id = s.id) as note_count,
 			s.shared_at IS NOT NULL,
-			(SELECT COUNT(*) FROM session_guests g WHERE g.session_id = s.id)
+			(SELECT COUNT(*) FROM session_guests g WHERE g.session_id = s.id),
+			`+lastActivity+`
 		FROM sessions s
 		ORDER BY s.updated_at DESC
 	`)
@@ -481,6 +552,7 @@ func ListSessions() []SessionListItem {
 	}
 	defer rows.Close()
 
+	now := time.Now()
 	var items []SessionListItem
 	for rows.Next() {
 		var id, cfgJSON, createdAt, updatedAt string
@@ -489,7 +561,8 @@ func ListSessions() []SessionListItem {
 		var msgCount int
 		var noteCount, guestCount int
 		var shared bool
-		rows.Scan(&id, &cfgJSON, &draft, &projectID, &projectStarred, &createdAt, &updatedAt, &msgCount, &taskID, &noteCount, &shared, &guestCount)
+		var last int64
+		rows.Scan(&id, &cfgJSON, &draft, &projectID, &projectStarred, &createdAt, &updatedAt, &msgCount, &taskID, &noteCount, &shared, &guestCount, &last)
 
 		var cfg config.SessionConfig
 		json.Unmarshal([]byte(cfgJSON), &cfg)
@@ -514,6 +587,8 @@ func ListSessions() []SessionListItem {
 			ProjectID:      projectID.String,
 			ProjectStarred: projectStarred == 1,
 			Draft:          draft.String,
+			Temporary:      cfg.Temporary,
+			ExpiresIn:      expiresIn(cfg.Temporary, last, now),
 			TaskID:         taskID.String,
 			NoteCount:      noteCount,
 			Shared:         shared,
@@ -559,6 +634,7 @@ func scanProjectSessions(rows *sql.Rows) []SessionListItem {
 			Favorite:       cfg.Favorite,
 			ProjectStarred: projectStarred == 1,
 			Draft:          draft.String,
+			Temporary:      cfg.Temporary,
 			CreatedAt:      createdAt,
 			UpdatedAt:      updatedAt,
 		})
@@ -824,6 +900,9 @@ func ensureSessionsColumns() error {
 		// What guests may do in a shared chat, off by default.
 		"share_allow_permissions": "ALTER TABLE sessions ADD COLUMN share_allow_permissions INTEGER NOT NULL DEFAULT 0",
 		"share_allow_files":       "ALTER TABLE sessions ADD COLUMN share_allow_files INTEGER NOT NULL DEFAULT 0",
+		// Temporary chats: the last message from the user or the agent, or when the
+		// chat was made temporary. A temporary chat is deleted RetentionTemporary after it.
+		"activity_at": "ALTER TABLE sessions ADD COLUMN activity_at DATETIME",
 	})
 }
 
@@ -851,6 +930,15 @@ func ensureProjectsColumns() error {
 func ensureScheduledTaskColumns() error {
 	return ensureColumns("scheduled_tasks", map[string]string{
 		"model": "ALTER TABLE scheduled_tasks ADD COLUMN model TEXT NOT NULL DEFAULT ''",
+	})
+}
+
+// ensureSharedArtifactColumns adds the self-contained check's cached result:
+// check_key is the file's size and time it was computed for.
+func ensureSharedArtifactColumns() error {
+	return ensureColumns("shared_artifacts", map[string]string{
+		"check_key":  "ALTER TABLE shared_artifacts ADD COLUMN check_key TEXT NOT NULL DEFAULT ''",
+		"check_json": "ALTER TABLE shared_artifacts ADD COLUMN check_json TEXT NOT NULL DEFAULT ''",
 	})
 }
 

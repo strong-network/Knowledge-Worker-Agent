@@ -12,6 +12,7 @@ import { formatRelativeDate } from '../../utils/time'
 import { confirmChatDelete } from '../../utils/confirmDelete'
 import { formatDisplayPath } from '../../utils/paths'
 import WorkspaceFilePanel from './WorkspaceFilePanel.vue'
+import TimerIcon from '../TimerIcon.vue'
 
 const projectsStore = useProjectsStore()
 const sessionsStore = useSessionsStore()
@@ -195,7 +196,7 @@ function openSummarize() {
                   autofocus spellcheck="false"
                 />
                 <div v-else class="pv-card-name">{{ c.name || 'Untitled chat' }}</div>
-                <div class="pv-card-meta">{{ c.messages || 0 }} messages · {{ formatRelativeDate(c.updated_at) }}</div>
+                <div class="pv-card-meta"><span v-if="c.temporary" class="pv-temp"><TimerIcon :size="11" />Temporary</span>{{ c.messages || 0 }} messages · {{ formatRelativeDate(c.updated_at) }}</div>
               </div>
               <span class="pv-card-actions" @click.stop>
                 <button @click="startRename(c.id, c.name, $event)" title="Rename">✎</button>
@@ -228,7 +229,7 @@ function openSummarize() {
                 autofocus spellcheck="false"
               />
               <div v-else class="pv-card-name">{{ c.name || 'Untitled chat' }}</div>
-              <div class="pv-card-meta">{{ c.messages || 0 }} messages · {{ formatRelativeDate(c.updated_at) }}</div>
+              <div class="pv-card-meta"><span v-if="c.temporary" class="pv-temp"><TimerIcon :size="11" />Temporary</span>{{ c.messages || 0 }} messages · {{ formatRelativeDate(c.updated_at) }}</div>
             </div>
             <span class="pv-card-actions" @click.stop>
               <button @click="startRename(c.id, c.name, $event)" title="Rename">✎</button>
@@ -334,6 +335,11 @@ function openSummarize() {
 .pv-card-body { flex: 1; min-width: 0; }
 .pv-card-name { font-size: 14px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pv-card-meta { font-size: 12px; color: var(--text2); margin-top: 3px; }
+.pv-temp {
+  display: inline-flex; align-items: center; gap: 4px; margin-right: 6px;
+  padding: 0 6px; border: 1px dashed var(--text3); border-radius: 999px;
+  font-size: 11px; font-weight: 600; color: var(--text2);
+}
 .pv-rename {
   width: 100%; padding: 3px 6px; font-size: 13px; border: 1px solid var(--accent);
   border-radius: 5px; background: var(--surface); color: var(--text); font-family: inherit;

@@ -28,7 +28,7 @@ type rewrite struct {
 
 // rewritable lists the only columns the migration rewrites, so a journal can't
 // name any other.
-var rewritable = map[string]bool{"sessions.config": true, "projects.workspace_path": true, "scheduled_tasks.workdir": true}
+var rewritable = map[string]bool{"sessions.config": true, "projects.workspace_path": true, "scheduled_tasks.workdir": true, "shared_artifacts.folder": true, "artifact_fixes.folder": true}
 
 // planRewrites works out every value in our database at path that changes.
 func planRewrites(path string, p Plan) ([]rewrite, error) {
@@ -58,7 +58,7 @@ func planRewrites(path string, p Plan) ([]rewrite, error) {
 		}
 		rows.Close()
 	}
-	for _, c := range []struct{ table, field string }{{"projects", "workspace_path"}, {"scheduled_tasks", "workdir"}} {
+	for _, c := range []struct{ table, field string }{{"projects", "workspace_path"}, {"scheduled_tasks", "workdir"}, {"shared_artifacts", "folder"}, {"artifact_fixes", "folder"}} {
 		rows, err := db.Query(`SELECT id, "` + c.field + `" FROM "` + c.table + `" ORDER BY id`)
 		if err != nil {
 			if noSuchTable(err) {

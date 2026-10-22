@@ -12,10 +12,10 @@ import (
 	"testing"
 )
 
-// floorSkills are the document-handling skills Knowledge Worker Agent ships. They are
-// the floor a workspace needs to read an attached file, and the reason the
-// binary ships any content at all.
-var floorSkills = []string{"docx", "pdf", "pptx", "xlsx"}
+// floorSkills are the skills Knowledge Worker Agent ships: the document-handling
+// skills a workspace needs to read an attached file, and the skill that builds
+// reports its preview and shared files can show.
+var floorSkills = []string{"docx", "pdf", "pptx", "reports-and-dashboards", "xlsx"}
 
 // seedLegacyInstall fabricates a workspace provisioned by an earlier build: the
 // given files on disk, each recorded in the defaults manifest with a matching

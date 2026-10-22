@@ -9,7 +9,7 @@ its own licence, and its licence text is in its source at the version shown.
 In the server binary
 ====================
 
-Go standard library and runtime (go1.27.2)
+Go standard library and runtime (go1.27.3)
   Licence: BSD-3-Clause
   Copyright 2009 The Go Authors.
 
@@ -25,9 +25,17 @@ github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec
   Licence: BSD-3-Clause
   Copyright (c) 2012 The Go Authors. All rights reserved.
 
-golang.org/x/sys v0.22.0
+github.com/yuin/goldmark v1.8.6
+  Licence: MIT
+  Copyright (c) 2019 Yusuke Inuzuka
+
+golang.org/x/net v0.61.0
   Licence: BSD-3-Clause
-  Copyright (c) 2009 The Go Authors. All rights reserved.
+  Copyright 2009 The Go Authors.
+
+golang.org/x/sys v0.49.0
+  Licence: BSD-3-Clause
+  Copyright 2009 The Go Authors.
 
 modernc.org/libc v1.55.3
   Licence: BSD-3-Clause
@@ -44,6 +52,10 @@ modernc.org/memory v1.8.0
 modernc.org/sqlite v1.34.5
   Licence: BSD-3-Clause
   Copyright (c) 2017 The Sqlite Authors. All rights reserved.
+
+github-markdown-css 5.9.0, its github-markdown.css, copied for shared Markdown files
+  Licence: MIT
+  Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com)
 
 In the web frontend, embedded in the server binary
 ==================================================

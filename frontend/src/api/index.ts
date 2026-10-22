@@ -12,6 +12,7 @@ export interface SessionConfig {
   permissions?: Record<string, boolean>
   yolo?: boolean
   agent?: string
+  temporary?: boolean
 }
 
 export interface AgentInfo {
@@ -96,6 +97,10 @@ export interface Session {
   shared?: boolean
   guest_count?: number
   present?: number
+  // Temporary chats: deleted 24 hours after the last message. expires_at is
+  // when, on this browser's clock (ms), from the server's time left.
+  temporary?: boolean
+  expires_at?: number
 }
 
 /**
@@ -224,10 +229,20 @@ export interface MigrationInfo {
   undo?: boolean
 }
 
+// Present while less than 5% of the workspace's disk is free.
+export interface LowDiskInfo {
+  free: string
+  total: string
+  percent_free: number
+  workspace?: string
+  console_url?: string
+}
+
 export interface BackendStatus {
   status: 'starting' | 'ready' | 'degraded' | 'migrating' | string
   opencode_ready: boolean
   migration?: MigrationInfo
+  disk?: LowDiskInfo
 }
 
 export class BackendUnavailableError extends Error {
@@ -337,6 +352,8 @@ export async function fetchSessions(): Promise<Session[]> {
     shared: s.shared === true,
     guest_count: s.guest_count || 0,
     present: s.present || 0,
+    temporary: s.temporary === true,
+    expires_at: s.temporary === true ? Date.now() + (s.expires_in || 0) * 1000 : undefined,
   }))
 }
 
@@ -363,7 +380,40 @@ export async function createSession(config: SessionConfig & { name?: string }): 
     updated_at: new Date().toISOString(),
     pinned: false,
     favorite: false,
+    temporary: data.config?.temporary === true,
+    expires_at: data.config?.temporary === true ? Date.now() + TEMPORARY_MS : undefined,
   }
+}
+
+export const TEMPORARY_MS = 24 * 60 * 60 * 1000
+
+export interface TemporaryState {
+  temporary: boolean
+  expires_in: number
+  favorite: boolean
+  pinned: boolean
+}
+
+// The chat was a temporary chat, deleted after 24 hours without a message.
+export class ChatGoneError extends Error {}
+
+// A refusal from the server, with its reason for the user.
+export class SessionError extends Error {
+  constructor(public status: number, message: string) {
+    super(message)
+  }
+}
+
+/** Makes a chat temporary, or keeps it (saves it to the history again). */
+export async function setSessionTemporary(id: string, temporary: boolean): Promise<TemporaryState> {
+  const res = await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}/temporary`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ temporary }),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new SessionError(res.status, data.error || res.statusText)
+  return data
 }
 
 /**
@@ -883,6 +933,27 @@ export async function renamePath(src: string, dest: string): Promise<string> {
 }
 
 // Copies a file beside itself (foo.txt -> foo_copy.txt) and returns the copy's path.
+// A link that runs an HTML file's scripts on the preview's own origin.
+export interface PreviewLink {
+  url: string
+  origin: string
+  expires: string
+}
+
+// Fails with the server's reason, "Scripts are off in this preview: …", when
+// there's no preview app to run them in.
+export async function previewLink(path: string): Promise<PreviewLink> {
+  const res = await fetch(`${BASE}/api/files/preview-link`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  })
+  let data: any = null
+  try { data = await res.json() } catch { /* not JSON */ }
+  if (!res.ok) throw new Error(data?.error || `Scripts are off in this preview (${res.status})`)
+  return data as PreviewLink
+}
+
 export async function duplicatePath(src: string): Promise<string> {
   const res = await fetch(`${BASE}/api/files/duplicate`, {
     method: 'POST',
@@ -1089,6 +1160,10 @@ function sseStream(
   fetch(url, { ...init, signal: controller.signal })
     .then(async (res) => {
       if (!res.ok) {
+        if (res.status === 410) {
+          onError(new ChatGoneError((await res.text()).trim()))
+          return
+        }
         const message = `Stream failed: ${res.statusText || res.status}`
         if (isBackendDownStatus(res.status)) {
           onError(backendUnavailable(message))
@@ -1244,6 +1319,116 @@ export const putAudience = (a: ShareAudience) => shareCall<AudienceState>('PUT',
 export async function fetchShareActivity(): Promise<ShareActivity[]> {
   const data = await shareCall<{ sessions: ShareActivity[] }>('GET', '/api/share/activity')
   return data.sessions || []
+}
+
+// ── Shared files (artifacts) ──
+
+export interface ArtifactFinding {
+  // Blocking findings are loads the viewer refuses; the rest may not work.
+  blocking: boolean
+  what: string
+  line: number
+  // Further places with the same finding.
+  more?: number
+}
+
+export type ArtifactStatus = 'shared' | 'off' | 'missing' | 'unavailable' | 'removed' | 'attention' | 'fixing'
+
+export interface Artifact {
+  id: string
+  name: string
+  path: string
+  session_id: string
+  chat_label: string
+  url: string
+  port: number
+  allow_download: boolean
+  shared_at: string
+  updated: string
+  size: number
+  status: ArtifactStatus
+  // Why it isn't shared as it should be, in words.
+  problem?: string
+  online: boolean
+  findings: ArtifactFinding[]
+  // Null when the platform wasn't asked: the request carried no credential.
+  audience: ShareAudience | null
+}
+
+// A background turn making a file self-contained, in a chat of its own.
+export interface ArtifactFix {
+  id: string
+  path: string
+  name: string
+  state: 'running' | 'done' | 'failed'
+  // Why it failed, in words.
+  problem?: string
+  // What's left in a result that still isn't self-contained.
+  findings: ArtifactFinding[]
+  chat_id: string
+  started_at: string
+  finished_at?: string
+}
+
+export interface ArtifactList {
+  artifacts: Artifact[]
+  enabled: boolean
+  limit: number
+  problem?: string
+  // The fixes running, for shared files or not.
+  fixes: ArtifactFix[]
+}
+
+export interface ArtifactCheck {
+  self_contained: boolean
+  findings: ArtifactFinding[]
+}
+
+// A share refused because the file isn't self-contained, with what's wrong.
+export class NotSelfContainedError extends Error {
+  constructor(message: string, readonly findings: ArtifactFinding[]) {
+    super(message)
+    this.name = 'NotSelfContainedError'
+  }
+}
+
+async function artifactCall<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method,
+    headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  let data: any = null
+  try { data = await res.json() } catch { /* not JSON */ }
+  if (!res.ok) {
+    const msg = data?.error || `Sharing request failed (${res.status})`
+    if (Array.isArray(data?.findings)) throw new NotSelfContainedError(msg, data.findings)
+    throw new Error(msg)
+  }
+  return data as T
+}
+
+const artifactPath = (id: string) => `/api/artifacts/${encodeURIComponent(id)}`
+
+export const listArtifacts = () => artifactCall<ArtifactList>('GET', '/api/artifacts')
+export const checkArtifact = (sessionId: string, path: string) =>
+  artifactCall<ArtifactCheck>('POST', '/api/artifacts/check', { session_id: sessionId, path })
+export const shareArtifact = (sessionId: string, path: string, audience: ShareAudience, allowDownload: boolean) =>
+  artifactCall<Artifact>('POST', '/api/artifacts', { session_id: sessionId, path, audience, allow_download: allowDownload })
+export const setArtifactAudience = (id: string, audience: ShareAudience) =>
+  artifactCall<Artifact>('PUT', `${artifactPath(id)}/audience`, audience)
+export const setArtifactDownload = (id: string, allow: boolean) =>
+  artifactCall<Artifact>('PUT', `${artifactPath(id)}/options`, { allow_download: allow })
+export const repairArtifact = (id: string) => artifactCall<Artifact>('POST', `${artifactPath(id)}/repair`)
+export const stopArtifact = (id: string) => artifactCall<{ ok: boolean }>('DELETE', artifactPath(id))
+export const startArtifactFix = (sessionId: string, path: string) =>
+  artifactCall<ArtifactFix>('POST', '/api/artifacts/fixes', { session_id: sessionId, path })
+export const artifactFix = (id: string) =>
+  artifactCall<ArtifactFix>('GET', `/api/artifacts/fixes/${encodeURIComponent(id)}`)
+
+export async function artifactMembers(): Promise<ShareMember[]> {
+  const data = await artifactCall<{ members: ShareMember[] }>('GET', '/api/artifacts/members')
+  return data.members || []
 }
 
 // ── Git sync ──
@@ -1683,6 +1868,20 @@ export interface ModelProvider {
   reachabilityCheckedAt?: string
   /** Whether this workspace can discard the provider's credentials itself. */
   canSignOut?: boolean
+  /** Regional endpoints the administrator offers for this provider. */
+  endpoints?: ProviderEndpoint[]
+  /** The endpoint in use, and whether the workspace chose it rather than the user. */
+  endpoint?: string
+  endpointAuto?: boolean
+}
+
+export interface ProviderEndpoint {
+  id: string
+  label: string
+  /** False until the endpoint has been tried. */
+  measured: boolean
+  reachable: boolean
+  latencyMs?: number
 }
 
 export interface ProviderRegistry {
@@ -1737,6 +1936,17 @@ export async function removeProviderKey(id: string): Promise<{ error?: string }>
 export async function signOutProvider(id: string): Promise<{ error?: string }> {
   const res = await fetch(`${BASE}/api/providers/${encodeURIComponent(id)}/signout`, {
     method: 'POST',
+  })
+  return res.json()
+}
+
+// Chooses a provider's regional endpoint, or 'auto' for the fastest. Choosing
+// 'auto' measures every endpoint again, which takes up to a few seconds.
+export async function setProviderEndpoint(id: string, endpoint: string): Promise<{ error?: string }> {
+  const res = await fetch(`${BASE}/api/providers/${encodeURIComponent(id)}/endpoint`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ endpoint }),
   })
   return res.json()
 }

@@ -15,6 +15,7 @@ import { useMe } from '../../composables/useMe'
 import { useDictation, dictationSupported, dictationMessages } from '../../composables/useDictation'
 import { SLASH_COMMANDS } from '../../utils/constants'
 import { resolvePreset, shortModelName } from '../../utils/models'
+import { vTip } from '../../directives/tip'
 import SlashCommands from './SlashCommands.vue'
 
 const chatStore = useChatStore()
@@ -75,6 +76,11 @@ const armedSkillTitle = computed(() =>
     ? `The ${armedSkill.value.name} skill will be applied to your next message, then cleared.`
     : '')
 
+const connectorsTip = computed(() =>
+  connectorsOn.value ? ` ${connectorsOn.value} connector${connectorsOn.value === 1 ? ' is' : 's are'} on.` : '')
+const toolboxTip = computed(() =>
+  `Turn connectors on or off for this chat, or pick a skill for your next message (${MOD}K).${connectorsTip.value}`)
+
 // One entry point for every way the Toolbox opens: the pill, the armed-skill
 // name, `/skill`, and Cmd/Ctrl+K. `prepareForOpen` clears any stale search;
 // passing a type scopes the modal to the half the caller means.
@@ -100,6 +106,10 @@ const canSend = computed(() => prompt.value.trim() || uploads.attachedFiles.leng
 const isStreaming = computed(() => chatStore.streaming)
 // Legacy GitHub Copilot sessions are read-only: block composing/sending.
 const isDeprecated = computed(() => sessionsStore.currentSessionDeprecated)
+// A dashed outline marks a temporary chat, and New chat with Temporary chat on.
+const looksTemporary = computed(() =>
+  !!sessionsStore.currentSession?.temporary || (ui.newChatTemporary && !sessionsStore.currentMessages.length),
+)
 
 // ── Optimize my prompt ─────────────────────────────────────────────
 // A secondary composer action that rewrites the current draft to be clearer and
@@ -118,6 +128,15 @@ const canOptimize = computed(
   () => !!prompt.value.trim() && !optimizing.value && !isStreaming.value && !isDeprecated.value && !dictActive.value,
 )
 const canUndoOptimize = computed(() => preOptimizeDraft.value !== null && !optimizing.value)
+
+const MOD = /Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘' : 'Ctrl+'
+
+const optimizeTip = computed(() => {
+  if (optimizing.value) return 'Optimizing your draft…'
+  if (isDeprecated.value) return 'Not available in this chat.'
+  if (!prompt.value.trim()) return 'Write a draft first. Then select this to rewrite it so it\'s clearer and more specific. Nothing is sent.'
+  return 'Rewrite your draft so it\'s clearer and more specific. Nothing is sent, and you can undo it.'
+})
 
 async function optimizePrompt() {
   const draft = prompt.value.trim()
@@ -205,6 +224,11 @@ const {
 
 const dictLabel = computed(() =>
   dictState.value === 'finishing' ? 'Finishing' : dictActive.value ? 'Stop dictation' : 'Dictate',
+)
+const dictTip = computed(() =>
+  dictState.value === 'idle'
+    ? 'Dictate: speak, and your words appear in the message box. Nothing is sent until you send it.'
+    : dictLabel.value,
 )
 const dictClock = computed(() => {
   const s = dictElapsed.value
@@ -339,6 +363,7 @@ const selectedTitle = computed(() => {
   if (isThinkingPreset.value || isDefaultPreset.value) return 'Model: ' + selectedLabel.value
   return 'Model: ' + currentModel.value
 })
+const agentTip = computed(() => `Choose the model or agent for this chat. ${selectedTitle.value}`)
 
 async function pickBuiltin(kind: 'default' | 'thinking') {
   showAgentMenu.value = false
@@ -921,10 +946,10 @@ function onPaste(e: ClipboardEvent) {
         <span v-else class="file-icon">📄</span>
         <span class="file-name">{{ f.name }}</span>
         <span v-if="f.uploading" class="file-uploading">⏳</span>
-        <button class="file-remove" @click="uploads.removeFile(idx)" title="Remove">×</button>
+        <button class="file-remove" @click="uploads.removeFile(idx)" v-tip="'Remove this file'" aria-label="Remove this file">×</button>
       </div>
     </div>
-    <div id="input-wrap" :class="{ 'is-streaming': isStreaming, 'is-disabled': isDeprecated }">
+    <div id="input-wrap" :class="{ 'is-streaming': isStreaming, 'is-disabled': isDeprecated, 'is-temporary': looksTemporary }">
       <input
         ref="fileInputEl"
         type="file"
@@ -953,7 +978,7 @@ function onPaste(e: ClipboardEvent) {
             class="ctrl-btn plus-btn"
             :class="{ active: showPlusMenu }"
             @click="togglePlusMenu"
-            title="Add context"
+            v-tip="inProject ? 'Add files or connectors to this chat' : 'Add files, a GitHub repository, a folder or connectors to this chat'"
             aria-label="Add context"
             :disabled="isDeprecated"
           >
@@ -1002,7 +1027,7 @@ function onPaste(e: ClipboardEvent) {
             class="agent-select"
             :class="{ active: showAgentMenu }"
             @click="toggleAgentMenu"
-            :title="selectedTitle"
+            v-tip="agentTip"
             :disabled="isDeprecated"
           >
             <svg class="agent-spark" viewBox="0 0 24 24" fill="currentColor" width="15" height="15" aria-hidden="true"><path d="M12 2l1.6 4.7L18 8.3l-4.4 1.6L12 14.6l-1.6-4.7L6 8.3l4.4-1.6L12 2zM19 13l.9 2.6L22 16.5l-2.1.9L19 20l-.9-2.6L16 16.5l2.1-.9L19 13z"/></svg>
@@ -1099,15 +1124,17 @@ function onPaste(e: ClipboardEvent) {
             type="button"
             class="tbp-seg tbp-label-btn"
             @click="openToolbox()"
+            v-tip="toolboxTip"
             :disabled="isDeprecated"
           >Toolbox</button>
 
-          <span v-if="armedSkill" class="tbp-seg tbp-skill" :title="armedSkillTitle">
+          <span v-if="armedSkill" class="tbp-seg tbp-skill">
             <!-- Clicking the name lands where it used to: the skills half. -->
             <button
               type="button"
               class="tbp-skill-name"
               @click="openToolbox({ type: 'skill' })"
+              v-tip="armedSkillTitle"
               :disabled="isDeprecated"
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13" aria-hidden="true"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4l-6 6a1.5 1.5 0 0 0 2.1 2.1l6-6a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.1-2.1z" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -1118,6 +1145,7 @@ function onPaste(e: ClipboardEvent) {
               class="tbp-clear"
               @click="clearArmedSkill"
               :aria-label="`Clear the ${armedSkill.name} skill`"
+              v-tip="`Clear the ${armedSkill.name} skill`"
               :disabled="isDeprecated"
             >
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.9" width="11" height="11" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke-linecap="round"/></svg>
@@ -1130,10 +1158,11 @@ function onPaste(e: ClipboardEvent) {
             @click="openToolbox()"
             :disabled="isDeprecated"
             :aria-label="armedSkill ? 'Open the Toolbox' : undefined"
+            v-tip="toolboxTip"
           >
             <span v-if="!armedSkill" class="tbp-label">Toolbox</span>
             <!-- Hidden on zero rather than showing a 0. -->
-            <span v-if="connectorsOn" class="tbp-conn" :title="`${connectorsOn} connector${connectorsOn === 1 ? '' : 's'} on for this chat`">
+            <span v-if="connectorsOn" class="tbp-conn">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13" aria-hidden="true"><path d="M9 2v6M15 2v6M7 8h10v3a5 5 0 0 1-10 0zM12 16v6" stroke-linecap="round" stroke-linejoin="round"/></svg>
               {{ connectorsOn }}
             </span>
@@ -1153,7 +1182,7 @@ function onPaste(e: ClipboardEvent) {
           @click="toggleDictation"
           :disabled="isDeprecated || (!dictActive && optimizing)"
           :aria-disabled="dictState === 'finishing' ? 'true' : undefined"
-          :title="dictLabel"
+          v-tip="dictTip"
           :aria-label="dictLabel"
         >
           <svg v-if="dictState === 'finishing'" class="opt-spin" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="28" stroke-dashoffset="10"/></svg>
@@ -1172,7 +1201,7 @@ function onPaste(e: ClipboardEvent) {
           type="button"
           class="optimize-undo"
           @click="undoOptimize"
-          title="Restore what you typed"
+          v-tip="'Restore what you typed before optimizing'"
           aria-label="Undo optimize — restore your original prompt"
         >
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" width="12" height="12" aria-hidden="true"><path d="M4 8H10.5a3 3 0 0 1 0 6H6M4 8l2.5-2.5M4 8l2.5 2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -1182,10 +1211,10 @@ function onPaste(e: ClipboardEvent) {
           v-if="!isStreaming && !dictActive"
           type="button"
           class="ctrl-btn optimize-btn"
-          :class="{ busy: optimizing }"
-          @click="optimizePrompt"
-          :disabled="!canOptimize"
-          title="Rewrite your draft to be clearer and more specific before you send it"
+          :class="{ busy: optimizing, unavailable: !canOptimize }"
+          @click="canOptimize && optimizePrompt()"
+          :aria-disabled="canOptimize ? undefined : 'true'"
+          v-tip="optimizeTip"
           aria-label="Optimize my prompt"
         >
           <!-- Spinner while the rewrite runs -->
@@ -1199,7 +1228,8 @@ function onPaste(e: ClipboardEvent) {
           v-if="isStreaming && canSend && !dictActive"
           class="queue-btn"
           @click="queueCurrentMessage"
-          title="Queue message (Ctrl+Enter) — sends after current finishes"
+          aria-label="Queue message"
+          v-tip="`Queue this message. It's sent when the current response finishes (${MOD}Enter).`"
         >
           <svg viewBox="0 0 16 16" fill="currentColor" width="14" height="14">
             <path d="M2 3.5A1.5 1.5 0 013.5 2h9A1.5 1.5 0 0114 3.5v1A1.5 1.5 0 0112.5 6h-9A1.5 1.5 0 012 4.5v-1zm0 5A1.5 1.5 0 013.5 7h9A1.5 1.5 0 0114 8.5v1a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 012 9.5v-1zm1.5 3.5A1.5 1.5 0 002 13.5v1A1.5 1.5 0 003.5 16h9a1.5 1.5 0 001.5-1.5v-1a1.5 1.5 0 00-1.5-1.5h-9z"/>
@@ -1210,7 +1240,8 @@ function onPaste(e: ClipboardEvent) {
           id="send-btn"
           @click="send"
           :disabled="isDeprecated || (!isStreaming && (!canSend || dictActive))"
-          :title="isStreaming ? 'Stop response' : 'Send (Enter)'"
+          :aria-label="isStreaming ? 'Stop response' : 'Send'"
+          v-tip="isStreaming ? 'Stop the response' : 'Send (Enter). Shift+Enter starts a new line.'"
           :class="{ 'abort-mode': isStreaming }"
         >
           <!-- X/stop icon while a response is running -->
@@ -1235,7 +1266,7 @@ function onPaste(e: ClipboardEvent) {
         <span class="queued-pos">{{ i + 1 }}.</span>
         <span v-if="qm.author_name" class="queued-author">{{ qm.author_name }}:</span>
         <span class="queued-text">{{ qm.prompt.slice(0, 80) }}{{ qm.prompt.length > 80 ? '…' : '' }}</span>
-        <button class="queued-cancel" @click="chatStore.removeQueuedMessage(qm.id)" title="Remove from queue">×</button>
+        <button class="queued-cancel" @click="chatStore.removeQueuedMessage(qm.id)" v-tip="'Remove from queue'" aria-label="Remove from queue">×</button>
       </div>
     </div>
     <p v-if="showDictate" class="sr-only" role="status" aria-live="polite">{{ dictAnnouncement }}</p>
@@ -1271,17 +1302,19 @@ function onPaste(e: ClipboardEvent) {
 #input-wrap {
   max-width: 860px; margin: 0 auto; background: var(--surface);
   border: 1px solid var(--border); border-radius: 16px;
-  display: flex; flex-direction: column; gap: 6px; padding: 10px 12px 10px;
+  display: flex; flex-direction: column; gap: 12px; padding: 12px 12px 10px;
   transition: border-color .15s, box-shadow .15s, background .15s;
 }
 #input-wrap:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(3,169,241,.15); }
 #input-wrap.is-disabled { opacity: .6; }
+#input-wrap.is-temporary { border-style: dashed; border-color: var(--text3); }
+#input-wrap.is-temporary:focus-within { border-color: var(--accent); }
 #input-wrap.is-disabled:focus-within { border-color: var(--border); box-shadow: none; }
 #input-wrap.is-disabled #prompt-input { cursor: not-allowed; }
 #prompt-input {
   background: none; border: none; outline: none; color: var(--text);
   font-size: 15px; line-height: 1.5; resize: none;
-  min-height: 26px; padding: 4px 4px 0; overflow-y: auto; font-family: inherit;
+  min-height: 26px; padding: 4px; overflow-y: auto; font-family: inherit;
   width: 100%; display: block;
   /* Height is driven by the JS auto-resize (grows with content up to ~50vh).
      Do NOT use flex:1 here — in the column-flex wrapper it would override the
@@ -1307,7 +1340,8 @@ function onPaste(e: ClipboardEvent) {
    so it never competes with the primary send button; its one accent is the
    Cobalt light-bulb icon. */
 .optimize-btn .optimize-ico { color: var(--accent); }
-.optimize-btn:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); background: var(--surface2); }
+.optimize-btn:hover:not(.unavailable) { color: var(--accent); border-color: var(--accent); background: var(--surface2); }
+.optimize-btn.unavailable { cursor: default; }
 .optimize-btn.busy { color: var(--accent); border-color: var(--accent); cursor: default; }
 .opt-spin { animation: opt-spin .8s linear infinite; }
 @keyframes opt-spin { to { transform: rotate(360deg); } }
@@ -1556,7 +1590,7 @@ button.tbp-seg:hover:not(:disabled) { color: var(--accent); }
     padding-left: 8px; padding-right: 8px;
     padding-bottom: calc(8px + env(safe-area-inset-bottom));
   }
-  #input-wrap { padding: 8px 10px; gap: 4px; }
+  #input-wrap { padding: 10px 10px 8px; gap: 10px; }
   #prompt-input { font-size: 16px; } /* iOS no-zoom */
   #send-btn, .queue-btn, .ctrl-btn { width: 34px; height: 34px; }
   #input-hint { display: none; }

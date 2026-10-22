@@ -72,11 +72,11 @@ docker pull ghcr.io/strong-network/knowledge-worker-agent:latest
 docker pull strongnetwork/knowledge-worker-agent:latest
 
 # A specific version
-docker pull ghcr.io/strong-network/knowledge-worker-agent:1.5.3
-docker pull strongnetwork/knowledge-worker-agent:1.5.3
+docker pull ghcr.io/strong-network/knowledge-worker-agent:1.5.5
+docker pull strongnetwork/knowledge-worker-agent:1.5.5
 ```
 
-The latest version is **1.5.3**. Every published image is tagged with its version, taken from the
+The latest version is **1.5.5**. Every published image is tagged with its version, taken from the
 [`VERSION`](VERSION) file, and `latest` moves to the most recently published one. Pin the version
 tag for anything repeatable, and the digest where you need the exact image. Images are
 `linux/amd64`.
@@ -88,6 +88,8 @@ tag for anything repeatable, and the digest where you need the exact image. Imag
 - Source control for chats that work in a Git repository
 - Connectors (MCP servers), including a built-in catalogue that's registered switched off
 - Projects, scheduled tasks, saved prompts, chat sharing, and local dictation
+- **Sharing files**: a report or dashboard from a chat, shared with chosen people in the project, who
+  always see its latest version. See [Sharing files](https://docs.citrix.com/en-us/securspaces/knowledge-worker-agent/about/sharing-files.html).
 - **Recall**: the assistant can search the user's own past chats, read-only, with day notes
 - **Central configuration**: agents, skills, context, connectors, model providers, and dictation
   vocabularies assigned per project from one Git repository. See [`examples/config-repo`](examples/config-repo)
@@ -178,7 +180,7 @@ internal/
   ├── daynotes/            Day notes: per-(chat, day) summaries and the capped backlog job
   ├── mcprecall/           The `recall` MCP server — JSON-RPC on stdio, bridged to the recall endpoints
   ├── obsidianinstaller/   Obsidian MCP auto-install + vault bootstrap
-  └── defaults/            Embedded document skills + opencode plugins, installed at startup
+  └── defaults/            Embedded document and report skills + opencode plugins, installed at startup
 frontend/                  Vue 3 + TypeScript + Pinia SPA
 ```
 

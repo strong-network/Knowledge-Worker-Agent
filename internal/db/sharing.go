@@ -21,7 +21,7 @@ func AddUserMessage(sessionID, content, authorID, authorName, turnID string) err
 		sessionID, content, id, name, nullable(turnID),
 	)
 	if err == nil {
-		DB.Exec(`UPDATE sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`, sessionID)
+		DB.Exec(`UPDATE sessions SET updated_at = CURRENT_TIMESTAMP, activity_at = CURRENT_TIMESTAMP WHERE id = ?`, sessionID)
 	}
 	return err
 }

@@ -365,6 +365,16 @@ func HandleFileUpload(w http.ResponseWriter, r *http.Request) {
 
 // HandleFileDelete deletes a file or directory (recursive for directories).
 // Body: { "path": "/abs/path" }
+// What other packages keep about a path follows the owner's file routes;
+// main sets these.
+var (
+	// AfterRename runs once src, a file or a folder, has moved to dest.
+	AfterRename = func(src, dest string) {}
+	// BeforeDelete runs before path, a file or a folder, is removed, inside
+	// the request that removes it.
+	BeforeDelete = func(r *http.Request, path string) {}
+)
+
 func HandleFileDelete(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Path string `json:"path"`
@@ -391,6 +401,7 @@ func HandleFileDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Path not found", http.StatusNotFound)
 		return
 	}
+	BeforeDelete(r, abs)
 	if err := os.RemoveAll(abs); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -445,6 +456,7 @@ func HandleFileRename(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	AfterRename(src, dest)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "src": src, "path": dest})
 }
 

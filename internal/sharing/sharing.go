@@ -237,6 +237,10 @@ func HandleStart(w http.ResponseWriter, r *http.Request) {
 		changeOptions(w, r, sid, change)
 		return
 	}
+	if cfg, _ := db.GetSessionConfig(sid); cfg.Temporary {
+		writeFailure(w, &failure{http.StatusConflict, "Temporary chats can't be shared. Keep the chat first."})
+		return
+	}
 	if _, up := guestPort(); !up {
 		// Not 503: a workspace proxy may drop a 503's body, and the UI shows this message.
 		writeFailure(w, &failure{http.StatusConflict, "Sharing is unavailable in this workspace."})

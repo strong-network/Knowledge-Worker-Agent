@@ -46,7 +46,7 @@ export const useUiStore = defineStore('ui', () => {
   // Projects: which top-level view is showing. 'chat' is the normal chat surface;
   // 'project' shows the ProjectView for activeProjectId. This app has no
   // router, so navigation is a simple reactive view switch.
-  const activeView = ref<'chat' | 'project' | 'scheduled'>('chat')
+  const activeView = ref<'chat' | 'project' | 'scheduled' | 'artifacts'>('chat')
   const activeProjectId = ref<string | null>(null)
 
   // Scheduled tasks: which scheduled task the editor modal is editing (null = creating a
@@ -136,8 +136,8 @@ export const useUiStore = defineStore('ui', () => {
   const filePanelStoredReadingWidth = ref<number | null>(readNumber(FILE_PANEL_READING_WIDTH_KEY))
   const filePanelReading = ref<boolean>(false)
   const filePanelCollapsed = ref<boolean>(false)
-  // In-place collapse of the Files widget body (list hidden, header kept) —
-  // mirrors the Plan & progress widget. Persisted.
+  // In-place collapse of the Files widget body (list hidden, header kept).
+  // Persisted.
   const filePanelBodyCollapsed = ref<boolean>(localStorage.getItem('filePanelBodyCollapsed') === '1')
   function setFilePanelBodyCollapsed(v: boolean) {
     filePanelBodyCollapsed.value = v
@@ -195,6 +195,10 @@ export const useUiStore = defineStore('ui', () => {
   // panel, incl. its markdown preview) is hidden below 900px to keep the chat
   // readable. This opens it as a full-screen overlay instead.
   const mobileFilesOpen = ref(false)
+
+  // The New chat page's Temporary chat toggle. It applies to the next chat
+  // started from that page, then turns off; a reload turns it off too.
+  const newChatTemporary = ref(false)
   function toggleMobileFiles() {
     mobileFilesOpen.value = !mobileFilesOpen.value
     // Opening from the header implies "show me the files", so make sure a
@@ -205,6 +209,20 @@ export const useUiStore = defineStore('ui', () => {
     }
   }
   function closeMobileFiles() { mobileFilesOpen.value = false }
+
+  // Whether the Files widget beside the chat is put away, with the header's
+  // Files button. It's the person's choice rather than the chat's, so it holds
+  // across chats and reloads. Narrow screens use mobileFilesOpen instead.
+  const filesHidden = ref<boolean>(localStorage.getItem('filesPanelHidden') === '1')
+  function toggleFilesPanel() {
+    filesHidden.value = !filesHidden.value
+    localStorage.setItem('filesPanelHidden', filesHidden.value ? '1' : '0')
+    // Showing it means "show me the files": not just the widget's header.
+    if (!filesHidden.value) setFilePanelBodyCollapsed(false)
+  }
+  // How many entries the open chat's Files widget marks new or updated, for
+  // the header's Files button.
+  const fileChangeCount = ref(0)
 
   // User-initiated collapse/expand of the file panel (records an override).
   function toggleFilePanelCollapsed() {
@@ -294,6 +312,11 @@ export const useUiStore = defineStore('ui', () => {
     activeView.value = 'scheduled'
   }
 
+  // openArtifacts shows the shared files.
+  function openArtifacts() {
+    activeView.value = 'artifacts'
+  }
+
   // openScheduledTaskEditor opens the create/edit task modal. Pass a task id to
   // edit, or null to create a new task.
   function openScheduledTaskEditor(id: string | null) {
@@ -304,13 +327,15 @@ export const useUiStore = defineStore('ui', () => {
   return {
     theme, sidebarOpen, activeModal,
     activeView, activeProjectId, openProject, showChat,
-    editingScheduledTaskId, openScheduled, openScheduledTaskEditor,
+    editingScheduledTaskId, openScheduled, openScheduledTaskEditor, openArtifacts,
     sidebarCollapsed, sidebarWidth, setSidebarWidth,
     filePanelWidth, filePanelCollapsed, filePanelManualCollapse,
     filePanelBodyCollapsed, setFilePanelBodyCollapsed,
     filePanelReading, setFilePanelReading,
     revealFiles, filesRevealed,
     mobileFilesOpen, toggleMobileFiles, closeMobileFiles,
+    filesHidden, toggleFilesPanel, fileChangeCount,
+    newChatTemporary,
     setFilePanelWidth, toggleFilePanelCollapsed, autoSetFilePanelCollapsed, resetFilePanelManual,
     setTheme, toggleTheme, initTheme, toggleSidebar, closeSidebar,
     toggleSidebarCollapsed, setSidebarCollapsed,

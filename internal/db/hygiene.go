@@ -5,6 +5,7 @@ package db
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"time"
 
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/config"
@@ -48,6 +49,7 @@ func EmptyChatCandidates(now time.Time, idleFor time.Duration) []EmptyChat {
 		return out
 	}
 	cutoff := now.Add(-idleFor)
+	sharedFolders := SharedArtifactFolders()
 
 	// Note the draft condition: drafts deliberately do not bump updated_at (a
 	// draft should not promote a chat to the top of the sidebar), so a chat
@@ -79,7 +81,7 @@ func EmptyChatCandidates(now time.Time, idleFor time.Duration) []EmptyChat {
 		}
 		var cfg config.SessionConfig
 		_ = json.Unmarshal([]byte(cfgJSON), &cfg)
-		if cfg.Keep {
+		if cfg.Keep || sharedFolders[filepath.Clean(cfg.Workdir)] {
 			continue
 		}
 		out = append(out, EmptyChat{ID: id, Workdir: cfg.Workdir, Label: cfg.Label})

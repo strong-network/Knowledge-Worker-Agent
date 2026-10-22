@@ -21,7 +21,10 @@
 //     Citrix opinion, and pdf-guard.js actively directs the model to the `pdf`
 //     skill when it drops an attachment the provider cannot accept. Leaving
 //     that skill to the config repo would mean a workspace whose guard
-//     recommends a capability it does not have.
+//     recommends a capability it does not have. With them, the
+//     reports-and-dashboards skill: it states the rules of the product's own
+//     preview and shared files, so a report works in both as written. Central
+//     configuration can assign its own copy, which hides this one.
 //
 // Both install in every workspace, centrally managed or not.
 package defaults

@@ -7,9 +7,12 @@
 // map, keyed by full path), recurses into its children at `depth + 1`. This is
 // what makes the tree work at arbitrary depth — the parent panel only owns the
 // state and actions; rendering nests through this component.
+import { computed, nextTick, ref, watch } from 'vue'
 import type { FileEntry } from '../../api'
+import type { FileSharing } from '../../api/files'
+import ActionMenu, { type MenuEntry } from '../ActionMenu.vue'
 
-defineProps<{
+const props = defineProps<{
   entry: FileEntry
   // Siblings of `entry` within its own folder — used for rename-collision checks.
   siblings: FileEntry[]
@@ -21,19 +24,24 @@ defineProps<{
   // False for a guest of a shared chat: no rename, delete or moving.
   canModify: boolean
   canDuplicate: boolean
+  // Offer to open a file in a window of its own.
+  canPopOut: boolean
   // The file being dragged, and the folder it would be dropped into.
   dragPath: string
   dropTarget: string
+  sharing?: FileSharing
   // Actions (stable references passed down from the panel).
   isChanged: (path: string) => boolean
   iconFor: (entry: FileEntry) => string
   openFile: (entry: FileEntry) => void
   startRename: (entry: FileEntry) => void
-  commitRename: (entry: FileEntry, siblings: FileEntry[]) => void
-  cancelRename: () => void
+  commitRename: (entry: FileEntry, siblings: FileEntry[], refocus?: boolean) => void
+  cancelRename: (refocus?: boolean) => void
   deleteEntry: (entry: FileEntry) => void
   downloadEntry: (entry: FileEntry) => void
   duplicateEntry: (entry: FileEntry) => void
+  copyEntry: (entry: FileEntry) => void
+  popOutEntry: (entry: FileEntry) => void
   dragStart: (entry: FileEntry, e: DragEvent) => void
   dragOver: (entry: FileEntry, e: DragEvent) => void
   dropOn: (e: DragEvent) => void
@@ -46,12 +54,68 @@ const renameValue = defineModel<string>('renameValue', { required: true })
 // Base indent per level (matches the previous fixed 20px for level 1, but now
 // scales with depth). Level 0 rows get no extra indent.
 const INDENT_PER_LEVEL = 14
+
+const marker = computed(() => (props.entry.is_dir ? null : props.sharing?.marker(props.entry.path) ?? null))
+const shareable = computed(() =>
+  (!!props.sharing?.share || !!props.sharing?.shareBlocked) && !!props.sharing?.canShare?.(props.entry),
+)
+const fixing = computed(() => !props.entry.is_dir && !!props.sharing?.fixing?.(props.entry.path))
+
+// Files whose contents can be copied as text.
+const TEXT_EXTS = new Set([
+  'md', 'markdown', 'mdx', 'txt', 'csv', 'tsv', 'json', 'jsonl', 'yaml', 'yml', 'toml', 'ini', 'xml',
+  'html', 'htm', 'css', 'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'vue', 'py', 'go', 'java', 'kt', 'c',
+  'h', 'cpp', 'cs', 'rs', 'rb', 'php', 'sh', 'bash', 'ps1', 'sql', 'log', 'env', 'tex', 'rst',
+])
+const isText = computed(() => {
+  const name = props.entry.name
+  const dot = name.lastIndexOf('.')
+  return dot <= 0 || TEXT_EXTS.has(name.slice(dot + 1).toLowerCase())
+})
+
+// The row's ⋯ menu.
+const actionsName = computed(() => `Actions for "${props.entry.name}"`)
+const items = computed<MenuEntry[]>(() => {
+  const e = props.entry
+  const list: MenuEntry[] = []
+  if (!e.is_dir && props.canPopOut) list.push({ label: 'Open in new window', action: () => props.popOutEntry(e) })
+  if (!e.is_dir && isText.value) list.push({ label: 'Copy contents', action: () => props.copyEntry(e) })
+  list.push({ label: e.is_dir ? 'Download as .zip' : 'Download', action: () => props.downloadEntry(e) })
+  if (shareable.value) {
+    const sharing = props.sharing!
+    list.push({
+      label: marker.value ? 'Change sharing' : 'Share',
+      unavailable: sharing.share ? undefined : sharing.shareBlocked,
+      action: () => sharing.share?.(e),
+    })
+  }
+  if (props.canModify) {
+    list.push({ label: 'Rename', action: () => props.startRename(e) })
+    if (props.canDuplicate && !e.is_dir) list.push({ label: 'Duplicate', action: () => props.duplicateEntry(e) })
+    list.push('divider', { label: 'Delete', danger: true, action: () => props.deleteEntry(e) })
+  }
+  return list
+})
+
+// The name field takes focus when a rename starts, with the name selected
+// up to its extension.
+const renameInput = ref<HTMLInputElement | null>(null)
+watch(() => props.renamingPath === props.entry.path, async (renaming) => {
+  if (!renaming) return
+  await nextTick()
+  const input = renameInput.value
+  if (!input) return
+  input.focus()
+  const dot = props.entry.is_dir ? -1 : input.value.lastIndexOf('.')
+  input.setSelectionRange(0, dot > 0 ? dot : input.value.length)
+}, { immediate: true })
 </script>
 
 <template>
   <div
     class="fp-row"
     :class="{ dir: entry.is_dir, dragging: dragPath === entry.path, 'drop-target': entry.is_dir && dropTarget === entry.path }"
+    :data-path="entry.path"
     :style="{ paddingLeft: 6 + depth * INDENT_PER_LEVEL + 'px' }"
     :draggable="canModify && !entry.is_dir && renamingPath !== entry.path"
     @click="openFile(entry)"
@@ -65,26 +129,23 @@ const INDENT_PER_LEVEL = 14
     <span class="fp-icon">{{ iconFor(entry) }}</span>
     <input
       v-if="renamingPath === entry.path"
+      ref="renameInput"
       class="fp-rename"
       v-model="renameValue"
+      aria-label="Name"
       @click.stop
-      @keydown.enter.stop.prevent="commitRename(entry, siblings)"
-      @keydown.esc.stop.prevent="cancelRename"
+      @keydown.enter.stop.prevent="commitRename(entry, siblings, true)"
+      @keydown.esc.stop.prevent="cancelRename(true)"
       @blur="commitRename(entry, siblings)"
-      autofocus spellcheck="false"
+      spellcheck="false"
     />
     <span v-else class="fp-name">{{ entry.name }}</span>
-    <span v-if="isChanged(entry.path)" class="fp-dot" title="New or modified" aria-hidden="true"></span>
-    <span class="fp-row-actions" @click.stop>
-      <button @click="downloadEntry(entry)" :title="entry.is_dir ? 'Download as .zip' : 'Download'">⬇</button>
-      <template v-if="canModify">
-        <button @click="startRename(entry)" title="Rename">✎</button>
-        <button v-if="canDuplicate && !entry.is_dir" @click="duplicateEntry(entry)" title="Duplicate" aria-label="Duplicate">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" width="11" height="11"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke-linecap="round"/></svg>
-        </button>
-        <button class="danger" @click="deleteEntry(entry)" title="Delete">🗑</button>
-      </template>
+    <span v-if="marker" class="fp-shared" :class="{ attention: marker.attention }" role="img" :aria-label="marker.label" :title="marker.label">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13" aria-hidden="true"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.6-3.2 2.8-5 5.5-5s4.9 1.8 5.5 5" stroke-linecap="round"/><path d="M15.5 5.2a3 3 0 0 1 0 5.6M17.5 14.4c1.7.6 2.8 2.2 3.1 4.6" stroke-linecap="round"/></svg>
     </span>
+    <span v-if="fixing" class="fp-fixing" title="It's being made self-contained in the background.">Fixing</span>
+    <span v-if="isChanged(entry.path)" class="fp-dot" title="New or modified" aria-hidden="true"></span>
+    <ActionMenu v-if="renamingPath !== entry.path" class="fp-row-menu" :items="items" :label="actionsName" :menu-label="actionsName" />
   </div>
 
   <!-- Expanded children: recurse to arbitrary depth. -->
@@ -99,8 +160,10 @@ const INDENT_PER_LEVEL = 14
       :renaming-path="renamingPath"
       :can-modify="canModify"
       :can-duplicate="canDuplicate"
+      :can-pop-out="canPopOut"
       :drag-path="dragPath"
       :drop-target="dropTarget"
+      :sharing="sharing"
       v-model:rename-value="renameValue"
       :is-changed="isChanged"
       :icon-for="iconFor"
@@ -111,6 +174,8 @@ const INDENT_PER_LEVEL = 14
       :delete-entry="deleteEntry"
       :download-entry="downloadEntry"
       :duplicate-entry="duplicateEntry"
+      :copy-entry="copyEntry"
+      :pop-out-entry="popOutEntry"
       :drag-start="dragStart"
       :drag-over="dragOver"
       :drop-on="dropOn"
@@ -120,8 +185,10 @@ const INDENT_PER_LEVEL = 14
 </template>
 
 <style scoped>
+/* 3px rather than 6px of padding: the ⋯ is 24px tall, so the row keeps its
+   height. */
 .fp-row {
-  display: flex; align-items: center; gap: 6px; padding: 6px 6px;
+  display: flex; align-items: center; gap: 6px; padding: 3px 6px;
   border-radius: 6px; cursor: pointer; font-size: 14px; color: var(--text);
   white-space: nowrap; overflow: hidden; transition: background .1s;
 }
@@ -140,18 +207,27 @@ const INDENT_PER_LEVEL = 14
   width: 7px; height: 7px; border-radius: 50%; background: var(--green);
   flex-shrink: 0; box-shadow: 0 0 0 2px rgba(110,184,157,.2);
 }
+.fp-shared { display: inline-flex; flex-shrink: 0; color: var(--accent); }
+.fp-shared.attention { color: var(--orange); }
+.fp-fixing {
+  flex-shrink: 0; font-size: 10px; font-weight: 700; line-height: 1.4; padding: 0 5px;
+  color: var(--orange); border: 1px solid currentColor; border-radius: 4px;
+}
+.fp-shared svg { display: block; }
 .fp-rename {
   flex: 1; min-width: 0; padding: 2px 5px; font-size: 12px;
   border: 1px solid var(--accent); border-radius: 4px;
   background: var(--surface); color: var(--text); font-family: var(--mono);
 }
-.fp-row-actions { display: none; flex-shrink: 0; gap: 1px; margin-left: auto; }
-.fp-row:hover .fp-row-actions { display: inline-flex; }
-.fp-row-actions button {
-  padding: 1px 5px; font-size: 11px; border: none; border-radius: 4px;
-  background: none; color: var(--text2); cursor: pointer;
+/* The ⋯ keeps its place at the end of the row, so the name doesn't reflow
+   when it shows: while the row is hovered, holds focus or has its menu open,
+   and always on touch screens, which have no hover. */
+.fp-row-menu { margin-left: auto; opacity: 0; pointer-events: none; }
+.fp-row:hover .fp-row-menu,
+.fp-row:focus-within .fp-row-menu,
+.fp-row-menu.open { opacity: 1; pointer-events: auto; }
+.fp-row:has(.fp-row-menu.open) { background: var(--surface2); }
+@media (pointer: coarse) {
+  .fp-row-menu { opacity: 1; pointer-events: auto; }
 }
-.fp-row-actions svg { display: block; }
-.fp-row-actions button:hover { background: var(--surface3); color: var(--text); }
-.fp-row-actions button.danger:hover { background: rgba(218,63,63,.14); color: var(--red); }
 </style>

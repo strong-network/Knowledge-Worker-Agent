@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -39,7 +38,6 @@ func Supervisor() *opencodeserver.Supervisor {
 	serverSupervisor = opencodeserver.NewSupervisor(opencodeserver.Options{
 		Bin:      config.OpencodeBin,
 		Hostname: "127.0.0.1",
-		Env:      os.Environ(),
 	})
 	return serverSupervisor
 }

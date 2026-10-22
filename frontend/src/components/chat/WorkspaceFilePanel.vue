@@ -11,8 +11,10 @@ import { useUiStore } from '../../stores/ui'
 import { useSessionsStore } from '../../stores/sessions'
 import { useChatStore } from '../../stores/chat'
 import { useUploadsStore } from '../../stores/uploads'
+import { useArtifactsStore } from '../../stores/artifacts'
 import type { FileEntry } from '../../api'
-import { ownerFileApi } from '../../api/files'
+import { ownerFileApi, type FileSharing } from '../../api/files'
+import { canShareFile, markerFor } from '../../utils/artifacts'
 import FileBrowser from './FileBrowser.vue'
 import { useDocWindow } from '../../composables/useDocWindow'
 
@@ -20,6 +22,7 @@ const ui = useUiStore()
 const sessionsStore = useSessionsStore()
 const chatStore = useChatStore()
 const uploadsStore = useUploadsStore()
+const artifacts = useArtifactsStore()
 
 // Props: by default the panel is the chat-docked Files widget fixed to the
 // current chat's workspace. `rootPath` overrides that root (the project
@@ -34,6 +37,30 @@ const props = withDefaults(defineProps<{ rootPath?: string; embedded?: boolean }
 // ── Workspace root (the current chat's workspace, or an explicit override) ──
 const workspace = computed(() => props.rootPath || sessionsStore.currentSession?.workspace || '')
 const browser = ref<InstanceType<typeof FileBrowser> | null>(null)
+
+// Shared files are marked wherever they show; they're shared from a chat's
+// widget, since an artifact is anchored on its chat's folder.
+const chatId = computed(() => (props.rootPath || props.embedded ? '' : sessionsStore.currentSessionId || ''))
+const sharing = computed<FileSharing>(() => {
+  const base = {
+    marker: (path: string) => markerFor(artifacts.byPath.get(path)),
+    sharedIn: (path: string) => artifacts.list.filter(a => a.path === path || a.path.startsWith(path + '/')).length,
+    changed: () => { void artifacts.load() },
+    fixing: (path: string) => artifacts.fixingAt.has(path),
+  }
+  const sid = chatId.value
+  if (!sid || !artifacts.enabled) return base
+  const root = workspace.value
+  const canShare = (e: FileEntry) => canShareFile(root, e)
+  // A temporary chat's files can't be shared: they're deleted with it.
+  if (sessionsStore.currentSession?.temporary) return { ...base, canShare, shareBlocked: 'Keep the chat to share it' }
+  return {
+    ...base,
+    canShare,
+    share: (e: FileEntry) => artifacts.openShare(sid, e.path),
+  }
+})
+watch(workspace, (w) => { if (w) void artifacts.load() }, { immediate: true })
 
 // The pop-out document window. While it is open it becomes the reading
 // surface: the panel stays on the file list and sends clicks over there.
@@ -56,11 +83,23 @@ function onOpenChange(open: boolean) {
   if (!props.embedded) ui.setFilePanelReading(open)
 }
 
-// Body collapse (matches the Plan & progress widget): collapses the file list
+// Body collapse: collapses the file list
 // in place while keeping the "Files" header visible, toggled by a rotating
-// chevron. Persisted so it survives reloads like other panel prefs.
-const bodyCollapsed = ref(ui.filePanelBodyCollapsed)
-watch(bodyCollapsed, (v) => ui.setFilePanelBodyCollapsed(v))
+// chevron. Persisted so it survives reloads like other panel prefs. Read
+// through from the store, so opening the files from the header expands it.
+const bodyCollapsed = computed({
+  get: () => ui.filePanelBodyCollapsed,
+  set: (v: boolean) => ui.setFilePanelBodyCollapsed(v),
+})
+
+// The header's Files button puts the widget away; it still lists the folder,
+// so new files are counted on the button meanwhile.
+const shown = computed(() =>
+  revealed.value && !collapsed.value && (props.embedded || ui.mobileFilesOpen || !ui.filesHidden),
+)
+function onChanges(count: number) {
+  if (!props.embedded) ui.fileChangeCount = count
+}
 
 // ── Is there anything here worth showing? ──
 // A brand-new chat workspace is not empty on disk: the platform scaffolds
@@ -113,7 +152,11 @@ watch(
   },
 )
 watch(() => chatStore.streaming, (isStreaming, was) => {
-  if (was && !isStreaming) refresh()
+  if (was && !isStreaming) {
+    refresh()
+    // A turn may have changed a shared file, so whether it still passes.
+    if (artifacts.list.length) void artifacts.load()
+  }
 })
 
 // Also poll while streaming so writes appear promptly even if a tool name
@@ -143,13 +186,16 @@ watch(() => ui.mobileFilesOpen, (open) => {
 onBeforeUnmount(() => {
   if (pollTimer) clearInterval(pollTimer)
   // Don't strand the column at reading width once this panel is gone.
-  if (!props.embedded) ui.setFilePanelReading(false)
+  if (!props.embedded) {
+    ui.setFilePanelReading(false)
+    ui.fileChangeCount = 0
+  }
 })
 </script>
 
 <template>
-  <!-- Collapsed: a compact card in the shared right-side widget column
-       (matches the Plan & progress card); a click/chevron expands the panel. -->
+  <!-- Collapsed: a compact card in the right-hand column;
+       a click/chevron expands the panel. -->
   <div v-if="revealed && collapsed" class="fp-rail" @click="ui.toggleFilePanelCollapsed()" role="button" aria-label="Show files">
     <span class="fp-rail-icon" aria-hidden="true">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="15" height="15">
@@ -166,22 +212,23 @@ onBeforeUnmount(() => {
     ref="browser"
     :api="ownerFileApi"
     :root="workspace"
-    :shown="revealed && !collapsed"
+    :shown="shown"
     :embedded="embedded"
     can-pop-out
     :open-elsewhere="openElsewhere"
+    :sharing="sharing"
     v-model:body-collapsed="bodyCollapsed"
     :class="{ 'mobile-open': ui.mobileFilesOpen }"
     @open-change="onOpenChange"
     @listed="detectContent"
     @refreshed="docWindow.notifyRefresh()"
+    @changes="onChanges"
     @pop-out="docWindow.openDocument($event)"
   />
 </template>
 
 <style scoped>
-/* Collapsed Files card — mirrors the Plan & progress header card so the two
-   floating panels share a consistent design in the right-side stack. */
+/* Collapsed Files card. */
 .fp-rail {
   width: 100%;
   display: flex; align-items: center; gap: 8px;

@@ -6,9 +6,9 @@
 // widget and a guest's shared chat both use. It renders from props
 // and talks to files only through `api`, so it knows no stores. When to show
 // it and when to refresh it belong to the host.
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import type { FileEntry } from '../../api'
-import type { FileApi } from '../../api/files'
+import type { FileApi, FileSharing } from '../../api/files'
 import FileTreeNode from './FileTreeNode.vue'
 import DocumentView from './DocumentView.vue'
 import { triggerDownload } from '../../utils/download'
@@ -26,6 +26,7 @@ const props = withDefaults(defineProps<{
   canPopOut?: boolean
   // Takes a file to be read somewhere else instead of here, when it returns true.
   openElsewhere?: (path: string) => boolean
+  sharing?: FileSharing
 }>(), { shown: true, embedded: false, canPopOut: false })
 
 const bodyCollapsed = defineModel<boolean>('bodyCollapsed', { default: false })
@@ -35,6 +36,8 @@ const emit = defineEmits<{
   listed: [entries: FileEntry[]]
   refreshed: []
   'pop-out': [path: string]
+  // How many entries are marked new or updated.
+  changes: [count: number]
 }>()
 
 // Browse state.
@@ -273,27 +276,66 @@ function downloadEntry(entry: FileEntry) {
   triggerDownload(props.api.downloadUrl(entry.path))
 }
 
+// The file as text on the clipboard, saying so only once it's there.
+async function copyEntry(entry: FileEntry) {
+  try {
+    const data = await props.api.view(entry.path)
+    if (data.type !== 'text') throw new Error('not text')
+    await navigator.clipboard.writeText(data.content)
+    ;(window as any).showToast?.(`Copied "${entry.name}"`)
+  } catch {
+    ;(window as any).showToast?.(`Couldn't copy "${entry.name}". Try again, or download the file.`)
+  }
+}
+
+// Straight to a window of its own, from the list. On the click path, as
+// popOut() is.
+function popOutEntry(entry: FileEntry) {
+  changedPaths.value.delete(entry.path)
+  emit('pop-out', entry.path)
+}
+
+// Focus goes back to a row's ⋯ once the list has caught up.
+const panelEl = ref<HTMLElement | null>(null)
+function rowMenu(path: string): HTMLElement | null {
+  return panelEl.value?.querySelector<HTMLElement>(`.fp-row[data-path="${CSS.escape(path)}"] .am-trigger`) ?? null
+}
+function focusRowMenu(path: string) {
+  void nextTick(() => rowMenu(path)?.focus())
+}
+
 const renamingPath = ref('')
 const renameValue = ref('')
 function startRename(entry: FileEntry) {
   renamingPath.value = entry.path
   renameValue.value = entry.name
 }
-function cancelRename() { renamingPath.value = ''; renameValue.value = '' }
-async function commitRename(entry: FileEntry, siblings: FileEntry[]) {
+// Enter and Escape hand focus back to the row's ⋯; a click elsewhere
+// leaves it where it went.
+function cancelRename(refocus = false) {
+  const path = renamingPath.value
+  renamingPath.value = ''
+  renameValue.value = ''
+  if (refocus && path) focusRowMenu(path)
+}
+async function commitRename(entry: FileEntry, siblings: FileEntry[], refocus = false) {
+  if (renamingPath.value !== entry.path) return
   const next = renameValue.value.trim()
-  if (!next || next === entry.name || !props.api.rename) { cancelRename(); return }
+  if (!next || next === entry.name || !props.api.rename) { cancelRename(refocus); return }
   if (next.includes('/')) { (window as any).showToast?.('Name cannot contain "/"'); return }
   if (siblings.some(x => x.name === next && x.path !== entry.path)) {
     ;(window as any).showToast?.(`"${next}" already exists`)
     return
   }
   const dest = joinPath(dirOf(entry.path), next)
+  const shared = props.sharing?.sharedIn(entry.path) || 0
   try {
     await props.api.rename(entry.path, dest)
+    if (shared) props.sharing?.changed()
     cancelRename()
     if (openPath.value === entry.path) { openPath.value = dest; openName.value = next }
     await fullRefresh()
+    if (refocus) focusRowMenu(dest)
   } catch (err) {
     ;(window as any).showToast?.(err instanceof Error ? err.message : 'Rename failed')
   }
@@ -302,12 +344,29 @@ async function commitRename(entry: FileEntry, siblings: FileEntry[]) {
 async function deleteEntry(entry: FileEntry) {
   if (!props.api.remove) return
   const label = entry.is_dir ? `folder "${entry.name}" and all its contents` : `file "${entry.name}"`
-  if (!window.confirm(`Delete ${label}? This cannot be undone.`)) return
+  const shared = props.sharing?.sharedIn(entry.path) || 0
+  const ask = !shared
+    ? `Delete ${label}? This cannot be undone.`
+    : `Stop sharing and delete ${label}?\n\n` +
+      (entry.is_dir ? `It holds ${shared} shared ${shared === 1 ? 'file' : 'files'}. ` : '') +
+      `Everyone you shared ${shared === 1 ? 'it' : 'them'} with loses access. This cannot be undone.`
+  if (!window.confirm(ask)) return
+  // Focus moves on to the next row, else the one before, else Upload file.
+  const rows = Array.from(panelEl.value?.querySelectorAll<HTMLElement>('.fp-row[data-path]') ?? [])
+    .map(el => el.dataset.path!)
+  const at = rows.indexOf(entry.path)
+  const after = rows.slice(at + 1).find(p => !p.startsWith(entry.path + '/'))
+  const near = at < 0 ? undefined : after ?? rows[at - 1]
   try {
     await props.api.remove(entry.path)
+    if (shared) props.sharing?.changed()
     if (openPath.value === entry.path || openPath.value.startsWith(entry.path + '/')) closeFile()
     delete expanded.value[entry.path]
     await fullRefresh()
+    await nextTick()
+    const target = near ? rowMenu(near) : null
+    if (target) target.focus()
+    else panelEl.value?.querySelector<HTMLElement>('.fp-upload')?.focus()
   } catch (err) {
     ;(window as any).showToast?.(err instanceof Error ? err.message : 'Delete failed')
   }
@@ -373,7 +432,9 @@ async function moveFile(src: string, dir: string) {
       ;(window as any).showToast?.(`"${name}" already exists in ${where}`)
       return
     }
+    const shared = props.sharing?.sharedIn(src) || 0
     await props.api.rename(src, joinPath(dir, name))
+    if (shared) props.sharing?.changed()
     ;(window as any).showToast?.(`Moved "${name}" to ${where}`)
     await fullRefresh()
   } catch (err) {
@@ -420,6 +481,21 @@ function isChanged(path: string): boolean {
   return false
 }
 
+// The marked rows: a collapsed folder counts once, an open one by what's
+// marked inside it.
+const changeCount = computed(() => {
+  let n = 0
+  const walk = (list: FileEntry[]) => {
+    for (const e of list) {
+      if (e.is_dir && expanded.value[e.path]) walk(expanded.value[e.path])
+      else if (isChanged(e.path)) n++
+    }
+  }
+  walk(entries.value)
+  return n
+})
+watch(changeCount, (n) => emit('changes', n), { immediate: true })
+
 // Reload whenever the root changes (chat switch, or a project's workspace).
 watch(() => props.root, () => {
   if (openPath.value && !dirty.value) closeFile()
@@ -452,6 +528,7 @@ defineExpose({ refresh: fullRefresh })
 <template>
   <div
     v-if="shown"
+    ref="panelEl"
     class="file-panel"
     :class="{ editing: isOpen, fullscreen, embedded, 'body-collapsed': bodyCollapsed && !isOpen }"
     @dragover="dragOver(null, $event)"
@@ -463,7 +540,7 @@ defineExpose({ refresh: fullRefresh })
       <div class="fp-header" :class="{ clickable: !embedded }" @click="!embedded && (bodyCollapsed = !bodyCollapsed)">
         <span class="fp-title">Files</span>
         <div class="fp-header-actions" @click.stop>
-          <button class="fp-ico" @click="triggerUpload" title="Upload file" aria-label="Upload file">
+          <button class="fp-ico fp-upload" @click="triggerUpload" title="Upload file" aria-label="Upload file">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="15" height="15"><path d="M12 16V4M7 9l5-5 5 5M5 20h14" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </button>
           <button class="fp-ico" @click="addFolder" title="New folder" aria-label="New folder">
@@ -472,7 +549,7 @@ defineExpose({ refresh: fullRefresh })
           <button class="fp-ico" @click="fullRefresh" title="Refresh" aria-label="Refresh">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="15" height="15"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </button>
-          <!-- In-place collapse chevron (matches Plan & progress) -->
+          <!-- In-place collapse chevron -->
           <button
             v-if="!embedded"
             class="fp-ico"
@@ -504,8 +581,10 @@ defineExpose({ refresh: fullRefresh })
             :renaming-path="renamingPath"
             :can-modify="canModify"
             :can-duplicate="canDuplicate"
+            :can-pop-out="canPopOut"
             :drag-path="dragPath"
             :drop-target="dropTarget"
+            :sharing="sharing"
             v-model:rename-value="renameValue"
             :is-changed="isChanged"
             :icon-for="iconFor"
@@ -516,6 +595,8 @@ defineExpose({ refresh: fullRefresh })
             :delete-entry="deleteEntry"
             :download-entry="downloadEntry"
             :duplicate-entry="duplicateEntry"
+            :copy-entry="copyEntry"
+            :pop-out-entry="popOutEntry"
             :drag-start="dragStart"
             :drag-over="dragOver"
             :drop-on="dropOn"
@@ -591,7 +672,7 @@ defineExpose({ refresh: fullRefresh })
 }
 .fp-header.clickable { cursor: pointer; user-select: none; }
 /* When collapsed in place, the header has no list below it — drop its divider
-   so it reads as a single compact card row (like the Plan widget collapsed). */
+   so it reads as a single compact card row. */
 .file-panel.body-collapsed { flex: 0 0 auto; }
 .file-panel.body-collapsed .fp-header { border-bottom: none; }
 .fp-title { font-size: 15px; font-weight: 700; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -628,14 +709,6 @@ defineExpose({ refresh: fullRefresh })
   border: 1px solid var(--accent); border-radius: 4px;
   background: var(--surface); color: var(--text); font-family: var(--mono);
 }
-.fp-row-actions { display: none; flex-shrink: 0; gap: 1px; margin-left: auto; }
-.fp-row:hover .fp-row-actions { display: inline-flex; }
-.fp-row-actions button {
-  padding: 1px 5px; font-size: 11px; border: none; border-radius: 4px;
-  background: none; color: var(--text2); cursor: pointer;
-}
-.fp-row-actions button:hover { background: var(--surface3); color: var(--text); }
-.fp-row-actions button.danger:hover { background: rgba(218,63,63,.14); color: var(--red); }
 .fp-empty { padding: 20px; text-align: center; color: var(--text3); font-size: 13px; }
 
 @media (max-width: 768px) {

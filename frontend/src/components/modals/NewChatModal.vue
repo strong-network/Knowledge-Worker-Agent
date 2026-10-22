@@ -5,6 +5,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useSessionsStore } from '../../stores/sessions'
 import { useUiStore } from '../../stores/ui'
+import { TEMPORARY_SHORT } from '../../utils/temporary'
 import { browseFiles, createDirectory } from '../../api'
 import type { SessionConfig } from '../../api'
 import { useMe, loadBaseDir } from '../../composables/useMe'
@@ -251,6 +252,18 @@ async function createChat() {
     {{ sessionsStore.agents.find(a => a.name === agent)?.description }}
   </p>
 </div>
+      <div class="form-group">
+        <div class="toggle-card" :class="{ enabled: ui.newChatTemporary }" @click="ui.newChatTemporary = !ui.newChatTemporary">
+          <div>
+            <div class="tc-label">Temporary chat</div>
+            <div class="tc-desc">{{ TEMPORARY_SHORT }}</div>
+          </div>
+          <label class="toggle" @click.stop>
+            <input type="checkbox" v-model="ui.newChatTemporary" aria-label="Temporary chat">
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
       <div class="form-group">
         <label class="form-label">Workspace</label>
         <div class="toggle-card" :class="{ enabled: createFolder }" @click="createFolder = !createFolder">

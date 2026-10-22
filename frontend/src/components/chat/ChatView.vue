@@ -15,7 +15,8 @@ import PromptInput from './PromptInput.vue'
 import QuestionCard from './QuestionCard.vue'
 import PermissionCard from './PermissionCard.vue'
 import WorkspaceFilePanel from './WorkspaceFilePanel.vue'
-import GoalsPanel from './GoalsPanel.vue'
+import TimerIcon from '../TimerIcon.vue'
+import { vTip } from '../../directives/tip'
 
 const sessionsStore = useSessionsStore()
 const chatStore = useChatStore()
@@ -23,6 +24,30 @@ const providers = useProvidersStore()
 const ui = useUiStore()
 
 const hasMessages = computed(() => sessionsStore.currentMessages.length > 0)
+
+// Temporary chats: New chat offers to start one; a chat that is one says so.
+const isTemporary = computed(() => !!sessionsStore.currentSession?.temporary)
+const startsTemporary = computed(() => !hasMessages.value && (ui.newChatTemporary || isTemporary.value))
+const offerTemporary = computed(
+  () => !hasMessages.value && !isTemporary.value && !sessionsStore.currentSessionDeprecated &&
+    !sessionsStore.currentSession?.shared,
+)
+
+// The agent's avatar: only the newest reply's moves.
+const newestReply = computed(() => {
+  const msgs = sessionsStore.currentMessages
+  for (let i = msgs.length - 1; i >= 0; i--) if (msgs[i].role === 'assistant') return i
+  return -1
+})
+// A turn that ends well here gets a happy face; a stop or an error doesn't.
+const justFinished = ref(false)
+watch(
+  () => [sessionsStore.currentSessionId, chatStore.streaming, chatStore.completedTurns] as const,
+  ([id, live, done], [wasId, , doneBefore]) => {
+    justFinished.value = id === wasId && !live && done > doneBefore
+  },
+)
+const typing = computed(() => !!sessionsStore.currentDraft)
 
 // Deprecated legacy GitHub Copilot sessions are read-only. Show a banner and
 // let the user spin up a fresh session.
@@ -39,7 +64,7 @@ async function startNewSession() {
 // The assistant is "connected" when ANY provider in the registry is
 // authenticated. This used to be a literal `copilot || vertex`, which meant a
 // workspace running happily on a config-declared provider was told forever
-// that it was not connected — and the Files and Plan widgets, which gate on
+// that it was not connected — and the Files widget, which gates on
 // the same state, stayed hidden.
 const anyAssistantConnected = computed(() => providers.anyAuthenticated)
 const showOpencodeBanner = computed(
@@ -73,26 +98,21 @@ const bannerCopy = computed(() => {
   }
 })
 
-// The Files / Plan & progress widgets only make sense once signed in (there's
-// no usable workspace/model before that). Like the banner, they wait for the
+// The Files widget only makes sense once signed in (there's
+// no usable workspace/model before that). Like the banner, it waits for the
 // first provider check to say otherwise, so a signed-in user never waits for it.
 const showWidgets = computed(() => !providers.loaded || anyAssistantConnected.value)
 
-// Width of the shared right-hand widget column. Plan & progress and Files
-// stack inside it and both take its full width, so one width serves both.
-// (The `filePanel*` names in the store predate the Plan widget; the value they
-// hold is the column's width, and the localStorage keys are kept as they are
-// so existing preferences survive.)
+// Width of the right-hand column, which holds the Files widget. (The
+// `filePanel*` names in the store hold the column's width; the localStorage
+// keys are kept as they are so existing preferences survive.)
 const widgetColStyle = computed(() => ({
   '--widget-col-width': ui.filePanelWidth + 'px',
 }))
 
 // ── Resizing the widget column ──
-// The handle lives on the column rather than inside the Files widget. It used
-// to be a child of the Files card, which meant it only existed when that card
-// did: a chat with a plan but no revealed workspace showed the Plan widget at
-// a width nothing could change. The column is the thing being resized, so the
-// column owns the handle.
+// The handle lives on the column rather than inside the Files widget, so it
+// exists whenever the column does: the column is the thing being resized.
 const colResizing = ref(false)
 function startColResize(e: PointerEvent) {
   e.preventDefault()
@@ -263,9 +283,25 @@ onBeforeUnmount(() => {
   </div>
   <div class="chat-body">
     <div class="chat-main" ref="chatMainEl" :class="{ empty: !hasMessages }">
+      <button
+        v-if="offerTemporary"
+        type="button"
+        class="temp-toggle"
+        :class="{ on: ui.newChatTemporary }"
+        :aria-pressed="ui.newChatTemporary"
+        v-tip="ui.newChatTemporary ? 'Turn off to save this chat to your history' : 'Start a chat that isn\'t saved. It\'s deleted after 24 hours of inactivity.'"
+        @click="ui.newChatTemporary = !ui.newChatTemporary"
+      >
+        <TimerIcon :size="14" />
+        Temporary chat
+      </button>
       <div id="messages" ref="messagesEl" @scroll.passive="onMessagesScroll">
-        <NewChatGreeting v-if="!hasMessages" />
+        <NewChatGreeting v-if="!hasMessages" :temporary="startsTemporary" />
         <template v-else>
+        <p v-if="isTemporary" class="temp-note">
+          <TimerIcon :size="13" />
+          Temporary chat. It isn't saved and is deleted after 24 hours of inactivity.
+        </p>
         <MessageBubble
           v-for="(msg, i) in sessionsStore.currentMessages"
           :key="i"
@@ -277,6 +313,9 @@ onBeforeUnmount(() => {
           :created-at="msg.createdAt"
           :usage="msg.usage"
           :author-label="msg.authorId ? (msg.authorName || 'Guest') : undefined"
+          :newest="i === newestReply"
+          :finished="i === newestReply && justFinished"
+          :typing="i === newestReply && typing"
         />
       <QuestionCard
         v-if="chatStore.currentQuestion"
@@ -323,26 +362,24 @@ onBeforeUnmount(() => {
       title="Drag to resize"
       @pointerdown="startColResize"
     ></div>
-    <!-- Shared right-hand widget column: Plan & progress stacks above the
-         Files widget. It's a real flex sibling of the chat (not an overlay),
+    <!-- Right-hand column for the Files widget (the plan is in the reply).
+         It's a real flex sibling of the chat (not an overlay),
          so the chat text reflows to its left and never gets covered. -->
     <div v-if="showWidgets" class="right-widgets" :class="{ 'mobile-open': ui.mobileFilesOpen }" :style="widgetColStyle">
       <div v-if="ui.mobileFilesOpen" class="mobile-files-bar">
         <strong>Files</strong>
         <button class="mfb-close" @click="ui.closeMobileFiles()" aria-label="Close files" title="Close">✕</button>
       </div>
-      <GoalsPanel v-if="!ui.mobileFilesOpen" />
       <WorkspaceFilePanel />
     </div>
   </div>
 </template>
 
 <style scoped>
-/* Shared right-hand widget column — Plan & progress stacks above the Files
-   widget. A real flex child of the chat-body row (not an overlay), so the
-   chat text reflows to its left instead of being covered. The column width
-   follows the Files widget width (resizable); it shrinks to fit its content
-   vertically and scrolls if the stacked widgets exceed the height. */
+/* Right-hand column for the Files widget. A real flex child of the chat-body
+   row (not an overlay), so the chat text reflows to its left instead of being
+   covered. The column width follows the Files widget width (resizable); it
+   scrolls if the widget exceeds the height. */
 .right-widgets {
   flex-shrink: 0;
   width: var(--widget-col-width, 320px);
@@ -358,11 +395,10 @@ onBeforeUnmount(() => {
      visibly give way rather than the layout jumping under the reader. */
   transition: width .2s ease;
 }
-/* Both widgets decide their own visibility — Plan waits for a plan, Files for
-   a non-empty workspace — and when neither renders, this column would still
-   hold its width as a blank margin. Collapsing it here keeps that decision
-   with the widgets instead of duplicating both conditions in the parent.
-   (v-if leaves comment nodes behind, which :empty ignores.) */
+/* The Files widget decides its own visibility (it waits for a non-empty
+   workspace), and when it doesn't render, this column would still hold its
+   width as a blank margin. Collapsing it here keeps that decision with the
+   widget. (v-if leaves comment nodes behind, which :empty ignores.) */
 .right-widgets:empty {
   display: none;
 }
@@ -498,6 +534,28 @@ body.rw-resizing .right-widgets { transition: none; }
    push it up under the header. */
 .chat-main.empty {
   justify-content: flex-start;
+}
+.temp-toggle {
+  position: absolute; top: 14px; right: 16px; z-index: 2;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface);
+  color: var(--text2); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.temp-toggle:hover { background: var(--hover); color: var(--text); }
+.temp-toggle.on {
+  border-style: dashed; border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface)); color: var(--text);
+}
+.temp-toggle.on :deep(svg) { color: var(--accent); }
+.temp-note {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  max-width: 860px; margin: 4px auto 14px; padding: 0 16px;
+  font-size: 12px; color: var(--text2); text-align: center;
+}
+@media (max-width: 768px) {
+  .temp-toggle { top: 10px; right: 10px; }
 }
 .chat-main.empty #messages {
   flex: 0 0 max(96px, calc(50% - 81px));

@@ -59,6 +59,7 @@ func FindOrphans() []Orphan {
 		log.Printf("[hygiene] orphan scan skipped: the session list could not be read")
 		return out
 	}
+	sharedFolders := db.SharedArtifactFolders()
 	if len(known) == 0 {
 		// No session anywhere claims a directory. Either there are no sessions,
 		// or something is wrong; in both cases every chat folder on disk would
@@ -93,7 +94,7 @@ func FindOrphans() []Orphan {
 			if !workdirs.IsAutoChat(path) {
 				continue
 			}
-			if known[path] {
+			if known[path] || sharedFolders[path] {
 				continue
 			}
 			orphan := Orphan{Path: path, Name: e.Name(), SizeBytes: DirSize(path)}

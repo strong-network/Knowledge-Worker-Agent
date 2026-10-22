@@ -7,7 +7,6 @@
 // skips the chat app's bootstrap, and it talks only to /guest/* routes.
 import { ref, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import MessageBubble from './components/chat/MessageBubble.vue'
-import GoalsPanelView from './components/chat/GoalsPanelView.vue'
 import FileBrowser from './components/chat/FileBrowser.vue'
 import PermissionCard from './components/chat/PermissionCard.vue'
 import type { ToolCall, PermissionRequest } from './stores/chat'
@@ -26,6 +25,7 @@ interface GuestMessage {
   streaming?: boolean
   stepCount?: number
   toolCalls?: ToolCall[]
+  failed?: boolean
 }
 
 type Phase = 'loading' | 'missing' | 'gate' | 'chat' | 'ended'
@@ -60,8 +60,11 @@ let reconnectTimer: number | undefined
 let live: GuestMessage | null = null
 
 const ownerLabel = computed(() => ownerName.value || 'The owner')
-const liveCalls = computed(() => messages.value.find(m => m.streaming)?.toolCalls || [])
 const heading = computed(() => title.value || 'Shared chat')
+// The agent's avatar: only the newest reply's moves, with a happy face when its turn ends well.
+const newestReply = computed(() => [...messages.value].reverse().find(m => m.role === 'assistant')?.key)
+const finishedReply = ref<number | null>(null)
+const typing = computed(() => !!draft.value)
 
 function authorLabel(m: GuestMessage): string {
   if (m.role !== 'user') return ''
@@ -164,6 +167,7 @@ function beginTurn(d: TurnStart) {
     messages.value.push(reply)
   }
   live = messages.value.find(m => m.key === reply.key) || null
+  finishedReply.value = null
   waiting.value = null
   scrollToEnd()
 }
@@ -185,7 +189,12 @@ function turnFrame(event: string, d: any) {
       if (permission.value?.permissionId === d.permission_id) permission.value = null
       if (waiting.value?.reason === 'approval') waiting.value = null
       break
-    case 'error': if (live) live.content += `${live.content ? '\n\n' : ''}_${d.message || 'The assistant ran into a problem.'}_`; break
+    case 'error':
+      if (live) {
+        live.content += `${live.content ? '\n\n' : ''}_${d.message || 'The assistant ran into a problem.'}_`
+        live.failed = true
+      }
+      break
     case 'title': if (d.title) { title.value = d.title; document.title = `${heading.value} — shared chat` } break
   }
 }
@@ -197,8 +206,11 @@ const follower = new TurnFollower({
   decide: (d) => (d.turn_id && messages.value.some(m => m.role === 'assistant' && m.turnId === d.turn_id) ? 'skip' : 'render'),
   begin: beginTurn,
   frame: turnFrame,
-  end: () => {
-    if (live) live.streaming = false
+  end: (completed) => {
+    if (live) {
+      live.streaming = false
+      if (completed && !live.failed) finishedReply.value = live.key
+    }
     live = null
     waiting.value = null
     permission.value = null
@@ -453,9 +465,6 @@ onBeforeUnmount(() => {
 
     <div v-else class="guest-body" :class="{ 'with-files': allowFiles }">
       <div class="guest-chat">
-        <div class="guest-plan">
-          <GoalsPanelView :live-calls="liveCalls" :messages="messages" />
-        </div>
         <main ref="listEl" class="guest-list" aria-live="polite">
           <p v-if="!messages.length" class="guest-empty">No messages yet. Say hello.</p>
           <MessageBubble
@@ -468,6 +477,9 @@ onBeforeUnmount(() => {
             :tool-calls="m.toolCalls"
             :created-at="m.createdAt"
             :author-label="authorLabel(m)"
+            :newest="m.key === newestReply"
+            :finished="m.key === finishedReply"
+            :typing="m.key === newestReply && typing"
           />
         </main>
         <PermissionCard
@@ -569,8 +581,6 @@ onBeforeUnmount(() => {
 .guest-list { flex: 1; overflow-y: auto; padding: 16px 20px; }
 /* A flex item with auto margins shrinks to its content; the card is as wide as the owner's. */
 .guest-permission { width: calc(100% - 48px); box-sizing: border-box; }
-.guest-plan { padding: 12px 20px 0; }
-.guest-plan:empty { display: none; }
 .guest-empty { color: var(--text2); }
 .guest-waiting {
   margin: 0 20px; padding: 8px 12px; font-size: 12px;

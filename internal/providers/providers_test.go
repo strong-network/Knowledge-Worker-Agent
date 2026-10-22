@@ -149,40 +149,29 @@ func TestRegistryPresetIgnoresBlankNomination(t *testing.T) {
 	}
 }
 
-func TestCurateModelsAppliesOnlyTheOwningProvidersFilter(t *testing.T) {
+func TestModelDiscoveryBelongsToTheOwningBuiltin(t *testing.T) {
 	ResetBuiltins()
 	t.Cleanup(ResetBuiltins)
 
-	filtered := stub("picky", true)
-	filtered.CurateModels = func(list []string) []string {
-		out := []string{}
-		for _, m := range list {
-			if m != "picky/hidden" {
-				out = append(out, m)
-			}
-		}
-		return out
-	}
-	RegisterBuiltin(filtered)
+	discovering := stub("picky", true)
+	discovering.DiscoverModels = func() ([]string, error) { return []string{"picky/kept"}, nil }
+	RegisterBuiltin(discovering)
 	RegisterBuiltin(stub("plain", true))
 
-	got := CurateModels("picky", []string{"picky/kept", "picky/hidden"})
-	if len(got) != 1 || got[0] != "picky/kept" {
-		t.Errorf("filter not applied: got %v", got)
+	fn := ModelDiscovery("picky")
+	if fn == nil {
+		t.Fatal("the built-in's discovery was not returned")
+	}
+	if got, err := fn(); err != nil || len(got) != 1 || got[0] != "picky/kept" {
+		t.Errorf("discovery = %v, %v", got, err)
 	}
 
-	// A built-in that declared no filter serves its vendor's list as-is.
-	full := []string{"plain/a", "plain/b"}
-	if got := CurateModels("plain", full); len(got) != 2 {
-		t.Errorf("filterless built-in was curated: got %v", got)
+	// A built-in without discovery, and a config-declared provider, which is
+	// not in the built-in registry at all, serve their catalogue as it is.
+	if ModelDiscovery("plain") != nil {
+		t.Error("a built-in without discovery got one")
 	}
-
-	// The decisive case: a config-declared provider is not in the built-in
-	// registry at all. Its catalogue must survive untouched, or an admin who
-	// added a provider by config would find models silently missing from the
-	// picker with nothing in the config to explain it.
-	declared := []string{"mistral-onprem/mistral-large", "picky/hidden"}
-	if got := CurateModels("mistral-onprem", declared); len(got) != 2 {
-		t.Errorf("config-declared provider was curated: got %v", got)
+	if ModelDiscovery("mistral-onprem") != nil {
+		t.Error("a config-declared provider got a built-in's discovery")
 	}
 }

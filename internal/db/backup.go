@@ -38,7 +38,7 @@ const (
 	// TierShared is a shared project. Longest keep; the clock
 	// resets on any collaborator's activity.
 	TierShared RetentionTier = "shared"
-	// TierTemporary is a throwaway chat: not backed up, purged after a short
+	// TierTemporary is a temporary chat: not backed up, deleted after a short
 	// inactivity window.
 	TierTemporary RetentionTier = "temporary"
 )
@@ -50,7 +50,7 @@ const (
 	RetentionLoose     = 6 * 30 * 24 * time.Hour  // ~6 months
 	RetentionPersonal  = 12 * 30 * 24 * time.Hour // ~12 months
 	RetentionShared    = 24 * 30 * 24 * time.Hour // ~24 months
-	RetentionTemporary = 72 * time.Hour           // 72 hours
+	RetentionTemporary = 24 * time.Hour           // 24 hours after the last message
 )
 
 // RetentionWindow returns the default inactivity window for a tier. An unknown

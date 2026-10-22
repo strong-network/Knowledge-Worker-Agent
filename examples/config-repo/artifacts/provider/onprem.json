@@ -1,14 +1,17 @@
 {
-  // A model provider on a private, OpenAI-compatible endpoint. The endpoint is
-  // fictional: point baseURL at a real one before assigning this. With
-  // KWA_CENTRAL_CONFIG on, assigned providers replace the built-in ones.
+  // A model provider on a private, OpenAI-compatible endpoint in two regions.
+  // The endpoints are fictional: point them at real ones before assigning this.
+  // With KWA_CENTRAL_CONFIG on, assigned providers replace the built-in ones.
   "$schema": "https://opencode.ai/config.json",
   "provider": {
     "onprem": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "Acme models",
       "options": {
-        "baseURL": "https://models.acme.example.com/v1",
+        // The region in use, from kwa.endpoints below: Knowledge Worker Agent
+        // sets KWA_ENDPOINT_<provider id> to its url. A provider with a single
+        // address can write the url here instead and leave out kwa.endpoints.
+        "baseURL": "{env:KWA_ENDPOINT_ONPREM}/v1",
         // Never the key itself. {env:NAME} reads it from an environment
         // variable. {file:/path} reads a file instead, but opencode rejects its
         // whole configuration while that file is missing.
@@ -42,6 +45,13 @@
       "label": "Acme models",
       "help": "Provided by your administrator."
     },
+    // The provider's regional addresses: https, a host and nothing else. The
+    // fastest one this workspace reaches is used, unless the user picks one in
+    // Accounts & connections.
+    "endpoints": [
+      { "id": "us", "label": "United States", "url": "https://us.models.acme.example.com" },
+      { "id": "eu", "label": "Europe", "url": "https://eu.models.acme.example.com" }
+    ],
     // The models behind Default and Thinking, and the one for short background
     // jobs such as naming chats.
     "presets": {

@@ -27,6 +27,17 @@ type ProviderMeta struct {
 	Auth ProviderAuthMeta `json:"auth"`
 	// Presets nominates the models backing the Default and Thinking presets.
 	Presets map[string]string `json:"presets,omitempty"`
+	// Endpoints lists the regional addresses the provider can be reached at.
+	// Carried as written: the provider registry validates them, picks one, and
+	// exports it for the artifact's {env:} placeholder.
+	Endpoints []ProviderEndpoint `json:"endpoints,omitempty"`
+}
+
+// ProviderEndpoint is one entry of a provider artifact's kwa.endpoints list.
+type ProviderEndpoint struct {
+	ID    string `json:"id"`
+	Label string `json:"label,omitempty"`
+	URL   string `json:"url"`
 }
 
 // ProviderAuthMeta is the kwa.auth block of a provider artifact.
@@ -69,9 +80,10 @@ func takeProviderMeta(frag map[string]any) []ProviderMeta {
 	}
 
 	auth, presets := parseMetaBlock(raw)
+	endpoints := parseEndpoints(raw)
 	out := make([]ProviderMeta, 0, len(ids))
 	for _, id := range ids {
-		out = append(out, ProviderMeta{ID: id, Auth: auth, Presets: presets})
+		out = append(out, ProviderMeta{ID: id, Auth: auth, Presets: presets, Endpoints: endpoints})
 	}
 	return out
 }
@@ -136,4 +148,23 @@ func parseMetaBlock(raw any) (ProviderAuthMeta, map[string]string) {
 		}
 	}
 	return auth, presets
+}
+
+// parseEndpoints extracts kwa.endpoints, skipping entries without an id or a
+// url. Like parseMetaBlock it never fails: a broken list means no endpoints.
+func parseEndpoints(raw any) []ProviderEndpoint {
+	block, _ := raw.(map[string]any)
+	list, _ := block["endpoints"].([]any)
+	var out []ProviderEndpoint
+	for _, item := range list {
+		m, _ := item.(map[string]any)
+		var e ProviderEndpoint
+		e.ID, _ = m["id"].(string)
+		e.Label, _ = m["label"].(string)
+		e.URL, _ = m["url"].(string)
+		if e.ID != "" && e.URL != "" {
+			out = append(out, e)
+		}
+	}
+	return out
 }

@@ -95,6 +95,12 @@ type Provider struct {
 	CanSignOut bool `json:"canSignOut,omitempty"`
 	// Presets nominates the models backing Default/Thinking, by preset name.
 	Presets map[string]string `json:"presets,omitempty"`
+	// Endpoints lists the provider's regional endpoints, when its artifact
+	// declares any; Endpoint is the one in use, and EndpointAuto whether the
+	// workspace chose it rather than the user.
+	Endpoints    []EndpointStatus `json:"endpoints,omitempty"`
+	Endpoint     string           `json:"endpoint,omitempty"`
+	EndpointAuto bool             `json:"endpointAuto,omitempty"`
 }
 
 // withReach stamps the cached probe verdict onto a provider record.
@@ -191,19 +197,16 @@ type Builtin struct {
 	// package does not import the auth packages (which would be a cycle) and so
 	// tests can substitute it.
 	CheckAuth func() bool
-	// CurateModels optionally narrows the provider's discovered catalogue.
+	// DiscoverModels optionally lists the models the provider can serve this
+	// workspace, as "provider/model" ids, in place of the vendor's catalogue.
 	//
 	// `opencode models <provider>` returns the vendor's full upstream list,
-	// which for a built-in can be wider than what we actually serve. Attaching
-	// the filter to the provider keeps it out of the shared discovery loop,
-	// which otherwise needs an `if provider == …` per provider — the exact
-	// hard-coding this package exists to remove.
-	//
-	// Config-declared providers do not need this: opencode's ProviderConfig has
-	// native `whitelist`/`blacklist` arrays, and the materializer already merges
-	// a provider artifact's block verbatim, so an admin curates in the artifact
-	// with no code involved.
-	CurateModels func([]string) []string
+	// which can be wider than what a project may use. Attaching discovery to
+	// the provider keeps it out of the shared discovery loop, which otherwise
+	// needs an `if provider == …` per provider — the exact hard-coding this
+	// package exists to remove. An artifact's `whitelist`/`blacklist` still
+	// applies: opencode filters the catalogue that discovery starts from.
+	DiscoverModels func() ([]string, error)
 }
 
 var (
@@ -233,14 +236,13 @@ func ResetBuiltins() {
 	builtinsMu.Unlock()
 }
 
-// CurateModels applies the provider's catalogue filter, if it declared one.
-// Providers without a filter — which is every config-declared one — get their
-// list back untouched.
-func CurateModels(providerID string, list []string) []string {
-	if b, ok := builtinByID(providerID); ok && b.CurateModels != nil {
-		return b.CurateModels(list)
+// ModelDiscovery returns the provider's own way of listing its models, or nil
+// when its catalogue is used as it is — which is every config-declared one.
+func ModelDiscovery(providerID string) func() ([]string, error) {
+	if b, ok := builtinByID(providerID); ok {
+		return b.DiscoverModels
 	}
-	return list
+	return nil
 }
 
 // builtinByID returns the built-in registered under an id, if any.

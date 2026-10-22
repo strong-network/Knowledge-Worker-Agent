@@ -31,6 +31,8 @@ import (
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/diagnostics"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/env"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/files"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/fileshare"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/fileshare/viewer"
 	gitops "github.com/strong-network/Knowledge-Worker-Agent/internal/git"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/guest"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/layout"
@@ -85,53 +87,6 @@ var opencodeEnsured = make(chan struct{})
 // opencodeModelRefreshInterval controls how often the opencode model cache is
 // refreshed in the background.
 const opencodeModelRefreshInterval = 30 * time.Minute
-
-// vertexModelAllowlist is the exact set of google-vertex models actually served
-// by our Vertex backend. `opencode models google-vertex` lists the full
-// upstream catalog, which is broader than what we offer, so the discovered
-// Vertex list is curated down to this allow-list before it reaches the model
-// picker. Identifiers are provider-qualified, matching `opencode` output.
-// Keep this in sync with the models the Vertex backend exposes.
-var vertexModelAllowlist = map[string]bool{
-	"google-vertex/claude-haiku-4-5@20251001":               true,
-	"google-vertex/claude-opus-4-6@default":                 true,
-	"google-vertex/claude-opus-4-7@default":                 true,
-	"google-vertex/claude-opus-4-8@default":                 true,
-	"google-vertex/claude-opus-5@default":                   true,
-	"google-vertex/claude-sonnet-4-5@20250929":              true,
-	"google-vertex/claude-sonnet-4-6@default":               true,
-	"google-vertex/claude-sonnet-5@default":                 true,
-	"google-vertex/gemini-2.5-flash-lite":                   true,
-	"google-vertex/gemini-2.5-pro":                          true,
-	"google-vertex/gemini-3-flash-preview":                  true,
-	"google-vertex/gemini-3.1-flash-lite":                   true,
-	"google-vertex/gemini-3.1-pro-preview":                  true,
-	"google-vertex/gemini-3.1-pro-preview-customtools":      true,
-	"google-vertex/gemini-3.5-flash":                        true,
-	"google-vertex/gemini-flash-latest":                     true,
-	"google-vertex/gemini-flash-lite-latest":                true,
-	"google-vertex/deepseek-ai/deepseek-v3.2-maas":          true,
-	"google-vertex/moonshotai/kimi-k2-thinking-maas":        true,
-	"google-vertex/openai/gpt-oss-120b-maas":                true,
-	"google-vertex/qwen/qwen3-235b-a22b-instruct-2507-maas": true,
-	"google-vertex/zai-org/glm-4.7-maas":                    true,
-	"google-vertex/zai-org/glm-5-maas":                      true,
-}
-
-// curateVertexModels keeps only the google-vertex models we actually serve
-// (see vertexModelAllowlist), preserving input order. Non-vertex identifiers
-// are passed through untouched, so callers can hand it a provider's raw list
-// without special-casing. Returns a non-nil slice.
-func curateVertexModels(list []string) []string {
-	out := make([]string, 0, len(list))
-	for _, m := range list {
-		if strings.HasPrefix(m, vertexauth.Provider+"/") && !vertexModelAllowlist[m] {
-			continue
-		}
-		out = append(out, m)
-	}
-	return out
-}
 
 var (
 	version   = "dev"
@@ -215,6 +170,7 @@ func main() {
 	}
 
 	config.Init()
+	exportURL()
 	setStatus("starting")
 	migrateMode := migrationAtStartup()
 	if migrateMode == migration.On || migrateMode == migration.Undo {
@@ -310,6 +266,8 @@ func main() {
 	} else {
 		stopGuest = guest.Start(guestFiles, opencodeReady.Load)
 	}
+	// Shared files: a listener per file, never a route on this one.
+	fileshare.Start()
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -325,6 +283,7 @@ func main() {
 	stopHeartbeat()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	stopGuest(shutdownCtx)
+	viewer.Shutdown(shutdownCtx)
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("graceful shutdown error: %v", err)
 	}
@@ -467,6 +426,9 @@ func bootstrap() {
 	// Model providers: the provider registry reads what the materializer just wrote, so
 	// it is initialised here — after materialization, before model discovery.
 	initProviderRegistry()
+	// A provider with regional endpoints needs one chosen before any opencode
+	// process reads its address.
+	providers.ApplyEndpoints(context.Background())
 
 	// Discover models, start a periodic refresh, and refresh again after each
 	// successful opencode login.
@@ -482,6 +444,7 @@ func bootstrap() {
 	// empty-chat window. Chats containing work are never touched here; they are
 	// only ever removed by the user from the review surface.
 	tidyup.StartSweeper()
+	sessions.StartTemporarySweeper()
 
 	// Cross-session retrieval: day notes. Summarises closed days of long or multi-day
 	// chats so recall can find what a chat became, not just what it opened
@@ -593,6 +556,14 @@ func warnCentralConfigUnprovisioned() {
 		config.EnvCentralConfig, strings.Join(missing, " and "))
 }
 
+// exportURL tells child processes where this server is, so a skill can reach
+// its owner API (the report skill's can-share check).
+func exportURL() {
+	if err := os.Setenv("KWA_URL", fmt.Sprintf("http://127.0.0.1:%d", config.Port)); err != nil {
+		log.Printf("set KWA_URL: %v", err)
+	}
+}
+
 // runMaterializer resolves and applies the central workspace
 // configuration. It reads its inputs from the environment (KWA_PROJECT_ID,
 // KWA_CONFIG_REPO_URL, and optional overrides) and, on success, exports
@@ -633,6 +604,7 @@ func refreshCentralConfig(step func(string)) error {
 	// The skills picker caches its list for up to half an hour.
 	chat.InvalidateSkillCache()
 	step("Updating model providers and models")
+	providers.ApplyEndpoints(context.Background())
 	refreshOpencodeModels()
 	providers.ProbeAllInBackground()
 	step("Updating connectors")
@@ -747,7 +719,13 @@ func refreshOpencodeModels() {
 	anyOK := false
 	for _, provider := range authed {
 		fetchStart := time.Now()
-		list, err := opencodeauth.FetchModelsFor(provider)
+		// A provider may serve less than its vendor's published catalogue, and
+		// the registry knows which ones find out what they serve themselves.
+		fetch := providers.ModelDiscovery(provider)
+		if fetch == nil {
+			fetch = func() ([]string, error) { return opencodeauth.FetchModelsFor(provider) }
+		}
+		list, err := fetch()
 		fetchTook := time.Since(fetchStart)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  ⚠ OpenCode model refresh (%s) failed after %s: %v\n",
@@ -757,9 +735,6 @@ func refreshOpencodeModels() {
 		fmt.Fprintf(os.Stderr, "  · OpenCode models (%s): %d in %s\n",
 			provider, len(list), fetchTook.Round(time.Millisecond))
 		anyOK = true
-		// A provider may serve less than its vendor's published catalogue.
-		// The registry knows which ones do; this loop no longer needs to.
-		list = providers.CurateModels(provider, list)
 		for _, m := range list {
 			if !seen[m] {
 				seen[m] = true
@@ -860,9 +835,9 @@ func initProviderRegistry() {
 		Label:     "Google Cloud (Vertex AI)",
 		AuthType:  providers.AuthGcloudADC,
 		CheckAuth: func() bool { return vertexauth.CheckStatus().Authenticated },
-		// `opencode models google-vertex` lists the full upstream catalogue,
-		// which is wider than what our Vertex backend actually serves.
-		CurateModels: curateVertexModels,
+		// `opencode models google-vertex` lists Google's whole catalogue, which
+		// is wider than what a project, or a gateway in front of Vertex, serves.
+		DiscoverModels: discoverVertexModels,
 	})
 	providers.RegisterBuiltin(providers.Builtin{
 		ID:        opencodeauth.Provider,
@@ -880,6 +855,9 @@ func initProviderRegistry() {
 	// A newly-stored key makes that provider's models runnable immediately;
 	// without this the picker stays empty until the next refresh tick.
 	providers.SetKeyChangeHook(refreshOpencodeModels)
+	providers.SetEndpointStore(db.GetAppMeta, db.SetAppMeta)
+	// A running `opencode serve` keeps the address it started with.
+	providers.SetEndpointChangeHook(chat.ReloadServerAgents)
 	installProviderProbes()
 
 	if reg := providers.Resolve(); reg.Mode == providers.ModeFallback {
@@ -978,6 +956,17 @@ func registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{session_id}/share", sharing.HandleGet)
 	mux.HandleFunc("PUT /api/sessions/{session_id}/share", sharing.HandleStart)
 	mux.HandleFunc("DELETE /api/sessions/{session_id}/share", sharing.HandleStop)
+	mux.HandleFunc("GET /api/artifacts", fileshare.HandleList)
+	mux.HandleFunc("POST /api/artifacts", fileshare.HandleShare)
+	mux.HandleFunc("POST /api/artifacts/check", fileshare.HandleCheck)
+	mux.HandleFunc("GET /api/artifacts/can-share", fileshare.HandleCanShare)
+	mux.HandleFunc("POST /api/artifacts/fixes", fileshare.HandleStartFix)
+	mux.HandleFunc("GET /api/artifacts/fixes/{id}", fileshare.HandleFix)
+	mux.HandleFunc("GET /api/artifacts/members", fileshare.HandleMembers)
+	mux.HandleFunc("PUT /api/artifacts/{id}/audience", fileshare.HandleAudience)
+	mux.HandleFunc("PUT /api/artifacts/{id}/options", fileshare.HandleOptions)
+	mux.HandleFunc("POST /api/artifacts/{id}/repair", fileshare.HandleRepair)
+	mux.HandleFunc("DELETE /api/artifacts/{id}", fileshare.HandleStop)
 	mux.HandleFunc("GET /api/share/audience", sharing.HandleGetAudience)
 	mux.HandleFunc("PUT /api/share/audience", sharing.HandlePutAudience)
 	mux.HandleFunc("GET /api/share/activity", sharing.HandleActivity)
@@ -989,10 +978,11 @@ func registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{session_id}/config", sessions.HandleSessionConfig)
 	mux.HandleFunc("PATCH /api/sessions/{session_id}/config", sessions.HandleUpdateSessionConfig)
 	mux.HandleFunc("PUT /api/sessions/{session_id}/rename", sessions.HandleRenameSession)
+	mux.HandleFunc("PUT /api/sessions/{session_id}/temporary", sessions.HandleSetTemporary)
 	mux.HandleFunc("DELETE /api/sessions/{session_id}/last", sessions.HandleUndoSession)
 	mux.HandleFunc("POST /api/sessions/{session_id}/stop", sessions.HandleStopSession)
 	mux.HandleFunc("GET /api/sessions/{session_id}/export", sessions.HandleExportSession)
-	mux.HandleFunc("DELETE /api/sessions/{session_id}", sharing.RetireAppAfter(sessions.HandleDeleteSession))
+	mux.HandleFunc("DELETE /api/sessions/{session_id}", fileshare.AfterChatsDeleted(sharing.RetireAppAfter(sessions.HandleDeleteSession)))
 	mux.HandleFunc("POST /api/sessions/{session_id}/permission", sessions.HandlePermission)
 	mux.HandleFunc("GET /api/sessions/{session_id}/queue", sessions.HandleQueueList)
 	mux.HandleFunc("POST /api/sessions/{session_id}/queue", requireOpencodeReady(sessions.HandleQueueAdd))
@@ -1015,7 +1005,7 @@ func registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/projects", projects.HandleCreate)
 	mux.HandleFunc("GET /api/projects/{id}", projects.HandleGet)
 	mux.HandleFunc("PATCH /api/projects/{id}", projects.HandleUpdate)
-	mux.HandleFunc("DELETE /api/projects/{id}", sharing.RetireAppAfter(projects.HandleDelete))
+	mux.HandleFunc("DELETE /api/projects/{id}", fileshare.AfterChatsDeleted(sharing.RetireAppAfter(projects.HandleDelete)))
 	mux.HandleFunc("GET /api/projects/{id}/mcp", projects.HandleGetProjectMcp)
 	mux.HandleFunc("PUT /api/projects/{id}/mcp", projects.HandleSetProjectMcp)
 	mux.HandleFunc("GET /api/projects/{id}/chats", projects.HandleListChats)
@@ -1037,7 +1027,7 @@ func registerRoutes(mux *http.ServeMux) {
 	// Consent-gated cleanup ("tidy up").
 	mux.HandleFunc("GET /api/tidyup", tidyup.HandleList)
 	mux.HandleFunc("GET /api/tidyup/count", tidyup.HandleCount)
-	mux.HandleFunc("POST /api/tidyup/cleanup", tidyup.HandleCleanup)
+	mux.HandleFunc("POST /api/tidyup/cleanup", fileshare.AfterChatsDeleted(tidyup.HandleCleanup))
 	mux.HandleFunc("POST /api/tidyup/keep", tidyup.HandleKeep)
 
 	// File manager
@@ -1045,6 +1035,8 @@ func registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/files/view", files.HandleFileView)
 	mux.HandleFunc("POST /api/files/save", files.HandleFileSave)
 	mux.HandleFunc("POST /api/files/directory", files.HandleCreateDirectory)
+	// Shared files follow renames and moves, and stop being shared before a delete.
+	files.AfterRename, files.BeforeDelete = fileshare.Moved, fileshare.Deleting
 	mux.HandleFunc("POST /api/files/delete", files.HandleFileDelete)
 	mux.HandleFunc("POST /api/files/rename", files.HandleFileRename)
 	mux.HandleFunc("POST /api/files/move", files.HandleFileMove)
@@ -1052,6 +1044,7 @@ func registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/files/upload", files.HandleFileUpload)
 	mux.HandleFunc("GET /api/files/download", files.HandleFileDownload)
 	mux.HandleFunc("GET /api/files/raw", files.HandleFileRaw)
+	mux.HandleFunc("POST /api/files/preview-link", fileshare.HandlePreviewLink)
 	mux.HandleFunc("GET /api/files/office-preview", office.HandlePreview)
 	mux.HandleFunc("GET /api/office/status", office.HandleStatus)
 	mux.HandleFunc("POST /api/office/install", office.HandleInstall)
@@ -1077,6 +1070,7 @@ func registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/providers/probe", providers.HandleRefreshReachability)
 	mux.HandleFunc("POST /api/providers/{id}/probe", providers.HandleProbe)
 	mux.HandleFunc("POST /api/providers/{id}/signout", providers.HandleSignOut)
+	mux.HandleFunc("POST /api/providers/{id}/endpoint", providers.HandleSetEndpoint)
 	mux.HandleFunc("POST /api/providers/{id}/key", providers.HandleSetKey)
 	mux.HandleFunc("DELETE /api/providers/{id}/key", providers.HandleRemoveKey)
 
@@ -1150,6 +1144,9 @@ func registerRoutes(mux *http.ServeMux) {
 		}
 		if m := migrationState.Load(); m != nil {
 			resp["migration"] = m
+		}
+		if d := lowDiskView(r); d != nil {
+			resp["disk"] = d
 		}
 		_ = json.NewEncoder(w).Encode(resp)
 	})
