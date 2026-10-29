@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/config"
-	"github.com/strong-network/Knowledge-Worker-Agent/internal/db"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodeserver"
 )
 
@@ -78,9 +77,11 @@ func ReloadServerAgents() {
 // that silently failed to be forced here would be the harder bug to notice.
 func buildServerTurnRequest(sessionID, prompt string, cfg config.SessionConfig, forced []config.ForcedSkill, author Author) opencodeserver.TurnRequest {
 	providerID, modelID := opencodeserver.PrepareModel(config.ResolveModel(cfg.Model))
+	opencodeSession, fork := resumeOrFork(sessionID, cfg)
 	return opencodeserver.TurnRequest{
 		AppSessionID:    sessionID,
-		OpencodeSession: db.GetOpencodeSession(sessionID),
+		OpencodeSession: opencodeSession,
+		Fork:            fork,
 		Workdir:         cfg.Workdir,
 		FallbackDir:     config.Workspace,
 		Prompt:          config.PromptWithSessionPreambleAs(prompt, cfg, author.guestName(), forced...),

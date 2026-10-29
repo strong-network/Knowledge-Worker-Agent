@@ -7,8 +7,9 @@ import { useMe } from '../../composables/useMe'
 import TimerIcon from '../TimerIcon.vue'
 import { TEMPORARY_ABOUT } from '../../utils/temporary'
 
-// temporary: the chat about to start is a temporary chat.
-defineProps<{ temporary?: boolean }>()
+// temporary: the chat about to start is a temporary chat. sideOf: it's a
+// side chat, of the chat with this name.
+defineProps<{ temporary?: boolean; sideOf?: string }>()
 
 // The headline on a new chat. Addressing the user by name makes the blank
 // page feel like it is waiting for them rather than for anyone.
@@ -24,7 +25,19 @@ const headline = computed(() =>
 </script>
 
 <template>
-  <div v-if="temporary" class="nc-temporary">
+  <div v-if="sideOf !== undefined" class="nc-temporary">
+    <span class="nc-timer" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="20" height="20">
+        <path d="M15 10l5 5-5 5M4 4v7a4 4 0 0 0 4 4h12" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </span>
+    <h1 class="nc-greeting">Ask on the side</h1>
+    <p class="nc-about">
+      This chat knows everything in “{{ sideOf || 'Untitled chat' }}”. Nothing you ask here goes back to it.
+      It's deleted after 24 hours with no new messages.
+    </p>
+  </div>
+  <div v-else-if="temporary" class="nc-temporary">
     <span class="nc-timer" aria-hidden="true"><TimerIcon :size="20" /></span>
     <h1 class="nc-greeting">Temporary chat</h1>
     <p class="nc-about">{{ TEMPORARY_ABOUT }}</p>

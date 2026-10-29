@@ -11,19 +11,30 @@ import "sync/atomic"
 // the workspace awake. Multiple simultaneous turns share one heartbeat loop.
 var activeTurns atomic.Int64
 
+// TurnStarted runs as a turn of sessionID starts in folder, before the agent
+// does anything, and TurnEnded once it has stopped. main sets them.
+var (
+	TurnStarted = func(sessionID, folder string) {}
+	TurnEnded   = func(sessionID, folder string) {}
+)
+
 // HasActiveTasks is the workspace heartbeat's activity source.
 func HasActiveTasks() bool { return activeTurns.Load() > 0 }
 
 // finishTrackedTurn relays events without tying activity to an HTTP subscriber.
 // The caller increments before backend setup; this releases the count for all
 // terminal paths (including startup errors, cancellation and normal completion).
-func finishTrackedTurn(events <-chan *Event) <-chan *Event {
+// after runs once the events end, before the relay closes.
+func finishTrackedTurn(events <-chan *Event, after ...func()) <-chan *Event {
 	out := make(chan *Event, 64)
 	go func() {
 		defer close(out)
 		defer activeTurns.Add(-1)
 		for ev := range events {
 			out <- ev
+		}
+		for _, fn := range after {
+			fn()
 		}
 	}()
 	return out

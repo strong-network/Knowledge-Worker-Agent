@@ -46,7 +46,7 @@ export const useUiStore = defineStore('ui', () => {
   // Projects: which top-level view is showing. 'chat' is the normal chat surface;
   // 'project' shows the ProjectView for activeProjectId. This app has no
   // router, so navigation is a simple reactive view switch.
-  const activeView = ref<'chat' | 'project' | 'scheduled' | 'artifacts'>('chat')
+  const activeView = ref<'chat' | 'project' | 'scheduled' | 'artifacts' | 'search'>('chat')
   const activeProjectId = ref<string | null>(null)
 
   // Scheduled tasks: which scheduled task the editor modal is editing (null = creating a
@@ -136,13 +136,6 @@ export const useUiStore = defineStore('ui', () => {
   const filePanelStoredReadingWidth = ref<number | null>(readNumber(FILE_PANEL_READING_WIDTH_KEY))
   const filePanelReading = ref<boolean>(false)
   const filePanelCollapsed = ref<boolean>(false)
-  // In-place collapse of the Files widget body (list hidden, header kept).
-  // Persisted.
-  const filePanelBodyCollapsed = ref<boolean>(localStorage.getItem('filePanelBodyCollapsed') === '1')
-  function setFilePanelBodyCollapsed(v: boolean) {
-    filePanelBodyCollapsed.value = v
-    localStorage.setItem('filePanelBodyCollapsed', v ? '1' : '0')
-  }
   const filePanelManualCollapse = ref<boolean | null>(null)
 
   function clampFilePanelWidth(px: number): number {
@@ -203,10 +196,7 @@ export const useUiStore = defineStore('ui', () => {
     mobileFilesOpen.value = !mobileFilesOpen.value
     // Opening from the header implies "show me the files", so make sure a
     // previously collapsed panel doesn't leave the overlay showing just a header.
-    if (mobileFilesOpen.value) {
-      filePanelCollapsed.value = false
-      setFilePanelBodyCollapsed(false)
-    }
+    if (mobileFilesOpen.value) filePanelCollapsed.value = false
   }
   function closeMobileFiles() { mobileFilesOpen.value = false }
 
@@ -217,8 +207,6 @@ export const useUiStore = defineStore('ui', () => {
   function toggleFilesPanel() {
     filesHidden.value = !filesHidden.value
     localStorage.setItem('filesPanelHidden', filesHidden.value ? '1' : '0')
-    // Showing it means "show me the files": not just the widget's header.
-    if (!filesHidden.value) setFilePanelBodyCollapsed(false)
   }
   // How many entries the open chat's Files widget marks new or updated, for
   // the header's Files button.
@@ -317,6 +305,10 @@ export const useUiStore = defineStore('ui', () => {
     activeView.value = 'artifacts'
   }
 
+  function openSearch() {
+    activeView.value = 'search'
+  }
+
   // openScheduledTaskEditor opens the create/edit task modal. Pass a task id to
   // edit, or null to create a new task.
   function openScheduledTaskEditor(id: string | null) {
@@ -327,10 +319,9 @@ export const useUiStore = defineStore('ui', () => {
   return {
     theme, sidebarOpen, activeModal,
     activeView, activeProjectId, openProject, showChat,
-    editingScheduledTaskId, openScheduled, openScheduledTaskEditor, openArtifacts,
+    editingScheduledTaskId, openScheduled, openScheduledTaskEditor, openArtifacts, openSearch,
     sidebarCollapsed, sidebarWidth, setSidebarWidth,
     filePanelWidth, filePanelCollapsed, filePanelManualCollapse,
-    filePanelBodyCollapsed, setFilePanelBodyCollapsed,
     filePanelReading, setFilePanelReading,
     revealFiles, filesRevealed,
     mobileFilesOpen, toggleMobileFiles, closeMobileFiles,

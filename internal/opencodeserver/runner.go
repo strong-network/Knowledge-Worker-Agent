@@ -84,6 +84,7 @@ func (r *PermissionRegistry) Respond(ctx context.Context, appSession, permission
 type TurnRequest struct {
 	AppSessionID    string // this app's session id (browser-facing)
 	OpencodeSession string // resume this opencode session id (empty = create new)
+	Fork            bool   // fork OpencodeSession into a new session rather than resume it
 	Workdir         string // desired working directory for the server
 	FallbackDir     string // used when Workdir is empty/invalid
 	Prompt          string // fully-composed prompt text (preamble already applied)
@@ -139,7 +140,13 @@ func (s *Supervisor) RunTurn(ctx context.Context, req TurnRequest) (*TurnResult,
 	// Resolve the opencode session: reuse the persisted one if it still exists
 	// on this server, otherwise create a fresh session.
 	opencodeSession := req.OpencodeSession
-	if opencodeSession == "" || !client.SessionExists(ctx, opencodeSession) {
+	if req.Fork && opencodeSession != "" && client.SessionExists(ctx, opencodeSession) {
+		forked, ferr := client.ForkSession(ctx, opencodeSession)
+		if ferr != nil {
+			return nil, ferr
+		}
+		opencodeSession = forked
+	} else if req.Fork || opencodeSession == "" || !client.SessionExists(ctx, opencodeSession) {
 		created, cerr := client.CreateSession(ctx, req.Title)
 		if cerr != nil {
 			return nil, cerr

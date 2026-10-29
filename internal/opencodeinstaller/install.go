@@ -29,15 +29,15 @@ import (
 // it, take the new tarballs' digests from the GitHub release API into
 // pinnedSHA256, and update OPENCODE_VERSION and the SHA-256 args in
 // Dockerfile.release to match (a test checks they agree).
-const PinnedVersion = "v1.19.0"
+const PinnedVersion = "v1.19.4"
 
 // pinnedSHA256 is the SHA-256 of each PinnedVersion tarball, by installer target.
 // A var so tests can pin the fake tarballs they serve.
 var pinnedSHA256 = map[string]string{
-	"linux-x64":        "7bb9e61ad6feacf2e89c10a6a2c1840e3de4220bb50ba1fc7110f31806076aec",
-	"linux-x64-musl":   "043193a55bcb67c524426132870ab7f960da664ad20a5327e8e03730ef14a869",
-	"linux-arm64":      "e9841d43d3e1a8f36ed2691592d3b8b4fb097e606c8b559a277a1b845840e26b",
-	"linux-arm64-musl": "c864e28b1504fe4412d9495493e72b8ebf3e205dd1ee14d125b99c14b26623da",
+	"linux-x64":        "849bd6b3d959a1d2ef200ed1634a51c79a45ca236aa26665d75debd694805cce",
+	"linux-x64-musl":   "265bd8027e84fe01837f72df8b7615d2959491f45569d52a21f2fcdbec9decdf",
+	"linux-arm64":      "8568230ccd847dc93e95b9f6894379077d3e014a16b48040743573e77c23e85f",
+	"linux-arm64-musl": "aa32a91f62cfddfa4615ba4deffc2b13696e77cbee83551824e3f16e6770b37e",
 }
 
 // opencodeReleasesBase is the release host. It is a var, not a const, so tests

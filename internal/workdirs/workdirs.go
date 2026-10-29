@@ -94,15 +94,23 @@ func IsAutoChat(dir string) bool {
 // A removal that is attempted and fails is logged, because that leaves a
 // directory behind with no session to attribute it to.
 func RemoveAutoChat(dir string) bool {
-	if !IsAutoChat(dir) {
+	if !IsAutoChat(dir) || InUse(dir) {
 		return false
 	}
 	if err := os.RemoveAll(dir); err != nil {
 		log.Printf("[workdirs] failed to remove chat workspace %s: %v", dir, err)
 		return false
 	}
+	AfterRemove(dir)
 	return true
 }
+
+// AfterRemove runs once RemoveAutoChat has removed dir. main sets it.
+var AfterRemove = func(dir string) {}
+
+// InUse reports whether another chat still works in dir, as a side chat
+// works in its parent's folder, which keeps the folder. main sets it.
+var InUse = func(dir string) bool { return false }
 
 // sameDir reports whether two paths name the same directory, resolving symlinks
 // where the path exists. Resolution failures fall back to the cleaned absolute

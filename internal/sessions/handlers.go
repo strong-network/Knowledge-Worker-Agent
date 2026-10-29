@@ -60,6 +60,8 @@ func HandleNewSession(w http.ResponseWriter, r *http.Request) {
 		json.Unmarshal(raw, &cfg)
 	}
 	cfg.Backend = config.NormalizeBackend(cfg.Backend)
+	// Only a side chat has a parent, and it's made by HandleSideChat.
+	cfg.ParentID, cfg.Fork = "", false
 
 	sid := chat.NewUUID()
 
@@ -170,6 +172,7 @@ func HandleUpdateSessionConfig(w http.ResponseWriter, r *http.Request) {
 	// Capture the pre-merge Temporary value: it changes only through
 	// HandleSetTemporary, which checks first that the chat may be deleted.
 	wasTemporary := cfg.Temporary
+	parentID, fork := cfg.ParentID, cfg.Fork
 
 	// Merge: serialize existing, overlay new fields, deserialize back
 	existing, _ := json.Marshal(cfg)
@@ -185,6 +188,8 @@ func HandleUpdateSessionConfig(w http.ResponseWriter, r *http.Request) {
 	// Invariants:
 	//  - Temporary keeps its value whatever the client sent.
 	cfg.Temporary = wasTemporary
+	//  - So do a side chat's parent and its fork.
+	cfg.ParentID, cfg.Fork = parentID, fork
 	//  - Keep is mutually exclusive with Temporary.
 	if cfg.Temporary {
 		cfg.Keep = false

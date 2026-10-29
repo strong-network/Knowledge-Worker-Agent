@@ -43,6 +43,7 @@
   --scrollbar-thumb:   #4a5265;
   --scrollbar-thumb-h: #687186;
   --scrollbar-track:   rgba(255,255,255,.04);
+  --search-hit-bg:     rgba(247,148,29,.4);
 }
 [data-theme="light"] {
   --bg:          #f5f5f5;
@@ -71,7 +72,11 @@
   --scrollbar-thumb:   #a5adba;
   --scrollbar-thumb-h: #747d8c;
   --scrollbar-track:   rgba(0,0,0,.04);
+  --search-hit-bg:     rgba(255,196,0,.45);
 }
+
+/* The words a search found, in the chat it opened (utils/searchHighlight.ts). */
+::highlight(kwa-search) { background-color: var(--search-hit-bg); }
 
 html, body { height: 100%; }
 body {

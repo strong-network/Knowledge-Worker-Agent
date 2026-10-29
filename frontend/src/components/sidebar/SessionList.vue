@@ -57,6 +57,8 @@ async function keepChat(id: string) {
 // when a Project view is open: App.vue renders ProjectView while
 // ui.activeView === 'project', so we must also flip back to the chat view or
 // the click appears to do nothing.
+// Side chats are listed under their parent, indented.
+const isSide = (s: Session) => sessionsStore.sortedSessions.nested.has(s.id)
 function openChat(id: string) {
   sessionsStore.switchSession(id)
   ui.showChat()
@@ -69,8 +71,7 @@ const renameValue = ref('')
 // Manual toggles are tracked as explicit overrides (null = follow adaptive
 // default). Adaptive default: while the user has no starred chats, Recent is
 // expanded and Starred collapsed; once they star their first chat, Starred
-// expands and Recent collapses. A search query force-expands both so hits are
-// visible regardless of collapse state.
+// expands and Recent collapses.
 //
 // The override is what gets persisted, not the resolved open/closed state. A
 // user who has never touched these carets keeps following the adaptive default
@@ -82,15 +83,13 @@ const RECENT_KEY = 'recentOpen'
 const starredOverride = ref<boolean | null>(loadOverride(STARRED_KEY))
 const recentOverride = ref<boolean | null>(loadOverride(RECENT_KEY))
 
-const searching = computed(() => !!sessionsStore.searchQuery.trim())
-
 // ── "Chat sessions" umbrella section ──
 // Mirrors the Projects / Scheduled tasks sections: one collapsible top-level
 // group whose state is remembered across reloads. Starred / Pinned / Recent
-// are its subsections. A search query force-expands it.
+// are its subsections.
 const SECTION_COLLAPSED_KEY = 'chatSessionsCollapsed'
 const sectionCollapsed = ref(loadFlag(SECTION_COLLAPSED_KEY, false))
-const sectionOpen = computed(() => searching.value || !sectionCollapsed.value)
+const sectionOpen = computed(() => !sectionCollapsed.value)
 
 function toggleSection() {
   sectionCollapsed.value = !sectionCollapsed.value
@@ -98,23 +97,21 @@ function toggleSection() {
 }
 
 const starredOpen = computed(() => {
-  if (searching.value) return true
   if (starredOverride.value !== null) return starredOverride.value
   return sessionsStore.hasFavorites // expanded once the user has favorites
 })
 const recentOpen = computed(() => {
-  if (searching.value) return true
   if (recentOverride.value !== null) return recentOverride.value
   return !sessionsStore.hasFavorites // collapses after first star
 })
 
-const sharedOpen = computed(() => searching.value || sharedOverride.value !== false)
+const sharedOpen = computed(() => sharedOverride.value !== false)
 function toggleShared() {
   sharedOverride.value = !sharedOpen.value
   saveOverride(SHARED_KEY, sharedOverride.value)
 }
 
-const temporaryOpen = computed(() => searching.value || temporaryOverride.value !== false)
+const temporaryOpen = computed(() => temporaryOverride.value !== false)
 function toggleTemporary() {
   temporaryOverride.value = !temporaryOpen.value
   saveOverride(TEMPORARY_KEY, temporaryOverride.value)
@@ -251,13 +248,13 @@ async function toggleFavorite(id: string, favorite: boolean) {
           v-for="s in sessionsStore.sortedSessions.favorites"
           :key="s.id"
           class="session-item favorite"
-          :class="{ active: s.id === sessionsStore.currentSessionId, deprecated: s.deprecated }"
+          :class="{ active: s.id === sessionsStore.currentSessionId, deprecated: s.deprecated, side: isSide(s) }"
           @click="openChat(s.id)"
           :data-id="s.id"
           @contextmenu="onContextMenu($event, s.id)"
         >
           <div class="si-body">
-            <div class="si-label" v-if="renameId !== s.id"><span v-if="needsYou(s.id)" class="needs-dot" title="Waiting for you"></span><span v-else-if="isWorking(s.id)" class="streaming-dot" title="Working"></span>{{ s.name || "Untitled" }}</div>
+            <div class="si-label" v-if="renameId !== s.id"><span v-if="needsYou(s.id)" class="needs-dot" title="Waiting for you"></span><span v-else-if="isWorking(s.id)" class="streaming-dot" title="Working"></span>{{ s.name || "Untitled" }}<span v-if="isSide(s)" class="sr-only">, side chat</span><span v-if="s.temporary" class="sr-only">, temporary chat, deleted in {{ leftLong(s) }}</span></div>
             <input
               v-else
               v-model="renameValue"
@@ -269,10 +266,12 @@ async function toggleFavorite(id: string, favorite: boolean) {
               autofocus
             />
             <div class="si-meta">
+              <span v-if="isSide(s)" class="side-tag" aria-hidden="true">Side chat</span>
               <span class="dep-pill" v-if="s.deprecated" title="Deprecated GitHub Copilot session (read-only)">Deprecated</span>
               <span v-if="s.shared" class="share-pill" title="Shared with coworkers">Shared</span>
               <span v-if="s.shared && share.present(s.id)" class="here">{{ share.present(s.id) }} here</span>
-              <span>{{ formatRelativeDate(s.updated_at) }}</span>
+              <span v-if="s.temporary" class="temp-left" aria-hidden="true"><TimerIcon :size="11" />{{ left(s) }}</span>
+              <span v-else>{{ formatRelativeDate(s.updated_at) }}</span>
             </div>
           </div>
           <div class="si-actions" v-if="renameId !== s.id">
@@ -292,13 +291,13 @@ async function toggleFavorite(id: string, favorite: boolean) {
           v-for="s in sessionsStore.sortedSessions.pinned"
           :key="s.id"
           class="session-item pinned"
-          :class="{ active: s.id === sessionsStore.currentSessionId, deprecated: s.deprecated }"
+          :class="{ active: s.id === sessionsStore.currentSessionId, deprecated: s.deprecated, side: isSide(s) }"
           @click="openChat(s.id)"
           :data-id="s.id"
           @contextmenu="onContextMenu($event, s.id)"
         >
           <div class="si-body">
-            <div class="si-label" v-if="renameId !== s.id"><span v-if="needsYou(s.id)" class="needs-dot" title="Waiting for you"></span><span v-else-if="isWorking(s.id)" class="streaming-dot" title="Working"></span>{{ s.name || "Untitled" }}</div>
+            <div class="si-label" v-if="renameId !== s.id"><span v-if="needsYou(s.id)" class="needs-dot" title="Waiting for you"></span><span v-else-if="isWorking(s.id)" class="streaming-dot" title="Working"></span>{{ s.name || "Untitled" }}<span v-if="isSide(s)" class="sr-only">, side chat</span><span v-if="s.temporary" class="sr-only">, temporary chat, deleted in {{ leftLong(s) }}</span></div>
             <input
               v-else
               v-model="renameValue"
@@ -310,10 +309,12 @@ async function toggleFavorite(id: string, favorite: boolean) {
               autofocus
             />
             <div class="si-meta">
+              <span v-if="isSide(s)" class="side-tag" aria-hidden="true">Side chat</span>
               <span class="dep-pill" v-if="s.deprecated" title="Deprecated GitHub Copilot session (read-only)">Deprecated</span>
               <span v-if="s.shared" class="share-pill" title="Shared with coworkers">Shared</span>
               <span v-if="s.shared && share.present(s.id)" class="here">{{ share.present(s.id) }} here</span>
-              <span>{{ formatRelativeDate(s.updated_at) }}</span>
+              <span v-if="s.temporary" class="temp-left" aria-hidden="true"><TimerIcon :size="11" />{{ left(s) }}</span>
+              <span v-else>{{ formatRelativeDate(s.updated_at) }}</span>
             </div>
           </div>
           <div class="si-actions" v-if="renameId !== s.id">
@@ -338,13 +339,13 @@ async function toggleFavorite(id: string, favorite: boolean) {
         v-for="s in sessionsStore.sortedSessions.shared"
         :key="s.id"
         class="session-item"
-        :class="{ active: s.id === sessionsStore.currentSessionId, deprecated: s.deprecated }"
+        :class="{ active: s.id === sessionsStore.currentSessionId, deprecated: s.deprecated, side: isSide(s) }"
         @click="openChat(s.id)"
         :data-id="s.id"
         @contextmenu="onContextMenu($event, s.id)"
       >
         <div class="si-body">
-          <div class="si-label" v-if="renameId !== s.id"><span v-if="needsYou(s.id)" class="needs-dot" title="Waiting for you"></span><span v-else-if="isWorking(s.id)" class="streaming-dot" title="Working"></span>{{ s.name || "Untitled" }}</div>
+          <div class="si-label" v-if="renameId !== s.id"><span v-if="needsYou(s.id)" class="needs-dot" title="Waiting for you"></span><span v-else-if="isWorking(s.id)" class="streaming-dot" title="Working"></span>{{ s.name || "Untitled" }}<span v-if="isSide(s)" class="sr-only">, side chat</span><span v-if="s.temporary" class="sr-only">, temporary chat, deleted in {{ leftLong(s) }}</span></div>
           <input
             v-else
             v-model="renameValue"
@@ -356,10 +357,12 @@ async function toggleFavorite(id: string, favorite: boolean) {
             autofocus
           />
           <div class="si-meta">
+            <span v-if="isSide(s)" class="side-tag" aria-hidden="true">Side chat</span>
             <span class="dep-pill" v-if="s.deprecated" title="Deprecated GitHub Copilot session (read-only)">Deprecated</span>
             <span v-if="s.shared" class="share-pill" title="Shared with coworkers">Shared</span>
             <span v-if="s.shared && share.present(s.id)" class="here">{{ share.present(s.id) }} here</span>
-            <span>{{ formatRelativeDate(s.updated_at) }}</span>
+            <span v-if="s.temporary" class="temp-left" aria-hidden="true"><TimerIcon :size="11" />{{ left(s) }}</span>
+            <span v-else>{{ formatRelativeDate(s.updated_at) }}</span>
           </div>
         </div>
         <div class="si-actions" v-if="renameId !== s.id">
@@ -383,13 +386,13 @@ async function toggleFavorite(id: string, favorite: boolean) {
         v-for="s in sessionsStore.sortedSessions.temporary"
         :key="s.id"
         class="session-item temporary"
-        :class="{ active: s.id === sessionsStore.currentSessionId, deprecated: s.deprecated }"
+        :class="{ active: s.id === sessionsStore.currentSessionId, deprecated: s.deprecated, side: isSide(s) }"
         @click="openChat(s.id)"
         :data-id="s.id"
         @contextmenu="onContextMenu($event, s.id)"
       >
         <div class="si-body">
-          <div class="si-label" v-if="renameId !== s.id"><span v-if="needsYou(s.id)" class="needs-dot" title="Waiting for you"></span><span v-else-if="isWorking(s.id)" class="streaming-dot" title="Working"></span>{{ s.name || "Untitled" }}<span class="sr-only">, temporary chat, deleted in {{ leftLong(s) }}</span></div>
+          <div class="si-label" v-if="renameId !== s.id"><span v-if="needsYou(s.id)" class="needs-dot" title="Waiting for you"></span><span v-else-if="isWorking(s.id)" class="streaming-dot" title="Working"></span>{{ s.name || "Untitled" }}<span v-if="isSide(s)" class="sr-only">, side chat</span><span class="sr-only">, temporary chat, deleted in {{ leftLong(s) }}</span></div>
           <input
             v-else
             v-model="renameValue"
@@ -401,6 +404,7 @@ async function toggleFavorite(id: string, favorite: boolean) {
             autofocus
           />
           <div class="si-meta">
+            <span v-if="isSide(s)" class="side-tag" aria-hidden="true">Side chat</span>
             <span class="temp-left" aria-hidden="true"><TimerIcon :size="11" />{{ left(s) }}</span>
           </div>
         </div>
@@ -425,13 +429,13 @@ async function toggleFavorite(id: string, favorite: boolean) {
         v-for="s in sessionsStore.sortedSessions.unpinned"
         :key="s.id"
         class="session-item"
-        :class="{ active: s.id === sessionsStore.currentSessionId, deprecated: s.deprecated }"
+        :class="{ active: s.id === sessionsStore.currentSessionId, deprecated: s.deprecated, side: isSide(s) }"
         @click="openChat(s.id)"
         :data-id="s.id"
         @contextmenu="onContextMenu($event, s.id)"
       >
         <div class="si-body">
-          <div class="si-label" v-if="renameId !== s.id"><span v-if="needsYou(s.id)" class="needs-dot" title="Waiting for you"></span><span v-else-if="isWorking(s.id)" class="streaming-dot" title="Working"></span>{{ s.name || "Untitled" }}</div>
+          <div class="si-label" v-if="renameId !== s.id"><span v-if="needsYou(s.id)" class="needs-dot" title="Waiting for you"></span><span v-else-if="isWorking(s.id)" class="streaming-dot" title="Working"></span>{{ s.name || "Untitled" }}<span v-if="isSide(s)" class="sr-only">, side chat</span><span v-if="s.temporary" class="sr-only">, temporary chat, deleted in {{ leftLong(s) }}</span></div>
           <input
             v-else
             v-model="renameValue"
@@ -443,10 +447,12 @@ async function toggleFavorite(id: string, favorite: boolean) {
             autofocus
           />
           <div class="si-meta">
+            <span v-if="isSide(s)" class="side-tag" aria-hidden="true">Side chat</span>
             <span class="dep-pill" v-if="s.deprecated" title="Deprecated GitHub Copilot session (read-only)">Deprecated</span>
             <span v-if="s.shared" class="share-pill" title="Shared with coworkers">Shared</span>
             <span v-if="s.shared && share.present(s.id)" class="here">{{ share.present(s.id) }} here</span>
-            <span>{{ formatRelativeDate(s.updated_at) }}</span>
+            <span v-if="s.temporary" class="temp-left" aria-hidden="true"><TimerIcon :size="11" />{{ left(s) }}</span>
+            <span v-else>{{ formatRelativeDate(s.updated_at) }}</span>
           </div>
         </div>
         <div class="si-actions" v-if="renameId !== s.id">
@@ -456,9 +462,6 @@ async function toggleFavorite(id: string, favorite: boolean) {
 
       <div v-if="!sessionsStore.sessions.length" class="list-empty">
         No sessions yet
-      </div>
-      <div v-else-if="sessionsStore.searchHasNoMatches" class="list-empty">
-        No matching chats
       </div>
     </template>
   </div>
@@ -523,6 +526,17 @@ button.group-header:hover { color: var(--text2); }
 }
 .here { color: var(--green); }
 .temp-left { display: inline-flex; align-items: center; gap: 4px; }
+.session-item.side { margin-left: 16px; padding-left: 18px; }
+.session-item.side::before {
+  content: ''; position: absolute; left: 6px; top: 6px; width: 7px; height: 10px;
+  border-left: 1.5px solid var(--text3); border-bottom: 1.5px solid var(--text3);
+  border-bottom-left-radius: 4px;
+}
+.side-tag {
+  font-size: 10px; font-weight: 600; letter-spacing: .02em;
+  padding: 0 6px; border-radius: 999px;
+  color: var(--text2); background: var(--surface2); border: 1px dashed var(--text3);
+}
 .list-empty {
   padding: 20px; text-align: center; color: var(--text3); font-size: 12px;
 }
