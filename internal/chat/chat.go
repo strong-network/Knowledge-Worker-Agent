@@ -87,6 +87,18 @@ func StopSession(sessionID string) (stopped bool) {
 // The work runs in the background and never fails the deletion. The chat is
 // already gone from the UI by then, and a surviving opencode session is a
 // disk-space problem, not a correctness one.
+// resumeOrFork returns the opencode session a turn continues, and whether it
+// forks it instead: a side chat's first turn starts from its parent's
+// conversation as it is now, and leaves the parent's untouched.
+func resumeOrFork(sessionID string, cfg config.SessionConfig) (string, bool) {
+	own := db.GetOpencodeSession(sessionID)
+	if own != "" || !cfg.Fork || cfg.ParentID == "" {
+		return own, false
+	}
+	parent := db.GetOpencodeSession(cfg.ParentID)
+	return parent, parent != ""
+}
+
 func DeleteOpencodeSession(opencodeSessionID string) {
 	id := strings.TrimSpace(opencodeSessionID)
 	if id == "" {
@@ -311,7 +323,8 @@ func IsTodoTool(name string) bool {
 // their existing call shape.
 func RunStream(sessionID, prompt string, cfg config.SessionConfig, turn ...Turn) (events <-chan *Event, proc *ActiveProcess) {
 	activeTurns.Add(1)
-	defer func() { events = finishTrackedTurn(events) }()
+	TurnStarted(sessionID, cfg.Workdir)
+	defer func() { events = finishTrackedTurn(events, func() { TurnEnded(sessionID, cfg.Workdir) }) }()
 	// Resolve the armed skill once, here, so both backends receive the same
 	// already-resolved block and neither can be forgotten.
 	var forced []config.ForcedSkill
@@ -370,9 +383,12 @@ func runOpencodeStream(sessionID, prompt string, cfg config.SessionConfig, force
 		return ch, nil
 	}
 
-	opencodeSession := db.GetOpencodeSession(sessionID)
+	opencodeSession, fork := resumeOrFork(sessionID, cfg)
 	prompt = config.PromptWithSessionPreambleAs(prompt, cfg, author.guestName(), forced...)
 	args := config.BuildOpencodeArgs(prompt, opencodeSession, cfg)
+	if fork {
+		args = config.WithFork(args)
+	}
 
 	cwd := cfg.Workdir
 	if info, err := os.Stat(cwd); err != nil || !info.IsDir() {

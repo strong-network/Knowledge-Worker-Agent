@@ -8,7 +8,6 @@ import { useUiStore, SIDEBAR_MIN } from '../../stores/ui'
 import { useProjectsStore } from '../../stores/projects'
 import { useScheduledTasksStore } from '../../stores/scheduledTasks'
 import SessionList from './SessionList.vue'
-import SearchBar from './SearchBar.vue'
 import ProjectsSection from './ProjectsSection.vue'
 import ScheduledTasksSection from './ScheduledTasksSection.vue'
 import ArtifactsSection from './ArtifactsSection.vue'
@@ -62,6 +61,13 @@ async function openNewChat() {
     return
   }
   focusComposer()
+}
+
+function openSearch() {
+  closeSidebarOnMobile()
+  endPeek()
+  ui.openSearch()
+  nextTick(() => document.querySelector<HTMLInputElement>('#search-input')?.focus())
 }
 
 function focusComposer() {
@@ -198,6 +204,11 @@ function startResize(e: PointerEvent) {
           <path d="M8 1.5a.5.5 0 0 1 .5.5v5.5H14a.5.5 0 0 1 0 1H8.5V14a.5.5 0 0 1-1 0V8.5H2a.5.5 0 0 1 0-1h5.5V2a.5.5 0 0 1 .5-.5z"/>
         </svg>
       </button>
+      <button class="rail-btn" @click="openSearch" title="Search chats" aria-label="Search chats">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" aria-hidden="true">
+          <circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3" stroke-linecap="round"/>
+        </svg>
+      </button>
     </div>
 
     <!-- Full chat bar. Docked in the layout when expanded; the same element
@@ -231,7 +242,18 @@ function startResize(e: PointerEvent) {
           New chat
         </button>
 
-        <SearchBar />
+        <button
+          id="search-btn"
+          class="nav-item"
+          :class="{ active: ui.activeView === 'search' }"
+          :aria-current="ui.activeView === 'search' ? 'page' : undefined"
+          @click="openSearch"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15" aria-hidden="true">
+            <circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3" stroke-linecap="round"/>
+          </svg>
+          Search chats
+        </button>
 
         <ProjectsSection />
 

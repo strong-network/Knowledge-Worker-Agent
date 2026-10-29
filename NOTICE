@@ -114,7 +114,7 @@ Rolldown 1.2.11, its module interop helpers
 Added by the release image (Dockerfile.release)
 ===============================================
 
-opencode v1.19.0, embedded in the server binary as a fallback copy
+opencode v1.19.4, embedded in the server binary as a fallback copy
   Licence: MIT
   Copyright (c) 2025 opencode
 

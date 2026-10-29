@@ -18,6 +18,7 @@ import ChatView from './components/chat/ChatView.vue'
 import ProjectView from './components/chat/ProjectView.vue'
 import ScheduledTasksView from './components/scheduled/ScheduledTasksView.vue'
 import ArtifactsView from './components/artifacts/ArtifactsView.vue'
+import SearchView from './components/search/SearchView.vue'
 import ModalHost from './components/modals/ModalHost.vue'
 import ToastNotification from './components/ToastNotification.vue'
 import BackendDownPage from './components/BackendDownPage.vue'
@@ -222,6 +223,7 @@ onBeforeUnmount(() => {
       <ProjectView v-if="ui.activeView === 'project'" />
       <ScheduledTasksView v-else-if="ui.activeView === 'scheduled'" />
       <ArtifactsView v-else-if="ui.activeView === 'artifacts'" />
+      <SearchView v-else-if="ui.activeView === 'search'" />
       <ChatView v-else />
     </main>
     <ModalHost />

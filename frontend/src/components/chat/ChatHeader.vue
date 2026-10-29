@@ -187,6 +187,15 @@ async function deleteChat() {
   document.getElementById('prompt-input')?.focus()
 }
 
+// Ask on the side: opens a side chat, ready for the question.
+async function askOnTheSide(id: string) {
+  if (!(await sessionsStore.startSideChat(id))) return
+  await nextTick()
+  document.getElementById('prompt-input')?.focus()
+}
+// A side chat's way back to the chat it came from.
+const parent = computed(() => sessionsStore.currentParent)
+
 // Reset edit state if session changes
 watch(() => sessionsStore.currentSessionId, () => { editingTitle.value = false })
 
@@ -217,6 +226,13 @@ const chatItems = computed<MenuEntry[]>(() => {
   const s = currentSession.value
   if (!s) return []
   const items: MenuEntry[] = []
+  if (!s.deprecated && !s.parent_id && sessionsStore.currentMessages.length > 0) {
+    items.push({
+      label: 'Ask on the side',
+      description: "A temporary chat with this chat's context. Nothing in it comes back here.",
+      action: () => { void askOnTheSide(s.id) },
+    })
+  }
   if (me.value.sharing_available === true) {
     items.push(s.temporary
       ? { label: 'Share', unavailable: 'Keep the chat to share it', action: () => {} }
@@ -285,6 +301,18 @@ const chatItems = computed<MenuEntry[]>(() => {
             <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
           In {{ currentProject.name }}
+        </button>
+        <button
+          v-if="parent"
+          type="button"
+          class="side-pill"
+          v-tip="'Back to the main chat'"
+          @click="sessionsStore.switchSession(parent.id)"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="12" height="12" aria-hidden="true">
+            <path d="M15 10l5 5-5 5M4 4v7a4 4 0 0 0 4 4h12" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span class="side-word">Side chat of</span> <span class="side-parent">{{ parent.name || 'Untitled chat' }}</span>
         </button>
         <button
           v-if="expiresAt !== null"
@@ -659,6 +687,17 @@ const chatItems = computed<MenuEntry[]>(() => {
   background: color-mix(in srgb, var(--orange) 14%, var(--surface));
 }
 .temp-pill.last-hour :deep(svg) { color: var(--orange); }
+/* Names the parent, which can be long: the name gives way, not the label. */
+.side-pill {
+  display: inline-flex; align-items: center; gap: 5px; flex: 0 1 auto; min-width: 0; max-width: 280px;
+  padding: 3px 9px; border-radius: 999px; font: inherit; font-size: 12px; font-weight: 600;
+  border: 1px solid var(--border); background: var(--surface2); color: var(--text2);
+  white-space: nowrap; cursor: pointer; transition: background .12s, color .12s;
+}
+.side-pill:hover { color: var(--text); background: var(--surface3); }
+.side-pill svg { flex-shrink: 0; }
+.side-word { flex-shrink: 0; }
+.side-parent { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
 .keep-btn {
   display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px;
   border: 1px solid var(--border); border-radius: 8px; background: var(--surface);
@@ -668,7 +707,8 @@ const chatItems = computed<MenuEntry[]>(() => {
 .keep-btn:hover:not(:disabled) { background: var(--surface2); border-color: var(--text2); }
 .keep-btn:disabled { opacity: .6; cursor: default; }
 @media (max-width: 640px) {
-  .temp-word { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .temp-word,
+  .side-word { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   .files-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   .files-btn { width: 34px; padding: 0; justify-content: center; }
   .keep-btn { width: 34px; padding: 0; justify-content: center; }

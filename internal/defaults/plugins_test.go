@@ -6,6 +6,7 @@ package defaults
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -114,5 +115,64 @@ func TestRetireLegacyDefaultsKeepsPlugins(t *testing.T) {
 
 	if _, err := os.Stat(guard); err != nil {
 		t.Errorf("retirement removed the plugin guard: %v", err)
+	}
+}
+
+func TestInstallPluginsWritesBlankTextGuard(t *testing.T) {
+	dir := t.TempDir()
+	var out bytes.Buffer
+	if err := InstallPlugins(&out, dir); err != nil {
+		t.Fatalf("InstallPlugins: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "plugin", "blank-text-guard.js"))
+	if err != nil {
+		t.Fatalf("expected the blank text guard on disk: %v", err)
+	}
+	if !strings.Contains(string(data), `"experimental.chat.messages.transform"`) {
+		t.Error("guard does not register the experimental.chat.messages.transform hook")
+	}
+}
+
+// Runs the guard's hook in Node on a history like the one that broke a chat: only
+// the whitespace-only text block goes; empty text, real text and other parts stay.
+func TestBlankTextGuardDropsOnlyWhitespaceText(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed")
+	}
+	dir := t.TempDir()
+	var out bytes.Buffer
+	if err := InstallPlugins(&out, dir); err != nil {
+		t.Fatal(err)
+	}
+	src, err := os.ReadFile(filepath.Join(dir, "plugin", "blank-text-guard.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "guard.mjs"), src, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := `import { BlankTextGuard } from "./guard.mjs"
+const hooks = await BlankTextGuard()
+const output = { messages: [
+  { info: { role: "user" }, parts: [{ type: "text", text: "hello" }] },
+  { info: { role: "assistant" }, parts: [{ type: "step-start" }, { type: "text", text: "\n\n" }, { type: "text", text: "" }, { type: "tool", tool: "bash" }, { type: "text", text: " ok " }] },
+  { info: { role: "user" }, parts: [{ type: "text", text: " \t" }, { type: "file", mime: "image/png" }] },
+] }
+await hooks["experimental.chat.messages.transform"]({}, output)
+console.log(JSON.stringify(output.messages.map((m) => m.parts.map((p) => p.type === "text" ? JSON.stringify(p.text) : p.type))))
+`
+	if err := os.WriteFile(filepath.Join(dir, "run.mjs"), []byte(script), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(node, "run.mjs")
+	cmd.Dir = dir
+	got, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("node: %v", err)
+	}
+	want := `[["\"hello\""],["step-start","\"\"","tool","\" ok \""],["file"]]`
+	if strings.TrimSpace(string(got)) != want {
+		t.Errorf("parts after the hook = %s\nwant %s", got, want)
 	}
 }

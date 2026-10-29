@@ -26,6 +26,20 @@ export interface FileApi {
   officePreviewUrl?: (path: string) => string
   // Absent for guests, whose HTML previews keep scripts off.
   previewLink?: (path: string) => Promise<PreviewLink>
+  // A text file's earlier versions, oldest first. Absent for guests.
+  versions?: (path: string) => Promise<FileVersion[]>
+  versionText?: (path: string, v: number) => Promise<string>
+  versionDownloadUrl?: (path: string, v: number) => string
+}
+
+// One version of a file. author is who made it: the agent, you, a guest
+// (named by name), or '' when that isn't known.
+export interface FileVersion {
+  v: number
+  at: string
+  author: 'agent' | 'you' | 'guest' | ''
+  name?: string
+  size: number
 }
 
 // Sharing a file from the Files widget: the owner's only. Without share, the
@@ -57,6 +71,21 @@ export const ownerFileApi: FileApi = {
   duplicate: duplicatePath,
   officePreviewUrl,
   previewLink,
+  async versions(path) {
+    const res = await fetch(`/api/files/versions?path=${encodeURIComponent(path)}`, { cache: 'no-store' })
+    if (!res.ok) throw new Error("Couldn't load the file's versions")
+    return (await res.json()).versions as FileVersion[]
+  },
+  async versionText(path, v) {
+    const res = await fetch(versionUrl(path, v), { cache: 'no-store' })
+    if (!res.ok) throw new Error(`Couldn't load v${v}`)
+    return res.text()
+  },
+  versionDownloadUrl: (path, v) => `${versionUrl(path, v)}&download=1`,
+}
+
+function versionUrl(path: string, v: number): string {
+  return `/api/files/version?path=${encodeURIComponent(path)}&v=${v}`
 }
 
 // The guest routes answer failures with {error}, written for the guest.

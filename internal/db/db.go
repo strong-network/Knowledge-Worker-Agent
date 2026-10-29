@@ -241,6 +241,23 @@ func migrate() error {
 		id         TEXT PRIMARY KEY,
 		expired_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
+
+	-- Earlier versions of a text file (internal/versions). The content is kept
+	-- outside the database, by sha256. mod_time and size are the file's when the
+	-- version was taken, to tell cheaply whether it has changed since; turn is
+	-- the agent turn that made it, so the rest of that turn updates it in place.
+	CREATE TABLE IF NOT EXISTS file_versions (
+		path       TEXT NOT NULL,
+		v          INTEGER NOT NULL,
+		sha256     TEXT NOT NULL,
+		size       INTEGER NOT NULL,
+		mod_time   INTEGER NOT NULL,
+		author     TEXT NOT NULL DEFAULT '',
+		turn       TEXT NOT NULL DEFAULT '',
+		created_ms INTEGER NOT NULL,
+		PRIMARY KEY (path, v)
+	);
+	CREATE INDEX IF NOT EXISTS idx_file_versions_sha ON file_versions(sha256);
 	`
 	if _, err := DB.Exec(schema); err != nil {
 		return err
@@ -328,12 +345,33 @@ func UpdateSessionConfig(id string, cfg config.SessionConfig) error {
 	return err
 }
 
+// SetOpencodeSession records the chat's opencode session. A side chat with a
+// session of its own no longer forks its parent's.
 func SetOpencodeSession(id, opencodeSessionID string) error {
 	_, err := DB.Exec(
-		`UPDATE sessions SET opencode_session_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-		opencodeSessionID, id,
+		`UPDATE sessions SET opencode_session_id = ?, updated_at = CURRENT_TIMESTAMP,
+			config = CASE WHEN ? != '' THEN json_remove(config, '$.fork') ELSE config END
+		WHERE id = ?`,
+		opencodeSessionID, opencodeSessionID, id,
 	)
 	return err
+}
+
+// FolderInUse reports whether a chat works in dir.
+func FolderInUse(dir string) bool {
+	dir = filepath.Clean(dir)
+	rows, err := DB.Query(`SELECT json_extract(config, '$.workdir') FROM sessions`)
+	if err != nil {
+		return true
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var w sql.NullString
+		if rows.Scan(&w) == nil && w.Valid && strings.TrimSpace(w.String) != "" && filepath.Clean(w.String) == dir {
+			return true
+		}
+	}
+	return false
 }
 
 func GetOpencodeSession(id string) string {
@@ -394,6 +432,8 @@ func AddTurnMessage(sessionID, role, content, usage, turnID string) error {
 }
 
 type ChatMessage struct {
+	// ID is the row's id, which search results name.
+	ID      int64  `json:"id"`
 	Role    string `json:"role"`
 	Content string `json:"content"`
 	// CreatedAt is RFC3339 UTC. The column is written by SQLite's
@@ -429,7 +469,7 @@ func CountMessages(sessionID string) int {
 
 func GetMessages(sessionID string) []ChatMessage {
 	rows, err := DB.Query(
-		`SELECT role, content,
+		`SELECT id, role, content,
 		        strftime('%Y-%m-%dT%H:%M:%SZ', created_at) AS created_at,
 		        usage, author_id, author_name, turn_id
 		   FROM messages WHERE session_id = ? ORDER BY id ASC`, sessionID,
@@ -445,7 +485,7 @@ func GetMessages(sessionID string) []ChatMessage {
 		// created_at is nullable in the schema, and strftime returns NULL for
 		// an unparseable value, so scan through nullable holders.
 		var createdAt, usage, authorID, authorName, turnID sql.NullString
-		if err := rows.Scan(&m.Role, &m.Content, &createdAt, &usage, &authorID, &authorName, &turnID); err != nil {
+		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &createdAt, &usage, &authorID, &authorName, &turnID); err != nil {
 			continue
 		}
 		m.CreatedAt = createdAt.String
@@ -517,6 +557,8 @@ type SessionListItem struct {
 	// adds a message. A relative time, so a browser's wrong clock can't move it.
 	Temporary bool  `json:"temporary"`
 	ExpiresIn int64 `json:"expires_in"`
+	// ParentID is the chat a side chat was started from.
+	ParentID string `json:"parent_id,omitempty"`
 	// TaskID is set when this chat was produced by a scheduled task run.
 	// Such chats are surfaced under the Scheduled tasks section, not
 	// in Recent chats. Empty for ordinary chats.
@@ -589,6 +631,7 @@ func ListSessions() []SessionListItem {
 			Draft:          draft.String,
 			Temporary:      cfg.Temporary,
 			ExpiresIn:      expiresIn(cfg.Temporary, last, now),
+			ParentID:       cfg.ParentID,
 			TaskID:         taskID.String,
 			NoteCount:      noteCount,
 			Shared:         shared,

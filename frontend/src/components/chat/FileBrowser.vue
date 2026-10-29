@@ -29,8 +29,6 @@ const props = withDefaults(defineProps<{
   sharing?: FileSharing
 }>(), { shown: true, embedded: false, canPopOut: false })
 
-const bodyCollapsed = defineModel<boolean>('bodyCollapsed', { default: false })
-
 const emit = defineEmits<{
   'open-change': [open: boolean]
   listed: [entries: FileEntry[]]
@@ -530,16 +528,16 @@ defineExpose({ refresh: fullRefresh })
     v-if="shown"
     ref="panelEl"
     class="file-panel"
-    :class="{ editing: isOpen, fullscreen, embedded, 'body-collapsed': bodyCollapsed && !isOpen }"
+    :class="{ editing: isOpen, fullscreen, embedded }"
     @dragover="dragOver(null, $event)"
     @drop="dropOn"
     @dragleave="panelDragLeave"
   >
     <!-- ── Browse view ── -->
     <template v-if="!isOpen">
-      <div class="fp-header" :class="{ clickable: !embedded }" @click="!embedded && (bodyCollapsed = !bodyCollapsed)">
+      <div class="fp-header">
         <span class="fp-title">Files</span>
-        <div class="fp-header-actions" @click.stop>
+        <div class="fp-header-actions">
           <button class="fp-ico fp-upload" @click="triggerUpload" title="Upload file" aria-label="Upload file">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="15" height="15"><path d="M12 16V4M7 9l5-5 5 5M5 20h14" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </button>
@@ -549,24 +547,11 @@ defineExpose({ refresh: fullRefresh })
           <button class="fp-ico" @click="fullRefresh" title="Refresh" aria-label="Refresh">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="15" height="15"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </button>
-          <!-- In-place collapse chevron -->
-          <button
-            v-if="!embedded"
-            class="fp-ico"
-            @click="bodyCollapsed = !bodyCollapsed"
-            :title="bodyCollapsed ? 'Expand' : 'Collapse'"
-            :aria-label="bodyCollapsed ? 'Expand' : 'Collapse'"
-          >
-            <svg viewBox="0 0 16 16" fill="currentColor" width="12" height="12" :style="{ transform: bodyCollapsed ? 'rotate(180deg)' : 'none' }">
-              <path d="M4.22 9.78a.75.75 0 0 0 1.06 0L8 7.06l2.72 2.72a.75.75 0 1 0 1.06-1.06L8.53 5.47a.75.75 0 0 0-1.06 0L4.22 8.72a.75.75 0 0 0 0 1.06z"/>
-            </svg>
-          </button>
         </div>
       </div>
       <input ref="uploadInput" type="file" multiple style="display:none" @change="onUpload" />
 
       <div
-        v-if="!bodyCollapsed"
         class="fp-list"
         :class="{ 'drop-root': dragPath && dropTarget === rootDir }"
       >
@@ -638,8 +623,8 @@ defineExpose({ refresh: fullRefresh })
   </div>
 </template>
 
-<style scoped>/* Files widget: a card filling the shared widget column. It grows to take the
-   remaining column height (below the Plan card) and scrolls internally. */
+<style scoped>/* Files widget: fills the column beside the chat and scrolls internally. On a
+   narrow screen, where it opens over the chat, it's a card. */
 .file-panel {
   width: 100%;
   background: var(--surface);
@@ -651,30 +636,27 @@ defineExpose({ refresh: fullRefresh })
   flex: 1 1 auto;
   overflow: hidden;
 }
-/* Browse mode caps its height so the list scrolls without pushing the column;
-   editor mode stretches to fill the column. */
-.file-panel:not(.editing) { max-height: 40vh; }
-/* Embedded (project view): fill the host container instead of the chat-docked
-   card look — no cap, no outer border/shadow (the host provides the frame). */
+@media (min-width: 901px) {
+  .file-panel:not(.embedded) { border: none; border-radius: 0; box-shadow: none; }
+}
+/* Embedded (project view): fill the host container, with no frame of its own
+   (the host provides it). */
 .file-panel.embedded {
   height: 100%; max-height: none; border: none; border-radius: 0; box-shadow: none;
 }
-.file-panel.embedded:not(.editing) { max-height: none; }
 .file-panel.editing { flex: 1 1 auto; }
 .file-panel.fullscreen {
   position: fixed; inset: 0; width: 100vw !important; max-width: 100vw !important;
   height: 100vh; max-height: 100vh; border-radius: 0; z-index: 500;
 }
 
+/* Beside the chat, the host sets --fp-header-h so this lines up with the
+   chat's header. */
 .fp-header {
-  display: flex; align-items: center; gap: 6px; padding: 8px 10px;
+  display: flex; align-items: center; gap: 6px; padding: 8px 10px 8px 14px;
+  min-height: var(--fp-header-h, auto);
   border-bottom: 1px solid var(--border); background: var(--surface); flex-shrink: 0;
 }
-.fp-header.clickable { cursor: pointer; user-select: none; }
-/* When collapsed in place, the header has no list below it — drop its divider
-   so it reads as a single compact card row. */
-.file-panel.body-collapsed { flex: 0 0 auto; }
-.file-panel.body-collapsed .fp-header { border-bottom: none; }
 .fp-title { font-size: 15px; font-weight: 700; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fp-header-actions { display: flex; align-items: center; gap: 2px; }
 .fp-ico {

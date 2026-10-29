@@ -30,9 +30,9 @@ RUN npx vite build
 # internal/opencodeinstaller, which accepts only a matching embedded copy; a test
 # checks they agree. The build fails if the download doesn't match.
 FROM alpine:3.20 AS opencodeasset
-ARG OPENCODE_VERSION=v1.19.0
-ARG OPENCODE_SHA256_LINUX_X64=7bb9e61ad6feacf2e89c10a6a2c1840e3de4220bb50ba1fc7110f31806076aec
-ARG OPENCODE_SHA256_LINUX_ARM64=e9841d43d3e1a8f36ed2691592d3b8b4fb097e606c8b559a277a1b845840e26b
+ARG OPENCODE_VERSION=v1.19.4
+ARG OPENCODE_SHA256_LINUX_X64=849bd6b3d959a1d2ef200ed1634a51c79a45ca236aa26665d75debd694805cce
+ARG OPENCODE_SHA256_LINUX_ARM64=8568230ccd847dc93e95b9f6894379077d3e014a16b48040743573e77c23e85f
 ARG TARGETARCH=amd64
 RUN apk add --no-cache curl \
     && case "${TARGETARCH}" in \
@@ -126,7 +126,7 @@ RUN mkdir -p /out \
        | sha256sum -c -
 
 # --- Runtime ---
-FROM strongnetwork/cloud_editor_generic:2.3.9
+FROM strongnetwork/cloud_editor_generic:2.3.11
 
 USER root
 # The chat server owns workspace startup, replacing the base image's own.

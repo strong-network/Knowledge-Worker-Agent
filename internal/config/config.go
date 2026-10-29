@@ -920,6 +920,13 @@ type SessionConfig struct {
 	// to a project, Keep is applied at the project level (the shared project
 	// workspace is the durable unit), not stored here.
 	Keep bool `json:"keep"`
+	// ParentID is the chat a side chat was started from, in the parent's
+	// folder. Set only when the side chat is made.
+	ParentID string `json:"parent_id,omitempty"`
+	// Fork makes a side chat's first turn start from its parent's conversation
+	// as it is then, by forking the parent's opencode session. Dropped once the
+	// side chat has an opencode session of its own.
+	Fork bool `json:"fork,omitempty"`
 	// McpSelection is the per-chat connector selection: a map of
 	// MCP server name → whether it should be connected for this chat. A nil map
 	// means "not yet seeded" and callers treat it as "all globally-enabled
@@ -1000,4 +1007,12 @@ func BuildOpencodeArgs(prompt string, opencodeSessionID string, cfg SessionConfi
 	// from being parsed as opencode flags.
 	args = append(args, "--", prompt)
 	return args
+}
+
+// WithFork makes args from BuildOpencodeArgs fork the session they name into
+// a new one, rather than continue it.
+func WithFork(args []string) []string {
+	n := len(args)
+	out := append([]string{}, args[:n-2]...)
+	return append(out, "--fork", args[n-2], args[n-1])
 }

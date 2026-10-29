@@ -101,6 +101,8 @@ export interface Session {
   // when, on this browser's clock (ms), from the server's time left.
   temporary?: boolean
   expires_at?: number
+  // Side chats: the chat this one was started from ('' for other chats).
+  parent_id?: string
 }
 
 /**
@@ -121,6 +123,8 @@ export interface UsageInfo {
 }
 
 export interface Message {
+  // The stored message's id; absent until the history is reloaded.
+  id?: number
   role: 'user' | 'assistant'
   content: string
   // RFC3339 UTC, from the server (backend: created_at). Absent on messages
@@ -354,6 +358,7 @@ export async function fetchSessions(): Promise<Session[]> {
     present: s.present || 0,
     temporary: s.temporary === true,
     expires_at: s.temporary === true ? Date.now() + (s.expires_in || 0) * 1000 : undefined,
+    parent_id: s.parent_id || '',
   }))
 }
 
@@ -366,8 +371,19 @@ export async function createSession(config: SessionConfig & { name?: string }): 
     body: JSON.stringify(payload),
   })
   if (!res.ok) throw new Error(`Failed to create session: ${res.statusText}`)
-  const data = await res.json()
-  // Backend returns { session_id, config }; map to Session
+  return createdSession(await res.json(), config)
+}
+
+/** Starts a side chat of a chat: a temporary chat that knows its conversation. */
+export async function createSideChat(parentId: string): Promise<Session> {
+  const res = await fetch(`${BASE}/api/sessions/${encodeURIComponent(parentId)}/side`, { method: 'POST' })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new SessionError(res.status, data.error || res.statusText)
+  return createdSession(data)
+}
+
+// The server answers a new chat with { session_id, config }.
+function createdSession(data: any, config: SessionConfig & { name?: string } = {}): Session {
   return {
     id: data.session_id,
     name: data.config?.label || config.name || '',
@@ -382,6 +398,7 @@ export async function createSession(config: SessionConfig & { name?: string }): 
     favorite: false,
     temporary: data.config?.temporary === true,
     expires_at: data.config?.temporary === true ? Date.now() + TEMPORARY_MS : undefined,
+    parent_id: data.config?.parent_id || '',
   }
 }
 
@@ -517,6 +534,7 @@ export async function fetchHistory(sessionId: string): Promise<HistoryResponse> 
 // createdAt, per this codebase's naming split).
 function toMessage(m: any): Message {
   return {
+    id: typeof m.id === 'number' ? m.id : undefined,
     role: m.role,
     content: m.content,
     createdAt: m.created_at || undefined,
@@ -525,6 +543,57 @@ function toMessage(m: any): Message {
     authorName: m.author_name || undefined,
     turnId: m.turn_id || undefined,
   }
+}
+
+export interface SearchTerm {
+  text: string
+  // Also matches longer words that start with it.
+  prefix?: boolean
+}
+
+export interface ChatSearchHit {
+  session_id: string
+  title: string
+  project?: string
+  temporary?: boolean
+  updated_at: string
+  // False when the chat matched only allowing for typos.
+  exact: boolean
+  title_match?: boolean
+  matches: number
+  message?: {
+    id: number
+    role: 'user' | 'assistant'
+    author_name?: string
+    created_at: string
+    snippet: string
+  }
+  // The chat's first message, when only its title matched.
+  excerpt?: string
+}
+
+export interface ChatSearchResult {
+  chats: ChatSearchHit[]
+  total: number
+  offset: number
+  match: 'all' | 'any'
+  terms: SearchTerm[]
+  variants: string[]
+}
+
+/** Searches the chats' titles and messages; from and to are RFC 3339. */
+export async function searchChats(params: {
+  q: string; from?: string; to?: string; offset?: number; limit?: number
+}): Promise<ChatSearchResult> {
+  const qs = new URLSearchParams({ q: params.q })
+  if (params.from) qs.set('from', params.from)
+  if (params.to) qs.set('to', params.to)
+  if (params.offset) qs.set('offset', String(params.offset))
+  if (params.limit) qs.set('limit', String(params.limit))
+  const res = await fetch(`${BASE}/api/search?${qs}`)
+  const data = await res.json().catch(() => null)
+  if (!res.ok) throw new Error(data?.error || "Search isn't available right now. Try again in a moment.")
+  return data as ChatSearchResult
 }
 
 export async function getSessionConfig(sessionId: string): Promise<SessionConfig> {
