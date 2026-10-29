@@ -72,11 +72,11 @@ docker pull ghcr.io/strong-network/knowledge-worker-agent:latest
 docker pull strongnetwork/knowledge-worker-agent:latest
 
 # A specific version
-docker pull ghcr.io/strong-network/knowledge-worker-agent:1.5.5
-docker pull strongnetwork/knowledge-worker-agent:1.5.5
+docker pull ghcr.io/strong-network/knowledge-worker-agent:1.6.0
+docker pull strongnetwork/knowledge-worker-agent:1.6.0
 ```
 
-The latest version is **1.5.5**. Every published image is tagged with its version, taken from the
+The latest version is **1.6.0**. Every published image is tagged with its version, taken from the
 [`VERSION`](VERSION) file, and `latest` moves to the most recently published one. Pin the version
 tag for anything repeatable, and the digest where you need the exact image. Images are
 `linux/amd64`.
@@ -212,6 +212,7 @@ frontend/                  Vue 3 + TypeScript + Pinia SPA
 | `GET /api/sessions/{id}/stream` / `GET /api/sessions/active` | Attach to a session's SSE / list active streams |
 | `GET/POST/DELETE /api/sessions/{id}/queue` | Prompt queue management |
 | `GET /api/history` | History |
+| `GET /api/search` | Search chats by title and message, one result per chat (the Search page) |
 | `GET /api/recall/sessions` / `GET /api/recall/search` / `GET /api/recall/read` | Cross-session retrieval (read-only; backs the `recall` MCP server) |
 | `GET /api/browse` / `POST /api/files/save` / `GET /api/files/download` | File manager |
 | `GET /api/git/status` / `changes` — `POST /api/git/pull` / `push` / `commit` / `clone` | Source control |

@@ -83,15 +83,6 @@ function onOpenChange(open: boolean) {
   if (!props.embedded) ui.setFilePanelReading(open)
 }
 
-// Body collapse: collapses the file list
-// in place while keeping the "Files" header visible, toggled by a rotating
-// chevron. Persisted so it survives reloads like other panel prefs. Read
-// through from the store, so opening the files from the header expands it.
-const bodyCollapsed = computed({
-  get: () => ui.filePanelBodyCollapsed,
-  set: (v: boolean) => ui.setFilePanelBodyCollapsed(v),
-})
-
 // The header's Files button puts the widget away; it still lists the folder,
 // so new files are counted on the button meanwhile.
 const shown = computed(() =>
@@ -217,7 +208,6 @@ onBeforeUnmount(() => {
     can-pop-out
     :open-elsewhere="openElsewhere"
     :sharing="sharing"
-    v-model:body-collapsed="bodyCollapsed"
     :class="{ 'mobile-open': ui.mobileFilesOpen }"
     @open-change="onOpenChange"
     @listed="detectContent"

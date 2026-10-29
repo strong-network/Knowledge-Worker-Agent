@@ -152,6 +152,28 @@ func (c *Client) CreateSession(ctx context.Context, title string) (string, error
 	return si.ID, nil
 }
 
+// ForkSession copies a session, with all its messages, into a new one (POST
+// /session/{id}/fork), and returns the new session's id.
+func (c *Client) ForkSession(ctx context.Context, sessionID string) (string, error) {
+	req, err := c.newRequest(ctx, http.MethodPost, "/session/"+sessionID+"/fork", map[string]any{})
+	if err != nil {
+		return "", err
+	}
+	resp, err := c.do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	var si SessionInfo
+	if err := json.NewDecoder(resp.Body).Decode(&si); err != nil {
+		return "", err
+	}
+	if si.ID == "" {
+		return "", fmt.Errorf("opencode server returned an empty session id for the fork")
+	}
+	return si.ID, nil
+}
+
 // SessionExists reports whether the given opencode session id still exists on
 // the server (GET /session/{id}). A server restart drops all in-memory
 // sessions, so a persisted id may be stale.

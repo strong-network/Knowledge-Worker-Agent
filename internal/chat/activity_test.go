@@ -33,3 +33,21 @@ func TestTrackedTurnsRemainActiveUntilAllFinish(t *testing.T) {
 		t.Fatal("finished/error tasks kept workspace active")
 	}
 }
+
+func TestATurnEndsOnlyOnceItsEventsHaveRun(t *testing.T) {
+	events := make(chan *Event, 1)
+	ended := false
+	activeTurns.Add(1)
+	out := finishTrackedTurn(events, func() { ended = true })
+	events <- &Event{Kind: "text"}
+	<-out
+	if ended {
+		t.Fatal("the turn ended while it still had events")
+	}
+	close(events)
+	for range out {
+	}
+	if !ended {
+		t.Fatal("the turn's end didn't run before its events closed")
+	}
+}

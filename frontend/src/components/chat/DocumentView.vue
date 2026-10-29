@@ -12,11 +12,14 @@
 // The host owns *which* file is open (and any unsaved-changes prompt before
 // changing it); this component owns everything about showing and editing it.
 import { ref, computed, watch, onBeforeUnmount, nextTick } from 'vue'
-import { ownerFileApi, type FileApi } from '../../api/files'
+import { ownerFileApi, type FileApi, type FileVersion } from '../../api/files'
 import { fetchOfficeStatus, installOffice, type OfficeInstallStatus, type PreviewLink } from '../../api'
-import { renderMarkdown, highlightCode } from '../../composables/useMarkdown'
+import { renderMarkdownChanges, highlightCode } from '../../composables/useMarkdown'
 import { parseCsv } from '../../utils/csv'
 import { triggerDownload } from '../../utils/download'
+import { diffItems, lineChanges, splitLines } from '../../utils/linediff'
+import { changeMarks, changeMarksTheme, setChanges } from '../../utils/cmChanges'
+import ActionMenu, { type MenuEntry } from '../ActionMenu.vue'
 import githubLightCss from 'github-markdown-css/github-markdown-light.css?inline'
 import githubDarkCss from 'github-markdown-css/github-markdown-dark.css?inline'
 import { EditorView, basicSetup } from 'codemirror'
@@ -78,7 +81,7 @@ const isPreviewing = computed(
 )
 
 const renderedMarkdown = computed(() =>
-  isMarkdown.value ? renderMarkdown(editorContent.value || originalContent) : '',
+  isMarkdown.value ? renderMarkdownChanges(shownText.value, against.value, showDeletions.value) : '',
 )
 
 // Parsed from the live buffer rather than from disk, so edits made in the
@@ -86,8 +89,151 @@ const renderedMarkdown = computed(() =>
 // immediacy markdown has. (The HTML preview can't do this: it is an iframe
 // served from disk, which is why that one asks you to save first.)
 const csvTable = computed(() =>
-  isCsv.value ? parseCsv(editorContent.value || originalContent) : null,
+  isCsv.value ? parseCsv(shownText.value) : null,
 )
+
+// ── Versions ──
+// A text file's versions, oldest first, and the one shown: null is the file as
+// it is now. Changes are counted and marked against the version before the one
+// shown.
+const versions = ref<FileVersion[]>([])
+const shownV = ref<number | null>(null)
+const olderText = ref('')
+const prevText = ref<string | null>(null)
+const highlight = ref(true)
+const announced = ref('')
+// Texts of versions other than the latest, which no longer change.
+const versionTexts = new Map<number, string>()
+
+const latestV = computed(() => versions.value[versions.value.length - 1]?.v ?? 0)
+const viewingV = computed(() => shownV.value ?? latestV.value)
+const older = computed(() => shownV.value !== null)
+const viewed = computed(() => versions.value.find(x => x.v === viewingV.value))
+const prevV = computed(() => {
+  const i = versions.value.findIndex(x => x.v === viewingV.value)
+  return i > 0 ? versions.value[i - 1].v : 0
+})
+const showVersions = computed(
+  () => !!files.value.versions && versions.value.length > 1 && ['code', 'markdown', 'csv'].includes(viewMode.value),
+)
+// What the text views show: the buffer, or an older version.
+const shownText = computed(() => (older.value ? olderText.value : editorContent.value || originalContent))
+
+const changes = computed(() =>
+  showVersions.value && prevText.value !== null ? diffItems(splitLines(prevText.value), splitLines(shownText.value)) : null,
+)
+const anyChanges = computed(() => !!changes.value && (changes.value.added > 0 || changes.value.removed > 0))
+const marks = computed(() => (highlight.value && changes.value ? changes.value.marked : new Set<number>()))
+// Remembered: it's how you like to read changes, not something about one file.
+const showDeletions = ref(localStorage.getItem('showDeletions') === '1')
+watch(showDeletions, (on) => localStorage.setItem('showDeletions', on ? '1' : '0'))
+// The version the text views mark changes against, while highlighting is on.
+const against = computed(() => (highlight.value && changes.value ? prevText.value : null))
+const lineMarks = computed(() =>
+  against.value !== null && changes.value ? lineChanges(splitLines(against.value), splitLines(shownText.value), changes.value) : null,
+)
+// A table's rows are compared as rows, so a quoted line break doesn't shift them.
+const csvMarks = computed(() => {
+  if (!marks.value.size || !csvTable.value || prevText.value === null) return new Set<number>()
+  const key = (r: string[]) => JSON.stringify(r)
+  return diffItems(parseCsv(prevText.value).rows.map(key), csvTable.value.rows.map(key)).marked
+})
+
+const lines = (n: number) => `${n} ${n === 1 ? 'line' : 'lines'}`
+const changesText = computed(() => {
+  const c = changes.value
+  if (!c) return ''
+  const since = `Since v${prevV.value}: `
+  if (c.added && c.removed) return `${since}${lines(c.added)} added, ${c.removed} removed or changed`
+  if (c.added) return `${since}${lines(c.added)} added`
+  if (c.removed) return `${since}${lines(c.removed)} removed or changed`
+  return `${since}no changes`
+})
+
+function byWhom(x: FileVersion): string {
+  switch (x.author) {
+    case 'agent': return 'by the agent'
+    case 'you': return 'by you'
+    case 'guest': return `by ${x.name || 'a guest'}`
+    default: return ''
+  }
+}
+function when(at: string): string {
+  const d = new Date(at)
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  return d.toDateString() === new Date().toDateString()
+    ? time
+    : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}`
+}
+const metaText = computed(() => {
+  const x = viewed.value
+  if (!x) return ''
+  return [x.v === 1 ? 'Created' : 'Updated', when(x.at), byWhom(x)].filter(Boolean).join(' ')
+})
+const olderNote = computed(() =>
+  versions.value.some(x => x.v > viewingV.value && x.author === 'agent')
+    ? 'The agent has changed this file since.'
+    : 'This file has changed since.',
+)
+const versionItems = computed<MenuEntry[]>(() =>
+  [...versions.value].reverse().map((x) => {
+    const who = byWhom(x)
+    return {
+      label: x.v === latestV.value ? `v${x.v} · Latest` : `v${x.v}`,
+      description: [when(x.at), who && who[0].toUpperCase() + who.slice(1)].filter(Boolean).join(' · '),
+      checked: x.v === viewingV.value,
+      action: () => { void showVersion(x.v === latestV.value ? null : x.v) },
+    }
+  }),
+)
+
+async function versionText(v: number): Promise<string | null> {
+  const known = versionTexts.get(v)
+  if (known !== undefined) return known
+  try {
+    const text = await files.value.versionText!(props.path, v)
+    if (v !== latestV.value) versionTexts.set(v, text)
+    return text
+  } catch {
+    return null
+  }
+}
+
+async function loadPrev() {
+  const path = props.path
+  const v = prevV.value
+  const text = v ? await versionText(v) : null
+  if (props.path === path && prevV.value === v) prevText.value = text
+}
+
+// Re-reads the list, which takes a version of any change first. A newer
+// version while the file is followed is announced; an older one shown stays.
+async function loadVersions() {
+  const get = files.value.versions
+  if (!get) return
+  const path = props.path
+  let list: FileVersion[]
+  try { list = await get(path) } catch { return }
+  if (props.path !== path) return
+  const before = latestV.value
+  versions.value = list
+  if (before && latestV.value > before && !older.value) announced.value = `"${props.name}" was updated to v${latestV.value}`
+  if (older.value && !list.some(x => x.v === shownV.value)) shownV.value = null
+  await loadPrev()
+}
+
+async function showVersion(v: number | null) {
+  const path = props.path
+  if (v !== null) {
+    const text = await versionText(v)
+    if (props.path !== path) return
+    if (text === null) { ;(window as any).showToast?.(`Couldn't open v${v}. Try again.`); return }
+    olderText.value = text
+  }
+  shownV.value = v
+  await loadPrev()
+  if (viewMode.value === 'code') initEditor(shownText.value, props.name)
+}
 watch([renderedMarkdown, viewMode], () => {
   if (viewMode.value !== 'markdown') return
   nextTick(() => { if (markdownPreviewEl.value) highlightCode(markdownPreviewEl.value) })
@@ -277,6 +423,12 @@ async function load() {
   editorContent.value = ''
   originalContent = ''
   shownVersion = ''
+  versions.value = []
+  shownV.value = null
+  olderText.value = ''
+  prevText.value = null
+  announced.value = ''
+  versionTexts.clear()
   dirty.value = false
   officeState.value = ''
   officeError.value = ''
@@ -338,6 +490,7 @@ async function load() {
       viewMode.value = 'code'
     }
     if (viewMode.value === 'code') initEditor(data.content, name)
+    void loadVersions()
   } catch {
     ;(window as any).showToast?.('Failed to open file')
   }
@@ -391,13 +544,14 @@ async function reload() {
     if (data.type !== 'text' || data.content === originalContent) return
     originalContent = data.content
     editorContent.value = data.content
-    if (editorView) {
+    if (editorView && !older.value) {
       const cur = editorView.state.doc.toString()
       if (cur !== data.content) {
         editorView.dispatch({ changes: { from: 0, to: cur.length, insert: data.content } })
       }
     }
     dirty.value = false
+    void loadVersions()
   } catch { /* file may have been deleted */ }
 }
 
@@ -440,6 +594,8 @@ function initEditor(content: string, filename: string) {
     if (!editorContainer.value) return
     // Prose wraps; code keeps its lines, as in most editors.
     const wrap = ['md', 'markdown', 'mdx', 'txt'].includes(ext(filename))
+    // An older version can be read, not edited.
+    const readOnly = older.value
     const state = EditorState.create({
       doc: content,
       extensions: [
@@ -447,6 +603,9 @@ function initEditor(content: string, filename: string) {
         oneDark,
         langFor(filename),
         wrap ? EditorView.lineWrapping : [],
+        readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : [],
+        changeMarks,
+        changeMarksTheme,
         EditorView.updateListener.of((u) => {
           if (u.docChanged) {
             const doc = u.state.doc.toString()
@@ -457,8 +616,11 @@ function initEditor(content: string, filename: string) {
       ],
     })
     editorView = new EditorView({ state, parent: editorContainer.value })
+    editorView.dispatch({ effects: setChanges.of({ changes: lineMarks.value, deletions: showDeletions.value }) })
   })
 }
+
+watch([lineMarks, showDeletions], ([changes, deletions]) => editorView?.dispatch({ effects: setChanges.of({ changes, deletions }) }))
 
 function teardownEditor() {
   if (editorView) { editorView.destroy(); editorView = null }
@@ -469,7 +631,7 @@ function togglePreviewMode() {
   if (!hasPreview.value) return
   if (isPreviewing.value) {
     viewMode.value = 'code'
-    initEditor(editorContent.value || originalContent, props.name)
+    initEditor(shownText.value, props.name)
     return
   }
   if (isHtml.value) {
@@ -498,13 +660,16 @@ async function save() {
     // The HTML preview reads from disk, so point it at the new bytes.
     if (isHtml.value) htmlUrl.value = previewUrl(props.path)
     ;(window as any).showToast?.('File saved')
+    void loadVersions()
   } catch {
     ;(window as any).showToast?.('Save error')
   }
 }
 
 function downloadOpen() {
-  if (props.path) triggerDownload(files.value.downloadUrl(props.path))
+  if (!props.path) return
+  const v = shownV.value
+  triggerDownload(v !== null && files.value.versionDownloadUrl ? files.value.versionDownloadUrl(props.path, v) : files.value.downloadUrl(props.path))
 }
 
 onBeforeUnmount(() => {
@@ -526,6 +691,14 @@ defineExpose({ reload, reopen, save })
       <span class="fp-title" :title="name">{{ name }}</span>
       <span v-if="dirty" class="fp-dirty" title="Unsaved changes">●</span>
       <div class="fp-header-actions">
+        <ActionMenu
+          v-if="showVersions"
+          variant="chip"
+          :trigger-text="`v${viewingV}`"
+          :label="`Version v${viewingV}`"
+          menu-label="Versions"
+          :items="versionItems"
+        />
         <button
           v-if="hasPreview && (isPreviewing || viewMode === 'code')"
           class="fp-btn"
@@ -533,11 +706,31 @@ defineExpose({ reload, reopen, save })
           @click="togglePreviewMode"
           :title="isPreviewing ? 'Edit source' : 'Preview'"
         >{{ isPreviewing ? '‹ › Code' : '◉ Preview' }}</button>
-        <button v-if="viewMode === 'code'" class="fp-btn save" :class="{ unsaved: dirty }" @click="save">Save</button>
+        <button v-if="viewMode === 'code' && !older" class="fp-btn save" :class="{ unsaved: dirty }" @click="save">Save</button>
         <button class="fp-ico" @click="downloadOpen" title="Download" aria-label="Download">⬇</button>
         <slot name="trailing" />
       </div>
     </div>
+
+    <div v-if="showVersions" class="dv-versions">
+      <span class="dv-meta"><strong>v{{ viewingV }}</strong> · {{ metaText }}</span>
+      <span v-if="changes" class="dv-changes">{{ changesText }}</span>
+      <span v-if="anyChanges" class="dv-toggles">
+        <label class="dv-highlight">
+          Highlight changes
+          <span class="toggle"><input v-model="highlight" type="checkbox" role="switch" /><span class="slider"></span></span>
+        </label>
+        <label v-if="viewMode !== 'csv' && changes?.removed" class="dv-deletions" :class="{ off: !highlight }">
+          Show deletions
+          <span class="toggle"><input v-model="showDeletions" type="checkbox" role="switch" :disabled="!highlight" /><span class="slider"></span></span>
+        </label>
+      </span>
+    </div>
+    <div v-if="showVersions && older" class="dv-older" role="status">
+      <span><strong>You're looking at v{{ viewingV }}.</strong> {{ olderNote }}</span>
+      <button class="fp-btn" @click="showVersion(null)">Go to latest (v{{ latestV }})</button>
+    </div>
+    <p class="sr-only" aria-live="polite">{{ announced }}</p>
 
     <div class="fp-editor-body">
       <div v-show="viewMode === 'code'" ref="editorContainer" class="fp-cm"></div>
@@ -602,8 +795,8 @@ defineExpose({ reload, reopen, save })
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="(row, r) in csvTable.rows" :key="r">
-                  <td class="fp-csv-num">{{ r + 1 }}</td>
+                <tr v-for="(row, r) in csvTable.rows" :key="r" :class="{ 'csv-changed': csvMarks.has(r) }">
+                  <td class="fp-csv-num"><span v-if="csvMarks.has(r)" class="sr-only">Added or changed: </span>{{ r + 1 }}</td>
                   <td v-for="(cell, c) in row" :key="c" :title="cell">{{ cell }}</td>
                 </tr>
               </tbody>
@@ -674,6 +867,7 @@ defineExpose({ reload, reopen, save })
 
 .fp-header {
   display: flex; align-items: center; gap: 6px; padding: 8px 10px;
+  min-height: var(--fp-header-h, auto);
   border-bottom: 1px solid var(--border); background: var(--surface); flex-shrink: 0;
 }
 .fp-title { font-size: 15px; font-weight: 700; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -694,6 +888,58 @@ defineExpose({ reload, reopen, save })
 .fp-btn.save:hover { opacity: .88; }
 .fp-btn.save.unsaved { animation: pulse-save 1s infinite; }
 .fp-dirty { color: var(--orange); font-size: 12px; }
+
+.dv-versions {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 4px 14px; flex-shrink: 0;
+  padding: 6px 12px; border-bottom: 1px solid var(--border); background: var(--surface);
+  font-size: 12px; color: var(--text2);
+}
+.dv-meta strong { color: var(--text); font-weight: 600; }
+.dv-toggles { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px 16px; margin-left: auto; }
+.dv-highlight, .dv-deletions { display: inline-flex; align-items: center; gap: 8px; color: var(--text); cursor: pointer; }
+.dv-toggles .toggle input:focus-visible + .slider { outline: 2px solid var(--accent); outline-offset: 2px; }
+.dv-deletions.off { color: var(--text3); cursor: default; }
+.dv-deletions.off .slider { opacity: .5; cursor: default; }
+.dv-older {
+  display: flex; align-items: center; gap: 12px; flex-shrink: 0; padding: 8px 12px;
+  border-bottom: 1px solid var(--border); font-size: 13px; color: var(--text);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+.dv-older span { flex: 1; }
+/* Added or changed: a bar and a tint, in the preview, the table and (cmChanges) the source. A block
+   whose words changed gets the bar, and its added words the tint, underlined. Removed text is struck through. */
+.fp-md :deep(.md-changed) {
+  background: color-mix(in srgb, var(--green) 14%, transparent);
+  box-shadow: inset 3px 0 0 var(--green);
+}
+.fp-md :deep(.md-touched) { box-shadow: inset 3px 0 0 var(--green); }
+.fp-md :deep(.md-deleted) {
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+  box-shadow: inset 3px 0 0 var(--red);
+  color: var(--text2); text-decoration: line-through; text-decoration-color: var(--red);
+  user-select: none;
+}
+.fp-md :deep(:is(div.md-changed, div.md-touched, div.md-deleted)) { margin: 0 -10px 16px; padding: 4px 10px 1px; border-radius: 0 4px 4px 0; }
+.fp-md :deep(:is(div.md-changed, div.md-touched, div.md-deleted) > :last-child) { margin-bottom: 12px; }
+.fp-md :deep(:is(li.md-changed, li.md-touched, li.md-deleted)) { padding-left: 6px; margin-left: -6px; }
+/* Not a list item, so a removed item doesn't renumber the ones after it. */
+.fp-md :deep(li.md-deleted) { display: block; }
+.fp-md :deep(:is(tr.md-changed, tr.md-touched, tr.md-deleted)) { box-shadow: none; }
+.fp-md :deep(tr.md-changed > *) { background: color-mix(in srgb, var(--green) 14%, var(--surface)); }
+.fp-md :deep(tr.md-deleted > *) { background: color-mix(in srgb, var(--red) 10%, var(--surface)); }
+.fp-md :deep(tr.md-changed > :first-child), .fp-md :deep(tr.md-touched > :first-child) { box-shadow: inset 3px 0 0 var(--green); }
+.fp-md :deep(tr.md-deleted > :first-child) { box-shadow: inset 3px 0 0 var(--red); }
+.fp-md :deep(ins.md-ins) {
+  background: color-mix(in srgb, var(--green) 26%, transparent); border-radius: 2px;
+  text-decoration: underline 2px var(--green); text-underline-offset: 3px;
+}
+.fp-md :deep(del.md-del) {
+  background: color-mix(in srgb, var(--red) 16%, transparent); border-radius: 2px;
+  color: var(--text2); text-decoration: line-through var(--red); user-select: none;
+}
+.fp-md :deep(.md-note) { user-select: none; }
+.fp-csv-table tbody tr.csv-changed td { background: color-mix(in srgb, var(--green) 14%, var(--surface)); }
+.fp-csv-table tbody tr.csv-changed .fp-csv-num { box-shadow: inset 3px 0 0 var(--green); }
 
 .fp-editor-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .fp-cm { flex: 1; overflow: auto; }

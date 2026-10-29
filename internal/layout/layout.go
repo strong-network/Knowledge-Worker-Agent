@@ -121,6 +121,7 @@ func ownRoot() bool {
 const (
 	NameDatabase        = "Database"
 	NameBackups         = "Database snapshots"
+	NameFileVersions    = "File versions"
 	NameWorkspace       = "Base folder"
 	NameChats           = "Chats"
 	NameUpload          = "Uploads"
@@ -154,6 +155,7 @@ func Locations() []Location {
 	return []Location{
 		db,
 		{Name: NameBackups, Setting: db.Setting, Current: db.Current + ".backups", Moved: filepath.Join(System(), "backups"), Custom: db.Custom},
+		{Name: NameFileVersions, Setting: db.Setting, Current: db.Current + ".versions", Moved: filepath.Join(System(), "file-versions"), Custom: db.Custom},
 		ws,
 		under(NameChats, ws, "Chats", filepath.Join(Root(), "Chats")),
 		under(NameUpload, ws, "upload", filepath.Join(Root(), "upload")),
@@ -185,6 +187,15 @@ func Backups(db string) string {
 		return filepath.Join(System(), "backups")
 	}
 	return db + ".backups"
+}
+
+// FileVersions returns the folder holding the contents of earlier versions of
+// files, which sits beside the database at db as its snapshots do.
+func FileVersions(db string) string {
+	if Migrated() && sameFile(db, movedDatabase()) {
+		return filepath.Join(System(), "file-versions")
+	}
+	return db + ".versions"
 }
 
 // Projects returns the folder holding project workspaces.

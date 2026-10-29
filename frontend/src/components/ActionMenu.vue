@@ -16,6 +16,8 @@ export interface MenuItem {
   // Why the item can't be used now. The item stays in the menu, and stays
   // focusable, so the reason is heard as well as seen. Choosing it does nothing.
   unavailable?: string
+  // Set on each of a set of choices: whether this one is chosen.
+  checked?: boolean
 }
 export type MenuEntry = MenuItem | 'divider'
 
@@ -41,7 +43,9 @@ const props = withDefaults(defineProps<{
   // The menu's name.
   menuLabel: string
   // A bordered button for a toolbar, or a small plain one for a list row.
-  variant?: 'toolbar' | 'row'
+  // chip shows triggerText rather than ⋯, for a menu of choices.
+  variant?: 'toolbar' | 'row' | 'chip'
+  triggerText?: string
   tip?: string
 }>(), { variant: 'row', tip: undefined })
 
@@ -56,7 +60,7 @@ const place = ref<Record<string, string>>({})
 const note = (item: MenuItem) => item.unavailable || item.description || ''
 
 function itemEls(): HTMLElement[] {
-  return Array.from(menu.value?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])
+  return Array.from(menu.value?.querySelectorAll<HTMLElement>('[role^="menuitem"]') ?? [])
 }
 function focusAt(i: number) {
   itemEls()[i]?.focus()
@@ -189,7 +193,11 @@ defineExpose({ focus: () => trigger.value?.focus() })
       @click="toggle"
       @keydown="onTriggerKey"
     >
-      <svg viewBox="0 0 24 24" :width="variant === 'toolbar' ? 18 : 16" :height="variant === 'toolbar' ? 18 : 16" fill="currentColor" aria-hidden="true">
+      <template v-if="triggerText">
+        <span>{{ triggerText }}</span>
+        <svg viewBox="0 0 16 16" width="10" height="10" fill="currentColor" aria-hidden="true"><path d="M4.22 6.22a.75.75 0 0 1 1.06 0L8 8.94l2.72-2.72a.75.75 0 1 1 1.06 1.06l-3.25 3.25a.75.75 0 0 1-1.06 0L4.22 7.28a.75.75 0 0 1 0-1.06z"/></svg>
+      </template>
+      <svg v-else viewBox="0 0 24 24" :width="variant === 'toolbar' ? 18 : 16" :height="variant === 'toolbar' ? 18 : 16" fill="currentColor" aria-hidden="true">
         <circle cx="5" cy="12" r="1.9" /><circle cx="12" cy="12" r="1.9" /><circle cx="19" cy="12" r="1.9" />
       </svg>
     </button>
@@ -209,10 +217,11 @@ defineExpose({ focus: () => trigger.value?.focus() })
           <button
             v-else
             type="button"
-            role="menuitem"
+            :role="entry.checked === undefined ? 'menuitem' : 'menuitemradio'"
             tabindex="-1"
             class="am-item"
-            :class="{ danger: entry.danger, unavailable: !!entry.unavailable }"
+            :class="{ danger: entry.danger, unavailable: !!entry.unavailable, choice: entry.checked !== undefined }"
+            :aria-checked="entry.checked"
             :aria-disabled="entry.unavailable ? 'true' : undefined"
             :aria-labelledby="`${menuId}-${i}`"
             :aria-describedby="note(entry) ? `${menuId}-${i}-note` : undefined"
@@ -220,6 +229,7 @@ defineExpose({ focus: () => trigger.value?.focus() })
           >
             <span :id="`${menuId}-${i}`" class="am-label">{{ entry.label }}</span>
             <span v-if="note(entry)" :id="`${menuId}-${i}-note`" class="am-note">{{ note(entry) }}</span>
+            <svg v-if="entry.checked" class="am-check" viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0z"/></svg>
           </button>
         </template>
       </div>
@@ -245,6 +255,12 @@ defineExpose({ focus: () => trigger.value?.focus() })
 }
 .am-trigger.row:hover,
 .am-trigger.row[aria-expanded="true"] { color: var(--text); background: var(--surface3); }
+.am-trigger.chip {
+  gap: 4px; height: 26px; padding: 0 7px 0 9px; border: 1px solid var(--border); border-radius: 6px;
+  font: inherit; font-size: 12px; font-weight: 600;
+}
+.am-trigger.chip:hover,
+.am-trigger.chip[aria-expanded="true"] { color: var(--text); background: var(--surface2); }
 @media (max-width: 768px) {
   .am-trigger.toolbar { width: 32px; height: 32px; }
 }
@@ -270,6 +286,8 @@ defineExpose({ focus: () => trigger.value?.focus() })
 .am-item:focus { background: var(--hover); }
 .am-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .am-label { font-weight: 500; }
+.am-item.choice { position: relative; padding-right: 32px; }
+.am-check { position: absolute; right: 10px; top: 9px; color: var(--accent); }
 .am-note { font-size: 11.5px; line-height: 1.35; color: var(--text2); }
 .am-item:hover .am-note,
 .am-item:focus .am-note { color: var(--text); }

@@ -252,6 +252,21 @@ func TestBackups(t *testing.T) {
 	}
 }
 
+func TestFileVersions(t *testing.T) {
+	_, root := setup(t)
+	custom := "/srv/kwa.db"
+	if got := FileVersions(custom); got != custom+".versions" {
+		t.Errorf("before: %q", got)
+	}
+	complete(t)
+	if got := FileVersions(Database()); got != filepath.Join(root, ".system", "file-versions") {
+		t.Errorf("moved database: %q", got)
+	}
+	if got := FileVersions(custom); got != custom+".versions" {
+		t.Errorf("custom database after: %q", got)
+	}
+}
+
 func TestLocations(t *testing.T) {
 	home, root := setup(t)
 	sys := filepath.Join(root, ".system")
@@ -264,6 +279,7 @@ func TestLocations(t *testing.T) {
 	want := []Location{
 		{Name: NameDatabase, Setting: "COPILOT_DB_PATH", Current: filepath.Join(home, ".copilot-web.db"), Moved: filepath.Join(sys, "knowledge-worker-agent.db")},
 		{Name: NameBackups, Setting: "COPILOT_DB_PATH", Current: filepath.Join(home, ".copilot-web.db.backups"), Moved: filepath.Join(sys, "backups")},
+		{Name: NameFileVersions, Setting: "COPILOT_DB_PATH", Current: filepath.Join(home, ".copilot-web.db.versions"), Moved: filepath.Join(sys, "file-versions")},
 		{Name: NameWorkspace, Setting: "COPILOT_WORKSPACE", Current: "/home/developer", Moved: root},
 		{Name: NameChats, Setting: "COPILOT_WORKSPACE", Current: "/home/developer/Chats", Moved: filepath.Join(root, "Chats")},
 		{Name: NameUpload, Setting: "COPILOT_WORKSPACE", Current: "/home/developer/upload", Moved: filepath.Join(root, "upload")},
@@ -277,8 +293,8 @@ func TestLocations(t *testing.T) {
 			t.Errorf("%s:\n got %+v\nwant %+v", w.Name, got, w)
 		}
 	}
-	if len(byName) != 14 {
-		t.Errorf("%d locations, want 14", len(byName))
+	if len(byName) != 15 {
+		t.Errorf("%d locations, want 15", len(byName))
 	}
 
 	// A custom database keeps its snapshots next to it.

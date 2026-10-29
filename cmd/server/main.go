@@ -52,8 +52,10 @@ import (
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/sessions"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/sharing"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/tidyup"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/versions"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/vertexauth"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/voice"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/workdirs"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/workspaceapps"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/workspaceheartbeat"
 )
@@ -183,6 +185,19 @@ func main() {
 	defer db.Close()
 	if err := migration.HoldDatabase(config.DBPath); err != nil {
 		log.Fatalf("Database: %v", err)
+	}
+	// A chat's folder stays while another chat works in it, as a side chat does.
+	workdirs.InUse = db.FolderInUse
+	// Earlier versions of text files: taken around each turn and on each save,
+	// and gone with the file or the chat's folder.
+	if err := versions.Init(layout.FileVersions(config.DBPath)); err != nil {
+		log.Printf("File versions are off: %v", err)
+	} else {
+		chat.TurnStarted, chat.TurnEnded = versions.TurnStarted, versions.TurnEnded
+		files.AfterSave = func(path string) { versions.Saved(path, versions.You) }
+		guest.AfterSave = func(path, name string) { versions.Saved(path, versions.Guest(name)) }
+		workdirs.AfterRemove = versions.Forget
+		go versions.Sweep()
 	}
 
 	if migrateMode == migration.DryRun && !layout.Migrated() {
@@ -973,12 +988,14 @@ func registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/share/platform", workspaceapps.HandlePlatformCheck)
 	mux.HandleFunc("GET /api/sessions/active", sessions.HandleActiveStreams)
 	mux.HandleFunc("GET /api/history", sessions.HandleHistory)
+	mux.HandleFunc("GET /api/search", sessions.HandleSearch)
 	mux.HandleFunc("GET /api/sessions", sessions.HandleSessions)
 	mux.HandleFunc("POST /api/sessions/new", sessions.HandleNewSession)
 	mux.HandleFunc("GET /api/sessions/{session_id}/config", sessions.HandleSessionConfig)
 	mux.HandleFunc("PATCH /api/sessions/{session_id}/config", sessions.HandleUpdateSessionConfig)
 	mux.HandleFunc("PUT /api/sessions/{session_id}/rename", sessions.HandleRenameSession)
 	mux.HandleFunc("PUT /api/sessions/{session_id}/temporary", sessions.HandleSetTemporary)
+	mux.HandleFunc("POST /api/sessions/{session_id}/side", sessions.HandleSideChat)
 	mux.HandleFunc("DELETE /api/sessions/{session_id}/last", sessions.HandleUndoSession)
 	mux.HandleFunc("POST /api/sessions/{session_id}/stop", sessions.HandleStopSession)
 	mux.HandleFunc("GET /api/sessions/{session_id}/export", sessions.HandleExportSession)
@@ -1035,8 +1052,10 @@ func registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/files/view", files.HandleFileView)
 	mux.HandleFunc("POST /api/files/save", files.HandleFileSave)
 	mux.HandleFunc("POST /api/files/directory", files.HandleCreateDirectory)
-	// Shared files follow renames and moves, and stop being shared before a delete.
-	files.AfterRename, files.BeforeDelete = fileshare.Moved, fileshare.Deleting
+	// Shared files and versions follow renames and moves; a delete stops the
+	// sharing and drops the versions.
+	files.AfterRename = func(src, dest string) { fileshare.Moved(src, dest); versions.Moved(src, dest) }
+	files.BeforeDelete = func(r *http.Request, path string) { fileshare.Deleting(r, path); versions.Forget(path) }
 	mux.HandleFunc("POST /api/files/delete", files.HandleFileDelete)
 	mux.HandleFunc("POST /api/files/rename", files.HandleFileRename)
 	mux.HandleFunc("POST /api/files/move", files.HandleFileMove)
@@ -1044,6 +1063,8 @@ func registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/files/upload", files.HandleFileUpload)
 	mux.HandleFunc("GET /api/files/download", files.HandleFileDownload)
 	mux.HandleFunc("GET /api/files/raw", files.HandleFileRaw)
+	mux.HandleFunc("GET /api/files/versions", versions.HandleList)
+	mux.HandleFunc("GET /api/files/version", versions.HandleContent)
 	mux.HandleFunc("POST /api/files/preview-link", fileshare.HandlePreviewLink)
 	mux.HandleFunc("GET /api/files/office-preview", office.HandlePreview)
 	mux.HandleFunc("GET /api/office/status", office.HandleStatus)

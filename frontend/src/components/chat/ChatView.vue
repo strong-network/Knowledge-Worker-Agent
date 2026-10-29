@@ -7,6 +7,8 @@ import { useSessionsStore } from '../../stores/sessions'
 import { useChatStore, isFollowingBottom } from '../../stores/chat'
 import { useProvidersStore } from '../../stores/providers'
 import { useUiStore } from '../../stores/ui'
+import { useSearchStore } from '../../stores/search'
+import { highlightIn, clearHighlights } from '../../utils/searchHighlight'
 import ChatHeader from './ChatHeader.vue'
 import MessageBubble from './MessageBubble.vue'
 import EmptyState from './EmptyState.vue'
@@ -22,12 +24,15 @@ const sessionsStore = useSessionsStore()
 const chatStore = useChatStore()
 const providers = useProvidersStore()
 const ui = useUiStore()
+const search = useSearchStore()
 
 const hasMessages = computed(() => sessionsStore.currentMessages.length > 0)
 
 // Temporary chats: New chat offers to start one; a chat that is one says so.
 const isTemporary = computed(() => !!sessionsStore.currentSession?.temporary)
 const startsTemporary = computed(() => !hasMessages.value && (ui.newChatTemporary || isTemporary.value))
+// Side chats: the parent's name, while the parent is still there.
+const sideOf = computed(() => (sessionsStore.currentParent ? sessionsStore.currentParent.name : undefined))
 const offerTemporary = computed(
   () => !hasMessages.value && !isTemporary.value && !sessionsStore.currentSessionDeprecated &&
     !sessionsStore.currentSession?.shared,
@@ -106,8 +111,12 @@ const showWidgets = computed(() => !providers.loaded || anyAssistantConnected.va
 // Width of the right-hand column, which holds the Files widget. (The
 // `filePanel*` names in the store hold the column's width; the localStorage
 // keys are kept as they are so existing preferences survive.)
+// The column's header lines up with the chat's header, however tall that is.
+const headerRef = ref<InstanceType<typeof ChatHeader> | null>(null)
+const headerHeight = ref(0)
 const widgetColStyle = computed(() => ({
   '--widget-col-width': ui.filePanelWidth + 'px',
+  ...(headerHeight.value ? { '--fp-header-h': headerHeight.value + 'px' } : {}),
 }))
 
 // ── Resizing the widget column ──
@@ -213,13 +222,63 @@ watch(() => chatStore.streamingContent, () => {
 // there.
 watch(() => chatStore.streaming, (now, before) => {
   if (now && !before) {
+    endSearchFocus()
     atBottom.value = true
     jumpToBottom()
   }
 })
 
+// ── Opened from a search result ──
+// The chat opens at the result's message rather than the newest one, with the
+// words found highlighted throughout. The highlighting lasts until you leave
+// the chat or start a turn.
+function searchFocusHere() {
+  const f = search.focus
+  return f && f.sessionId === sessionsStore.currentSessionId ? f : null
+}
+
+function endSearchFocus() {
+  search.focus = null
+  clearHighlights()
+}
+
+function showSearchHit() {
+  const f = searchFocusHere()
+  const el = messagesEl.value
+  if (!f || !el || !hasMessages.value) return
+  highlightIn(el.querySelectorAll('.msg-bubble'), f.terms)
+  if (!f.pending) return
+  const target = f.messageId ? el.querySelector<HTMLElement>(`[data-message-id="${f.messageId}"]`) : null
+  if (!target) {
+    // A loaded history without the message: it's gone, so open as usual.
+    if (sessionsStore.currentMessages.some(m => m.id !== undefined)) {
+      f.pending = false
+      atBottom.value = true
+      jumpToBottom()
+    }
+    return
+  }
+  f.pending = false
+  atBottom.value = false
+  target.scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior })
+  if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()
+    ;(target.querySelector('.msg-bubble') || target).animate(
+      [{ boxShadow: `0 0 0 3px ${accent}` }, { boxShadow: '0 0 0 3px transparent' }],
+      { duration: 1800, easing: 'ease-out' },
+    )
+  }
+}
+
+watch(() => [sessionsStore.currentMessages, search.focus], showSearchHit, { flush: 'post' })
+
 watch(() => sessionsStore.currentSessionId, (id) => {
   if (!id) return
+  if (search.focus && search.focus.sessionId !== id) endSearchFocus()
+  if (searchFocusHere()?.pending) {
+    atBottom.value = false
+    return
+  }
   // A different conversation, so the previous one's scroll position says
   // nothing about this one. Opening a chat always starts at its newest
   // message. Set synchronously: the messages watcher below fires on the same
@@ -240,8 +299,16 @@ watch(() => sessionsStore.currentMessages, () => {
 // prompts queue up. Publish it so the padding under the messages and the
 // jump button both track it instead of guessing.
 let composerObserver: ResizeObserver | null = null
+let headerObserver: ResizeObserver | null = null
 
 onMounted(() => {
+  if (searchFocusHere()?.pending) atBottom.value = false
+  showSearchHit()
+  const header = headerRef.value?.$el as HTMLElement | undefined
+  if (header) {
+    headerObserver = new ResizeObserver(() => { headerHeight.value = header.offsetHeight })
+    headerObserver.observe(header)
+  }
   const main = chatMainEl.value
   const composer = main?.querySelector<HTMLElement>('#input-area')
   if (!main || !composer) return
@@ -254,101 +321,114 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  endSearchFocus()
   composerObserver?.disconnect()
   composerObserver = null
+  headerObserver?.disconnect()
+  headerObserver = null
 })
 </script>
 
 <template>
-  <ChatHeader />
-  <div v-if="isDeprecated" class="dep-banner">
-    <div class="ab-icon" aria-hidden="true">⚠️</div>
-    <div class="ab-msg">
-      <strong>This chat is deprecated.</strong>
-      <span>It was created with the retired GitHub Copilot backend and is now read-only. Create a new session to keep chatting.</span>
-    </div>
-    <button class="ab-btn" @click="startNewSession">
-      New chat
-    </button>
-  </div>
-  <div v-if="showOpencodeBanner" class="auth-banner">
-    <div class="ab-icon" aria-hidden="true">🔒</div>
-    <div class="ab-msg">
-      <strong>{{ bannerCopy.title }}</strong>
-      <span>{{ bannerCopy.detail }}</span>
-    </div>
-    <button v-if="bannerCopy.action" class="ab-btn" @click="ui.openModal('accounts')">
-      {{ bannerCopy.action }}
-    </button>
-  </div>
   <div class="chat-body">
-    <div class="chat-main" ref="chatMainEl" :class="{ empty: !hasMessages }">
-      <button
-        v-if="offerTemporary"
-        type="button"
-        class="temp-toggle"
-        :class="{ on: ui.newChatTemporary }"
-        :aria-pressed="ui.newChatTemporary"
-        v-tip="ui.newChatTemporary ? 'Turn off to save this chat to your history' : 'Start a chat that isn\'t saved. It\'s deleted after 24 hours of inactivity.'"
-        @click="ui.newChatTemporary = !ui.newChatTemporary"
-      >
-        <TimerIcon :size="14" />
-        Temporary chat
-      </button>
-      <div id="messages" ref="messagesEl" @scroll.passive="onMessagesScroll">
-        <NewChatGreeting v-if="!hasMessages" :temporary="startsTemporary" />
-        <template v-else>
-        <p v-if="isTemporary" class="temp-note">
-          <TimerIcon :size="13" />
-          Temporary chat. It isn't saved and is deleted after 24 hours of inactivity.
-        </p>
-        <MessageBubble
-          v-for="(msg, i) in sessionsStore.currentMessages"
-          :key="i"
-          :role="msg.role"
-          :content="msg.content"
-          :streaming="i === sessionsStore.currentMessages.length - 1 && chatStore.streaming && msg.role === 'assistant'"
-          :step-count="i === sessionsStore.currentMessages.length - 1 && chatStore.streaming && msg.role === 'assistant' ? chatStore.stepCount : 0"
-          :tool-calls="i === sessionsStore.currentMessages.length - 1 && chatStore.streaming && msg.role === 'assistant' ? chatStore.toolCalls : (msg.toolCalls || [])"
-          :created-at="msg.createdAt"
-          :usage="msg.usage"
-          :author-label="msg.authorId ? (msg.authorName || 'Guest') : undefined"
-          :newest="i === newestReply"
-          :finished="i === newestReply && justFinished"
-          :typing="i === newestReply && typing"
-        />
-      <QuestionCard
-        v-if="chatStore.currentQuestion"
-        :question="chatStore.currentQuestion"
-        @answer="chatStore.answerQuestion($event)"
-      />
-      <PermissionCard
-        v-if="chatStore.currentPermission"
-        :permission="chatStore.currentPermission"
-        @respond="chatStore.respondToPermission($event)"
-      />
-    </template>
-      </div>
-      <!-- Only offered once the reader has left the end, so it doesn't sit
-           there as a permanent control for something already true. -->
-      <Transition name="jump-fade">
-        <button
-          v-if="showJumpToBottom"
-          class="jump-to-bottom"
-          @click="jumpToLatest"
-          title="Jump to latest message"
-          aria-label="Jump to latest message"
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" aria-hidden="true">
-            <path d="M12 5v14M19 12l-7 7-7-7" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
+    <div class="chat-col">
+      <ChatHeader ref="headerRef" />
+      <div v-if="isDeprecated" class="dep-banner">
+        <div class="ab-icon" aria-hidden="true">⚠️</div>
+        <div class="ab-msg">
+          <strong>This chat is deprecated.</strong>
+          <span>It was created with the retired GitHub Copilot backend and is now read-only. Create a new session to keep chatting.</span>
+        </div>
+        <button class="ab-btn" @click="startNewSession">
+          New chat
         </button>
-      </Transition>
-      <PromptInput />
-      <!-- Starter prompts sit *below* the composer: the composer is the thing
-           to act on, so it gets the centre line, and the chips read as
-           suggestions underneath rather than a queue to get past. -->
-      <EmptyState v-if="!hasMessages" />
+      </div>
+      <div v-if="showOpencodeBanner" class="auth-banner">
+        <div class="ab-icon" aria-hidden="true">🔒</div>
+        <div class="ab-msg">
+          <strong>{{ bannerCopy.title }}</strong>
+          <span>{{ bannerCopy.detail }}</span>
+        </div>
+        <button v-if="bannerCopy.action" class="ab-btn" @click="ui.openModal('accounts')">
+          {{ bannerCopy.action }}
+        </button>
+      </div>
+      <div class="chat-main" ref="chatMainEl" :class="{ empty: !hasMessages }">
+        <button
+          v-if="offerTemporary"
+          type="button"
+          class="temp-toggle"
+          :class="{ on: ui.newChatTemporary }"
+          :aria-pressed="ui.newChatTemporary"
+          v-tip="ui.newChatTemporary ? 'Turn off to save this chat to your history' : 'Start a chat that isn\'t saved. It\'s deleted after 24 hours of inactivity.'"
+          @click="ui.newChatTemporary = !ui.newChatTemporary"
+        >
+          <TimerIcon :size="14" />
+          Temporary chat
+        </button>
+        <div id="messages" ref="messagesEl" @scroll.passive="onMessagesScroll">
+          <NewChatGreeting
+            v-if="!hasMessages"
+            :temporary="startsTemporary"
+            :side-of="sideOf"
+          />
+          <template v-else>
+          <p v-if="isTemporary" class="temp-note">
+            <TimerIcon :size="13" />
+            <template v-if="sideOf !== undefined">
+              Side chat of “{{ sideOf || 'Untitled chat' }}”. Nothing here goes back to it, and it's deleted after 24 hours of inactivity.
+            </template>
+            <template v-else>Temporary chat. It isn't saved and is deleted after 24 hours of inactivity.</template>
+          </p>
+          <MessageBubble
+            v-for="(msg, i) in sessionsStore.currentMessages"
+            :key="i"
+            :data-message-id="msg.id"
+            :role="msg.role"
+            :content="msg.content"
+            :streaming="i === sessionsStore.currentMessages.length - 1 && chatStore.streaming && msg.role === 'assistant'"
+            :step-count="i === sessionsStore.currentMessages.length - 1 && chatStore.streaming && msg.role === 'assistant' ? chatStore.stepCount : 0"
+            :tool-calls="i === sessionsStore.currentMessages.length - 1 && chatStore.streaming && msg.role === 'assistant' ? chatStore.toolCalls : (msg.toolCalls || [])"
+            :created-at="msg.createdAt"
+            :usage="msg.usage"
+            :author-label="msg.authorId ? (msg.authorName || 'Guest') : undefined"
+            :newest="i === newestReply"
+            :finished="i === newestReply && justFinished"
+            :typing="i === newestReply && typing"
+          />
+        <QuestionCard
+          v-if="chatStore.currentQuestion"
+          :question="chatStore.currentQuestion"
+          @answer="chatStore.answerQuestion($event)"
+        />
+        <PermissionCard
+          v-if="chatStore.currentPermission"
+          :permission="chatStore.currentPermission"
+          @respond="chatStore.respondToPermission($event)"
+        />
+      </template>
+        </div>
+        <!-- Only offered once the reader has left the end, so it doesn't sit
+             there as a permanent control for something already true. -->
+        <Transition name="jump-fade">
+          <button
+            v-if="showJumpToBottom"
+            class="jump-to-bottom"
+            @click="jumpToLatest"
+            title="Jump to latest message"
+            aria-label="Jump to latest message"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" aria-hidden="true">
+              <path d="M12 5v14M19 12l-7 7-7-7" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        </Transition>
+        <PromptInput />
+        <!-- Starter prompts sit *below* the composer: the composer is the thing
+             to act on, so it gets the centre line, and the chips read as
+             suggestions underneath rather than a queue to get past. -->
+        <EmptyState v-if="!hasMessages" />
+      </div>
     </div>
     <!-- Drag handle for the widget column. A sibling of the column rather than
          a child, so the column's :empty rule still decides whether the column
@@ -362,9 +442,9 @@ onBeforeUnmount(() => {
       title="Drag to resize"
       @pointerdown="startColResize"
     ></div>
-    <!-- Right-hand column for the Files widget (the plan is in the reply).
-         It's a real flex sibling of the chat (not an overlay),
-         so the chat text reflows to its left and never gets covered. -->
+    <!-- Right-hand column for the Files widget, the full height of the page
+         with its header in line with the chat's. It's a real flex sibling of
+         the chat (not an overlay), so the chat reflows to its left. -->
     <div v-if="showWidgets" class="right-widgets" :class="{ 'mobile-open': ui.mobileFilesOpen }" :style="widgetColStyle">
       <div v-if="ui.mobileFilesOpen" class="mobile-files-bar">
         <strong>Files</strong>
@@ -376,21 +456,20 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-/* Right-hand column for the Files widget. A real flex child of the chat-body
-   row (not an overlay), so the chat text reflows to its left instead of being
-   covered. The column width follows the Files widget width (resizable); it
-   scrolls if the widget exceeds the height. */
+/* Right-hand column for the Files widget: the right side of the page, top to
+   bottom, so the widget's header sits in the bar the chat's header starts.
+   The column width follows the Files widget width (resizable). */
 .right-widgets {
   flex-shrink: 0;
   width: var(--widget-col-width, 320px);
   max-width: 96vw;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 16px 16px 16px 0;
   min-height: 0;
   overflow-y: auto;
   align-self: stretch;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
   /* Opening a file widens this column on its own; easing it makes the chat
      visibly give way rather than the layout jumping under the reader. */
   transition: width .2s ease;
@@ -407,14 +486,14 @@ onBeforeUnmount(() => {
 body.rw-resizing .right-widgets { transition: none; }
 
 /* Drag handle for the column. Laid out as a zero-width flex item (10px basis
-   pulled back by an equal negative margin) and then shifted left, so it sits
-   in the gutter between the chat and the cards without taking any width of
-   its own — the chat keeps exactly the space it had. */
+   pulled back by an equal negative margin) and then shifted left, so it
+   straddles the column's edge without taking any width of its own — the chat
+   keeps exactly the space it had. */
 .rw-resize {
   flex: 0 0 10px;
   margin-right: -10px;
   position: relative;
-  left: -8px;
+  left: -5px;
   cursor: col-resize;
   z-index: 3;
   touch-action: none;
@@ -452,6 +531,7 @@ body.rw-resizing .right-widgets { transition: none; }
     max-width: 100%;
     z-index: 60;
     background: var(--bg, var(--surface));
+    border-left: none;
     padding: 8px;
     overflow: auto;
   }
@@ -475,6 +555,14 @@ body.rw-resizing .right-widgets { transition: none; }
   min-height: 0;
   overflow: hidden;
   position: relative;
+}
+/* The chat's own column: its header, banners and the conversation. */
+.chat-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
 }
 .chat-main {
   flex: 1;

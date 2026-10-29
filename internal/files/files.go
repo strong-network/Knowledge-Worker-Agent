@@ -177,6 +177,7 @@ func HandleFileSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	AfterSave(abs)
 	info, _ := os.Stat(abs)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "path": abs, "size": info.Size()})
 }
@@ -349,6 +350,7 @@ func HandleFileUpload(w http.ResponseWriter, r *http.Request) {
 		io.Copy(out, src)
 		src.Close()
 		out.Close()
+		AfterSave(dest)
 		info, _ := os.Stat(dest)
 		uploaded = append(uploaded, uploadedFile{
 			Name: filepath.Base(dest),
@@ -373,6 +375,8 @@ var (
 	// BeforeDelete runs before path, a file or a folder, is removed, inside
 	// the request that removes it.
 	BeforeDelete = func(r *http.Request, path string) {}
+	// AfterSave runs once the owner has saved or uploaded the file at path.
+	AfterSave = func(path string) {}
 )
 
 func HandleFileDelete(w http.ResponseWriter, r *http.Request) {

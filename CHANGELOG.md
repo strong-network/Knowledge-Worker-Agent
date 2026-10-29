@@ -7,15 +7,19 @@ the project's history, starting after 1.1.2.
 ## Unreleased
 
 - First public release.
-- The agent's avatar has a small pixel display for a face, which shows what the agent is
-  doing. Its eyes glance around while it thinks, and they turn to ^ ^ when a reply is ready.
-  While the agent works, the display follows its latest step: a scanner while it updates its
-  plan, a magnifier while it searches, arrows while it reads a web page or uses a connector,
-  lines of text while it writes, and a spinner otherwise. While it waits it blinks and, every
-  30 seconds, plays a short animation (snooze, pong, twinkle or a glider), but not while
-  you're typing. Avatars in a chat are larger, 32 px (28 px on phones), so the display
-  reads. Only the newest reply's face moves, and each state shows a still picture when your
-  system asks for reduced motion.
+- **Search chats.** **Search chats**, under **New chat** in the sidebar, opens a page that
+  searches the titles and messages of all your chats, temporary chats included. It replaces the
+  sidebar's search box, which matched titles only. There's one result per chat, best first, with
+  the passage that matched, who wrote it and when, and how many more matches the chat has. Words
+  match the start of longer words and similar spellings, which come last under **Close
+  matches**; put a phrase in quotes to find it exactly. A time range narrows the search to the
+  past week, month or year, or to dates you choose. Selecting a result opens the chat at that
+  message, with the words highlighted.
+
+## 1.6.0 (2026-10-26)
+
+### Added
+
 - **Temporary chats.** Turn on **Temporary chat** on the New chat page to start a chat that
   isn't saved to your history, or make a chat temporary in its Session settings. A temporary
   chat is deleted, with its folder, 24 hours after the last message from you or the agent, and
@@ -28,7 +32,46 @@ the project's history, starting after 1.1.2.
   is left. **Get more space** explains how to increase the disk in the SecurSpaces console
   (Knowledge Worker Agent can't change it itself), links to the console, and offers
   Diagnostics and Tidy up to free up space. The banner goes once there's room again.
-- Diagnostics shows the disk's free space even before the files have moved into one folder.
+- A **Files** button in a chat's header, once the chat has files, shows and hides the Files
+  widget. Hidden, it stays hidden in other chats and after a reload, and the chat takes the
+  width. A dot on the button says that files are new or updated. On a phone it opens the files
+  over the chat, as before.
+- **File versions.** A text file in a chat's folder (Markdown, CSV, code) keeps its earlier
+  versions: one for each turn in which the agent changes it, one when you save or upload it,
+  and one for a change made elsewhere. When a file has more than one, its viewer shows which
+  version it is, when and by whom it was made, and how many lines changed since the one before
+  ("Since v1: 3 lines added, 2 removed or changed"). Pick another version from the version
+  button at the top to read it as it was or download it; **Go to latest** comes back. The 50
+  newest versions of a file are kept, for files up to 1 MB, and they go with the file or with
+  the chat's folder. **Highlight changes**, on by default, marks what was added or changed since
+  the version before.
+- **Highlight changes** marks the words that changed in a Markdown preview's paragraphs,
+  headings, quotes, list items and table cells, in the lines of a text file or source, and
+  whole rows in a table. Added words are tinted and underlined, with a bar beside their
+  paragraph or line. A paragraph or line that's new, rewritten, or only formatted differently
+  is marked whole. A list item renumbered because one above it was removed isn't marked.
+- **Show deletions**, next to **Highlight changes** and off by default, shows what was removed
+  since the version before, struck through where it was: words within a line or paragraph,
+  and whole paragraphs, list items, table rows and lines. Removed text isn't part of the file:
+  it's left out when you copy from the preview or save. Your choice is remembered.
+- **Side chats.** **Ask on the side** in a chat's ⋯ menu opens a side chat for a question that
+  shouldn't interrupt the chat. The agent there knows everything in the chat so far and works
+  in the same folder, so it can read and change the same files, but nothing you ask comes back
+  to the chat. A side chat is a temporary chat: the sidebar lists it under its chat, its header
+  links back to the chat, and **Keep chat** saves it. A chat's folder stays while a side chat
+  of it works there, so deleting the chat leaves the side chat's files.
+
+### Changed
+
+- The agent's avatar has a small pixel display for a face, which shows what the agent is
+  doing. Its eyes glance around while it thinks, and they turn to ^ ^ when a reply is ready.
+  While the agent works, the display follows its latest step: a scanner while it updates its
+  plan, a magnifier while it searches, arrows while it reads a web page or uses a connector,
+  lines of text while it writes, and a spinner otherwise. While it waits it blinks and, every
+  30 seconds, plays a short animation (snooze, pong, twinkle or a glider), but not while
+  you're typing. Avatars in a chat are larger, 32 px (28 px on phones), so the display
+  reads. Only the newest reply's face moves, and each state shows a still picture when your
+  system asks for reduced motion.
 - **One ⋯ menu per chat.** A chat in the sidebar has a ⋯ button in place of its row of icons,
   with Star, Rename, Share, Make temporary and Delete. It shows when you point at the chat or
   reach it with the keyboard, and always on touch screens. The menus work from the keyboard: the
@@ -38,13 +81,28 @@ the project's history, starting after 1.1.2.
   It replaces the header's VS Code and Session settings buttons, and puts Share, Star and Delete
   within reach on a phone, where the sidebar is a drawer. A starred chat shows a star after its
   title.
-- A **Files** button in a chat's header, once the chat has files, shows and hides the Files
-  widget. Hidden, it stays hidden in other chats and after a reload, and the chat takes the
-  width. A dot on the button says that files are new or updated. On a phone it opens the files
-  over the chat, as before.
 - A file in the Files widget has a ⋯ button in place of its row of icons, with **Open in new
   window** and **Copy contents** (for text files) as well as Download, Share, Rename, Duplicate
   and Delete. In a temporary chat, Share says to keep the chat to share the file.
+- The Files widget takes the right side of the page, top to bottom, beside the chat rather than
+  floating as a card below its header. Its header, or an open file's, sits in line with the
+  chat's header, whose **Files** and ⋯ buttons move left to make room. The list no longer
+  collapses in place: the **Files** button shows and hides the widget.
+- Diagnostics shows the disk's free space even before the files have moved into one folder.
+
+### Fixed
+
+- A chat no longer gets stuck on "messages: text content blocks must contain non-whitespace
+  text". A reply of only blank lines left a blank block in the chat's history, and because every
+  message replays the history, the Claude models rejected every later message, whichever model or
+  agent was chosen. Such blocks are now left out of each request, so affected chats work again
+  with their context. If the error still comes up, the chat starts a fresh conversation and says
+  so, as it does for an unreadable attachment.
+
+### Security
+
+- opencode is pinned to v1.19.4, the latest 1.x release. It updates opencode's bundled runtime
+  with security fixes.
 
 ## 1.5.5 (2026-10-21)
 

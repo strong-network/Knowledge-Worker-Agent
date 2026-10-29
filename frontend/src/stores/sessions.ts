@@ -25,10 +25,6 @@ export const useSessionsStore = defineStore('sessions', () => {
   const agents = ref<AgentInfo[]>([])
   const loading = ref(false)
 
-  // Client-side filter for the sidebar chat list. Filters by chat
-  // name/title only; empty string shows everything.
-  const searchQuery = ref('')
-
   const currentSession = computed(() =>
     sessions.value.find(s => s.id === currentSessionId.value) || null
   )
@@ -51,50 +47,56 @@ export const useSessionsStore = defineStore('sessions', () => {
     drafts.value.get(currentSessionId.value || '') || ''
   )
 
+  // Side chats: the open chat's parent, if it has one.
+  const currentParent = computed(() => {
+    const id = currentSession.value?.parent_id
+    return id ? sessions.value.find(s => s.id === id) : undefined
+  })
+
   const sortedSessions = computed(() => {
-    const q = searchQuery.value.trim().toLowerCase()
-    const match = (s: Session) =>
-      !q || (s.name || '').toLowerCase().includes(q)
+    // A side chat is listed under its parent, in whichever group that is.
+    // One level only: a side chat whose parent isn't listed, or is a side
+    // chat itself, is listed like any other chat.
+    const byId = new Map(sessions.value.map(s => [s.id, s]))
+    const listed = (s?: Session) => !!s && !s.task_id
+    const sides = new Map<string, Session[]>()
+    for (const s of sessions.value) {
+      const p = s.parent_id ? byId.get(s.parent_id) : undefined
+      if (listed(s) && listed(p) && !p!.parent_id) sides.set(p!.id, [...(sides.get(p!.id) ?? []), s])
+    }
+    const nested = new Set([...sides.values()].flat().map(s => s.id))
+    const top = sessions.value.filter(s => !nested.has(s.id))
     // Temporary chats aren't in the history: they have a group of their own.
-    const temporary = sessions.value.filter(s => s.temporary && !s.task_id && match(s))
-    const favorites = sessions.value.filter(s => !s.temporary && s.favorite && match(s))
-    const pinned = sessions.value.filter(s => !s.temporary && !s.favorite && s.pinned && match(s))
+    const temporary = top.filter(s => s.temporary && !s.task_id)
+    const favorites = top.filter(s => !s.temporary && s.favorite)
+    const pinned = top.filter(s => !s.temporary && !s.favorite && s.pinned)
     // Scheduled tasks: chats created by a scheduled task are surfaced under the sidebar's
     // "Scheduled tasks" section, so keep them out of the Recent list here.
     // Chat sharing: shared chats get their own section above Recent. A starred or
     // pinned one stays where it is and carries the badge instead.
-    const shared = sessions.value.filter(
-      s => s.shared && !s.temporary && !s.favorite && !s.pinned && !s.task_id && match(s),
+    const shared = top.filter(
+      s => s.shared && !s.temporary && !s.favorite && !s.pinned && !s.task_id,
     )
-    const unpinned = sessions.value.filter(
-      s => !s.temporary && !s.favorite && !s.pinned && !s.shared && !s.task_id && match(s),
+    const unpinned = top.filter(
+      s => !s.temporary && !s.favorite && !s.pinned && !s.shared && !s.task_id,
     )
     const byDate = (a: Session, b: Session) =>
       new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
-    favorites.sort(byDate)
-    pinned.sort(byDate)
-    shared.sort(byDate)
-    temporary.sort(byDate)
-    unpinned.sort(byDate)
-    return { favorites, pinned, shared, temporary, unpinned }
+    const withSides = (group: Session[]) =>
+      group.sort(byDate).flatMap(p => [p, ...(sides.get(p.id) ?? []).sort(byDate)])
+    return {
+      favorites: withSides(favorites),
+      pinned: withSides(pinned),
+      shared: withSides(shared),
+      temporary: withSides(temporary),
+      unpinned: withSides(unpinned),
+      nested,
+    }
   })
 
   // Whether the user has any starred chats — drives the adaptive default of
   // which history section is expanded.
   const hasFavorites = computed(() => sessions.value.some(s => s.favorite))
-
-  // True when a search is active but nothing matches — the list shows a
-  // subtle empty state in that case.
-  const searchHasNoMatches = computed(() => {
-    if (!searchQuery.value.trim()) return false
-    const g = sortedSessions.value
-    return g.favorites.length === 0 && g.pinned.length === 0 && g.shared.length === 0 &&
-      g.temporary.length === 0 && g.unpinned.length === 0
-  })
-
-  function setSearchQuery(q: string) {
-    searchQuery.value = q
-  }
 
   async function loadSessions() {
     try {
@@ -185,6 +187,22 @@ export const useSessionsStore = defineStore('sessions', () => {
       } else {
         toast(on ? `Couldn't make ${title} temporary. Try again.` : `Couldn't keep ${title}. Try again.`)
       }
+      return false
+    }
+  }
+
+  // Ask on the side: a temporary chat in the same folder whose agent knows
+  // this chat's conversation. Opens it; says why if it can't.
+  async function startSideChat(parentId: string): Promise<boolean> {
+    try {
+      const session = await api.createSideChat(parentId)
+      sessions.value.unshift(session)
+      drafts.value.set(session.id, '')
+      await switchSession(session.id)
+      return true
+    } catch (e) {
+      console.error('Failed to start a side chat:', e)
+      toast(e instanceof api.SessionError ? e.message : "Couldn't start a side chat. Try again.")
       return false
     }
   }
@@ -444,13 +462,13 @@ export const useSessionsStore = defineStore('sessions', () => {
   return {
     sessions, currentSessionId, messages, drafts, models, agents, loading,
     assignedAgents, personalAgents,
-    searchQuery, hasFavorites, searchHasNoMatches, setSearchQuery,
+    hasFavorites,
     currentSession, currentMessages, currentDraft, sortedSessions,
     currentSessionDeprecated,
-    currentProjectId,
+    currentProjectId, currentParent,
     loadSessions, loadModels, loadAgents, agentName, switchSession, loadHistory,
     createSession, deleteSession, renameSession, pinSession, favoriteSession,
-    setTemporary, moveToNewChat,
+    setTemporary, moveToNewChat, startSideChat,
     addMessage, updateLastAssistantMessage, setLastAssistantToolCalls,
     setLastAssistantUsage, undoLast,
     setDraft, clearDraft, flushDraft,

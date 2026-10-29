@@ -36,6 +36,10 @@ const (
 	maxUpload = 50 << 20
 )
 
+// AfterSave runs once a guest named name has saved or uploaded the file at
+// path. main sets it.
+var AfterSave = func(path, name string) {}
+
 var (
 	errNoFolder     = errors.New("This chat has no folder to share yet.")
 	errFolderIsHome = errors.New("Files can't be shared from this chat: its folder is your home folder or contains it, and so holds your credentials.")
@@ -448,6 +452,7 @@ func (s *server) filesSave(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "The file could not be saved."})
 		return
 	}
+	AfterSave(filepath.Join(dir, rel), id.Name)
 	log.Printf("[guest] session=%s file saved by guest %s", r.PathValue("id"), id.ID)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "path": wire(rel), "size": len(body.Content)})
 }
@@ -534,6 +539,7 @@ func (s *server) filesUpload(w http.ResponseWriter, r *http.Request) {
 		n, _ := io.Copy(out, src)
 		src.Close()
 		out.Close()
+		AfterSave(filepath.Join(dir, rel), id.Name)
 		uploaded = append(uploaded, fileEntry{Name: filepath.Base(rel), Path: wire(rel), Size: n})
 	}
 	log.Printf("[guest] session=%s %d file(s) uploaded by guest %s", r.PathValue("id"), len(uploaded), id.ID)

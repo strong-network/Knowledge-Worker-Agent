@@ -193,9 +193,10 @@ func runDispatcher(sessionID string, cfg config.SessionConfig, events <-chan *Ev
 	// reply; otherwise a reload shows the failed turn as a silent cut-off.
 	var failures []string
 	// detached is set when this turn hit an attachment the model provider
-	// cannot accept and we dropped the link to the opencode session to escape
-	// its poisoned history. The result event that follows carries the very
-	// session id we just let go of, so it must not re-attach it.
+	// cannot accept, or a blank text block, and we dropped the link to the
+	// opencode session to escape its poisoned history. The result event that
+	// follows carries the very session id we just let go of, so it must not
+	// re-attach it.
 	detached := false
 	// turnUsage is the JSON usage report for this turn, captured from the
 	// result event and stored on the assistant message row so it survives a
@@ -218,6 +219,9 @@ func runDispatcher(sessionID string, cfg config.SessionConfig, events <-chan *Ev
 			message := event.Text
 			if isUnsupportedAttachmentError(message) {
 				message = recoverPoisonedSession(sessionID, message)
+				detached = true
+			} else if isBlankTextError(message) {
+				message = recoverBlankTextSession(sessionID, message)
 				detached = true
 			}
 			// A stop finishes the stream before killing the process, so what the

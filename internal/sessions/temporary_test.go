@@ -27,6 +27,9 @@ func temporaryRoutes() http.Handler {
 	mux.HandleFunc("POST /api/sessions/{session_id}/pin", HandlePinSession)
 	mux.HandleFunc("POST /api/sessions/{session_id}/queue", HandleQueueAdd)
 	mux.HandleFunc("POST /api/chat", HandleChat)
+	mux.HandleFunc("POST /api/sessions/{session_id}/side", HandleSideChat)
+	mux.HandleFunc("PATCH /api/sessions/{session_id}/config", HandleUpdateSessionConfig)
+	mux.HandleFunc("DELETE /api/sessions/{session_id}", HandleDeleteSession)
 	return mux
 }
 
