@@ -13,6 +13,7 @@ import (
 
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/config"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodeserver"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodev2"
 )
 
 // serverSupervisor is the process-wide pool of `opencode serve` instances,
@@ -66,6 +67,13 @@ func ReloadServerAgents() {
 	serverSupervisorMu.Unlock()
 	if sup != nil {
 		sup.Reload()
+	}
+	if opencodev2.Enabled() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := opencodev2.Reload(ctx); err != nil {
+			log.Printf("[opencode-v2] could not reload the configuration: %v", err)
+		}
 	}
 }
 

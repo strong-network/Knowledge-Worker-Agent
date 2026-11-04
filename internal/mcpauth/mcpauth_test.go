@@ -13,7 +13,9 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/config"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/mcp"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodev2"
 	"testing"
 	"time"
 )
@@ -209,6 +211,140 @@ exit 1
 	}
 }
 
+// A terminal with no size is zero columns wide, and opencode's prompts wrap
+// after every character, so the sign-in's terminal is given a width.
+// On opencode 2.x the sign-in keeps the environment the 2.x command builder
+// gave it (here the server can't start, so 2.x's own configuration, and no
+// inherited PWD), and adds the terminal settings.
+func TestAuthFlow_V2KeepsTheCommandsEnvironment(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the PTY is Linux-only")
+	}
+	bin := writeFakeOpencode(t, `#!/bin/sh
+case "$1" in --version) echo 'opencode v2.2.5'; exit 0;; serve) exit 1;; esac
+if [ "$1" = "mcp" ] && [ "$2" = "auth" ]; then
+  printf 'config=%s term=%s %s\n' "$OPENCODE_CONFIG" "$TERM" "$(tr '\0' '\n' < /proc/$$/environ | grep -c '^PWD=')"
+  exit 0
+fi
+exit 1
+`)
+	t.Setenv("KWA_HOME", t.TempDir())
+	t.Setenv("PWD", t.TempDir())
+	old, oldCfg := OpencodeBin, config.OpencodeBin
+	OpencodeBin, config.OpencodeBin = bin, bin
+	defer func() { OpencodeBin, config.OpencodeBin = old, oldCfg }()
+	opencodev2.Detect(bin)
+
+	isolateMCPConfig(t, true, "figma")
+	auth.mu.Lock()
+	auth.resetLocked("")
+	auth.mu.Unlock()
+	if err := startAuth("figma"); err != nil {
+		t.Fatalf("startAuth: %v", err)
+	}
+	deadline := time.Now().Add(6 * time.Second)
+	var final AuthInfo
+	for time.Now().Before(deadline) {
+		if final = snapshot(); final.Done {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !strings.Contains(final.Output, "config=/") || !strings.Contains(final.Output, "term=xterm-256color 0") {
+		t.Errorf("the sign-in ran with %q; want 2.x's configuration, the terminal settings and no PWD", final.Output)
+	}
+}
+
+func TestAuthFlow_TerminalHasAWidth(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the PTY is Linux-only")
+	}
+	bin := writeFakeOpencode(t, `#!/bin/sh
+if [ "$1" = "mcp" ] && [ "$2" = "auth" ]; then
+  printf 'size %s\n' "$(stty size)"
+  exit 0
+fi
+exit 0
+`)
+	old := OpencodeBin
+	OpencodeBin = bin
+	defer func() { OpencodeBin = old }()
+
+	isolateMCPConfig(t, true, "figma")
+	auth.mu.Lock()
+	auth.resetLocked("")
+	auth.mu.Unlock()
+
+	if err := startAuth("figma"); err != nil {
+		t.Fatalf("startAuth: %v", err)
+	}
+	deadline := time.Now().Add(6 * time.Second)
+	var final AuthInfo
+	for time.Now().Before(deadline) {
+		if final = snapshot(); final.Done {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !strings.Contains(final.Output, "size 40 1000") {
+		t.Errorf("the terminal opencode sees has the wrong size: %q", final.Output)
+	}
+}
+
+// When opencode still holds credentials it asks before replacing them. Sign in
+// answers Yes rather than hanging until the flow times out.
+func TestAuthFlow_AnswersReauthenticate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script stub not supported on windows")
+	}
+	bin := writeFakeOpencode(t, `#!/bin/sh
+if [ "$1" = "mcp" ] && [ "$2" = "auth" ]; then
+  printf '\033[36m◆\033[39m  figma already has valid credentials. Re-authenticate?\n'
+  printf '\033[32m●\033[39m Yes \033[2m/\033[22m \033[2m○ No\033[22m'
+  read ans || exit 3
+  printf 'Authorize in your browser:\n'
+  printf 'https://auth.example.com/authorize?client_id=abc&state=xyz\n'
+  exit 0
+fi
+if [ "$1" = "mcp" ] && [ "$2" = "list" ]; then
+  printf '%s\n' '●  ✓ figma connected (OAuth)'
+  exit 0
+fi
+exit 1
+`)
+	old := OpencodeBin
+	OpencodeBin = bin
+	defer func() { OpencodeBin = old }()
+
+	isolateMCPConfig(t, true, "figma")
+	auth.mu.Lock()
+	auth.resetLocked("")
+	auth.mu.Unlock()
+	t.Cleanup(func() {
+		req := httptest.NewRequest(http.MethodPost, "/api/mcp/servers/figma/auth/cancel", nil)
+		req.SetPathValue("name", "figma")
+		HandleAuthCancel(httptest.NewRecorder(), req)
+	})
+
+	if err := startAuth("figma"); err != nil {
+		t.Fatalf("startAuth: %v", err)
+	}
+	deadline := time.Now().Add(6 * time.Second)
+	var final AuthInfo
+	for time.Now().Before(deadline) {
+		if final = snapshot(); final.Done {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !final.Done {
+		t.Fatalf("the sign-in is still waiting on the Re-authenticate question: %+v", final)
+	}
+	if !final.Success || final.VerifyURL == "" {
+		t.Errorf("expected a sign-in link and success, got %+v", final)
+	}
+}
+
 // TestAuthFlow_ExposesURLViaStartHandler verifies the /auth/start handler
 // blocks briefly and returns the URL in its first response.
 func TestAuthFlow_ExposesURLViaStartHandler(t *testing.T) {
@@ -330,6 +466,38 @@ func TestDeliverCallback_ForwardsToLoopback(t *testing.T) {
 	}
 	if gotQuery.Get("code") != "abc123" || gotQuery.Get("state") != "xyz" {
 		t.Errorf("listener did not receive code/state, got %v", gotQuery)
+	}
+}
+
+// A connector can set its own callback address (Figma accepts OpenCode only at
+// /callback): the paste goes to the one the running sign-in uses, and only there.
+func TestDeliverCallback_FollowsTheSignInsRedirect(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	auth.mu.Lock()
+	auth.verifyURL = "https://www.figma.com/oauth/mcp?response_type=code&redirect_uri=" +
+		url.QueryEscape(srv.URL+"/callback") + "&state=s"
+	auth.mu.Unlock()
+	t.Cleanup(func() { auth.mu.Lock(); auth.verifyURL = ""; auth.mu.Unlock() })
+
+	if _, _, err := DeliverCallback(srv.URL + "/callback?code=c&state=s"); err != nil {
+		t.Fatalf("the sign-in's own callback address was refused: %v", err)
+	}
+	if gotPath != "/callback" {
+		t.Errorf("delivered to %q, want /callback", gotPath)
+	}
+	for _, other := range []string{
+		srv.URL + "/mcp/oauth/callback?code=c",
+		"http://127.0.0.1:1/callback?code=c",
+	} {
+		if _, _, err := DeliverCallback(other); err == nil {
+			t.Errorf("%q isn't the address the sign-in waits on, but was accepted", other)
+		}
 	}
 }
 
@@ -470,9 +638,10 @@ func TestParseAllServersReadsEveryStatus(t *testing.T) {
 		"●  ○ github disabled\n" +
 		"●  ⚠ atlassian needs authentication\n" +
 		"●  ✓ connected-docs connected\n" +
-		"└  5 server(s)\n"
+		"●  ✓ figma connected (OAuth)\n" +
+		"└  6 server(s)\n"
 	got := parseAllServers(raw)
-	want := map[string]bool{"recall": true, "kfp": false, "atlassian": false, "connected-docs": true}
+	want := map[string]bool{"recall": true, "kfp": false, "atlassian": false, "connected-docs": true, "figma": true}
 	for name, w := range want {
 		if v, ok := got[name]; !ok || v != w {
 			t.Errorf("%s = %v (present %v), want %v", name, v, ok, w)

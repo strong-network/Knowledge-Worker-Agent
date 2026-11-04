@@ -7,6 +7,104 @@ the project's history, starting after 1.1.2.
 ## Unreleased
 
 - First public release.
+
+## 2.0.2 (2026-11-04)
+
+### Added
+
+- **Questions from the assistant.** With opencode 2.x, when the assistant asks you something, it
+  stops and waits for your answers, where it used to carry on with its own assumptions. Its
+  questions are in its response and on a **Question** card, with the answers it suggests and
+  room for your own. Your answers go back as your next message, and the assistant continues.
+  A scheduled task's run doesn't stop at a question: no one is there to answer, so the
+  assistant decides and says what it assumed.
+- A Markdown file's preview in **Files** draws its Mermaid diagrams and SVG images, as the
+  chat does, in the light or dark theme, with **Copy source** and **Download**. With changes
+  highlighted, a changed diagram is drawn in its mark, and a removed one shows as its source.
+- **Removed:** the **Approve the assistant's actions** switch in the **Share** window. Guests
+  can no longer answer the assistant's requests for approval. The assistant asks for approval
+  only with opencode 1.x in server mode, so with 2.x the switch did nothing.
+
+### Changed
+
+- **opencode 2.x by default.** Chats run on opencode 2.2.5 unless `KWA_OPENCODE_MAJOR=1` asks
+  for 1.x, which is the way back. A workspace that hasn't moved its files into one folder yet
+  runs 1.x until it has, because the move re-points chats through 1.x. The release image embeds
+  2.x instead of 1.x, for workspaces that can't reach the npm registry; 1.x comes from GitHub.
+  The copy of opencode's database from before 2.x is skipped when it would leave less than 1 GB
+  free.
+
+### Fixed
+
+- With opencode 2.x, the assistant reads a file it needs inside Code Mode, such as a long text
+  to send to Jira, through the app, instead of starting a web server of its own to serve it.
+
+### Removed
+
+- The **Approve the assistant's actions** switch in the **Share** window. Guests
+  can no longer answer the assistant's requests for approval. The assistant asks for approval
+  only with opencode 1.x in server mode, so with 2.x the switch did nothing.
+
+## 2.0.1 (2026-11-02)
+
+### Added
+
+- **Setup guide and what's new.** Until the assistant has a model that works, a guide shows its
+  two setup steps: connecting a model and connecting apps. Its buttons open **Accounts** and
+  **Connectors**, and you come back to the guide when you're done there. When your administrator
+  makes a model provider or connector available that you haven't set up, **New in your
+  workspace** lists it. Each shows at most once per start of Knowledge Worker Agent. A guide you
+  close comes back at the next start until you tick **Don't show this again**; what's new lists
+  an item once, unless you choose **Remind me later**.
+  Connector and model provider artifacts can say in one sentence what they're for, with
+  `kwa.description`.
+- **File links in replies.** A file in the chat's folder that a reply links to, or names in code
+  such as `report.md`, opens in **Files** with a click. The assistant is asked to link the files
+  it mentions.
+
+### Fixed
+
+- A connector your administrator stops assigning is removed at the next start or **Refresh
+  configuration**, rather than staying in **Connectors** as a local server that doesn't work.
+- In the light theme, a code block in a language the highlighter doesn't know, such as `text`,
+  showed dark text on its dark background, in replies and in the Markdown preview. The preview's
+  code blocks also lost their inner padding.
+
+### Security
+
+- A web page open in the same browser could act through the app: start the agent,
+  add a connector that runs a command, write or delete files. The server now refuses a request
+  that changes something when a browser sends it from another origin. It also listens on
+  `127.0.0.1` and `::1` only by default, where the workspace platform connects; the images no
+  longer set `KWA_HOST=0.0.0.0`, which reached it from the network.
+- The app could open any file the server's user could, such as a key in `~/.ssh`.
+  **Files**, the folder pickers, previews, earlier versions, sharing and git now open only what's
+  in the home folder, apart from the hidden folders and files directly in it, such as `~/.ssh`
+  and `~/.config`. A chat or scheduled task can't be given a folder outside it either. A chat
+  whose folder is already outside the home folder keeps working, but **Files** can't open it.
+- The list of connectors returned their headers and environment variables as they
+  were saved, including access tokens such as the GitHub connector's. They now show as
+  `••••••••`; editing a connector keeps a hidden value as long as its address or command
+  stays the same.
+- A file in the workspace opened on its own through the app, such as an SVG image,
+  could run script in the app. Every file but a PDF is now served sandboxed, as shared chats
+  already did.
+- Markdown could run script in the app, from a reply or from a file: as a code
+  block's language, shown above the block, or as an earlier version's content in the preview's
+  change marks.
+
+## 2.0.0 (2026-10-31)
+
+### Added
+
+- **opencode 2.x, as a trial.** `KWA_OPENCODE_MAJOR=2` installs opencode 2.2.5 beside the
+  pinned 1.x and runs chats with it; without the setting nothing changes. Chats, agents, skills,
+  connectors, model sign-ins and keys carry over, and connector sign-ins made with 1.x are copied
+  across once. Before 2.x first opens opencode's database, Knowledge Worker Agent keeps a copy in
+  `.system/opencode-db-before-2.x.db`. To go back, remove the setting: 1.x still has the chats as
+  they were before the switch, but not what was said in them with 2.x, and a chat started on 1.x
+  after the switch starts without its history on 2.x. Server mode (`KWA_OPENCODE_USE_SERVER`) and
+  the one-folder migration need 1.x and don't run with 2.x.
 - **Search chats.** **Search chats**, under **New chat** in the sidebar, opens a page that
   searches the titles and messages of all your chats, temporary chats included. It replaces the
   sidebar's search box, which matched titles only. There's one result per chat, best first, with
@@ -15,6 +113,36 @@ the project's history, starting after 1.1.2.
   matches**; put a phrase in quotes to find it exactly. A time range narrows the search to the
   past week, month or year, or to dates you choose. Selecting a result opens the chat at that
   message, with the words highlighted.
+- **Diagrams and images in replies.** A reply can draw a Mermaid diagram (a ` ```mermaid ` code
+  block) or show an SVG image (a ` ```svg ` block), and each has **Copy source** and
+  **Download**, which saves it as SVG. The agent is told the chat shows them, and uses one when it
+  explains something better than words. When the workspace has a skill that draws diagrams or
+  charts as images, the agent uses it for one worth keeping, such as an architecture diagram, a
+  data chart or an infographic, and shows the picture in the reply; quick sketches stay Mermaid.
+  Images in a reply show when they're files in the chat's folder, with **Download**; an image from
+  the web shows only when you select **Show image**, so opening a chat doesn't tell another site
+  you read it. An SVG can't run scripts or load other files. Shared chats show them the same way.
+  Diagrams that ask for Mermaid's ELK layout show their source instead: its library isn't
+  included.
+
+### Fixed
+
+- Signing in to a connector that comes back to its own address works. A connector can set
+  `oauth.redirectUri` in its configuration, and the address you paste after signing in must now
+  match the one that sign-in uses, rather than always ending in `/oauth/callback`. Figma needs
+  this: it lets OpenCode sign in only with `http://127.0.0.1:19876/callback`.
+- A connector whose configuration sets OAuth options, such as Figma, shows as connected after
+  you sign in, rather than **Sign-in needed**. **Sign in** on a connector that still has valid
+  credentials starts a new sign-in rather than waiting until it times out, and the sign-in's
+  technical details show opencode's output as lines of text rather than one character a line.
+
+### Security
+
+- DOMPurify, which sanitizes rendered Markdown, is 3.4.17, fixing three advisories
+  (GHSA-cg2g-xh64-v4q7, GHSA-mrv2-3pqr-j5jr, GHSA-c6gr-qvv4-5v3f) in options the app doesn't
+  use. `golang.org/x/net` is v0.62.0, fixing two vulnerabilities in its HTML package
+  (GO-2026-6866, GO-2026-6860) that the server doesn't reach. Vite, which only builds the
+  frontend, is 8.3.5, fixing six advisories in its development server.
 
 ## 1.6.0 (2026-10-26)
 

@@ -100,6 +100,12 @@ type serverView struct {
 	// KeySaved says whether an "api-key" server has the user's key stored. The
 	// key itself is never returned.
 	KeySaved bool `json:"key_saved,omitempty"`
+	// Description says in one sentence what the connector gives the user: the
+	// artifact's kwa.description, or the catalogue's for a built-in.
+	Description string `json:"description,omitempty"`
+	// Builtin marks a connector from the built-in catalogue (see IsBuiltin),
+	// which the setup guide offers alongside central ones.
+	Builtin bool `json:"builtin,omitempty"`
 }
 
 // readConfig loads the full opencode.json as a generic map (so unknown keys are
@@ -191,7 +197,9 @@ func entryToView(name string, v any) serverView {
 	if d, ok := CatalogueEntry(sv.Name); ok && sv.Auth != AuthLocal {
 		sv.Help = d.Help
 		sv.HelpURL = d.HelpURL
+		sv.Description = d.Description
 	}
+	sv.Builtin = IsBuiltin(sv.Name)
 	return sv
 }
 
@@ -222,6 +230,10 @@ func listServers() ([]serverView, error) {
 		globalEntry, _ := v.(map[string]any)
 		p, isProv := prov[key]
 		if !isProv {
+			// A switch for a server no longer assigned defines nothing to list.
+			if globalEntry != nil && isStub(globalEntry) {
+				continue
+			}
 			sv := entryToView(name, v)
 			sv.Owned = IsOwned(name)
 			out = append(out, sv)

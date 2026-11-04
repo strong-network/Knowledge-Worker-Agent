@@ -158,6 +158,20 @@ function openVerify() {
   if (url.value) window.open(url.value, '_blank', 'noopener')
 }
 
+// Where the sign-in sends the browser back to: its link's redirect_uri. A
+// connector can set its own, so the usual /oauth/callback isn't assumed.
+const callback = computed(() => {
+  try {
+    const r = new URL(url.value).searchParams.get('redirect_uri')
+    return r ? new URL(r) : null
+  } catch {
+    return null
+  }
+})
+const pastePlaceholder = computed(() =>
+  callback.value ? `${callback.value.origin}${callback.value.pathname}?code=…` : 'http://127.0.0.1:…/oauth/callback?code=…',
+)
+
 // Mirrors DeliverCallback's rules so the user gets a specific correction
 // instead of a round trip and a generic rejection. The backend still enforces
 // them — this is a courtesy, not the gate.
@@ -179,7 +193,8 @@ function problemWith(raw: string): string {
     return 'That is a different address. The one you need starts with http://127.0.0.1 — '
       + "it's in the address bar of the tab that failed to load."
   }
-  if (!u.pathname.includes('/oauth/callback')) {
+  const want = callback.value
+  if (want ? u.port !== want.port || u.pathname !== want.pathname : !u.pathname.includes('/oauth/callback')) {
     return 'That looks like a different page. The address you need is the one your browser '
       + 'landed on after you chose Allow.'
   }
@@ -319,7 +334,7 @@ onBeforeUnmount(stopPolling)
               type="text"
               spellcheck="false"
               aria-label="Address your browser was redirected to"
-              placeholder="http://127.0.0.1:…/oauth/callback?code=…"
+              :placeholder="pastePlaceholder"
               @input="onPasteInput"
               @keydown.enter="submit"
             />

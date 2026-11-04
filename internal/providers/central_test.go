@@ -297,6 +297,45 @@ func TestPlatformConfigDirPrefersEnv(t *testing.T) {
 	}
 }
 
+// A provider's description comes from its artifact; a built-in-backed one
+// without its own keeps the built-in's, and so does a built-in outside central
+// mode.
+func TestProviderDescriptions(t *testing.T) {
+	ResetBuiltins()
+	t.Cleanup(ResetBuiltins)
+	RegisterBuiltin(Builtin{ID: "github-copilot", Label: "GitHub Copilot", AuthType: AuthOAuthDevice,
+		Description: "Copilot's models.", CheckAuth: func() bool { return false }})
+	RegisterBuiltin(Builtin{ID: "google-vertex", Label: "Vertex", AuthType: AuthGcloudADC,
+		Description: "Vertex models.", CheckAuth: func() bool { return false }})
+	withCredentials(t)
+
+	if got := Resolve().Providers[1].Description; got != "Vertex models." {
+		t.Errorf("built-in mode: description %q, want the built-in's", got)
+	}
+
+	t.Setenv(config.EnvCentralConfig, "1")
+	centralDir(t,
+		`{"provider":{"acme":{},"github-copilot":{},"google-vertex":{}}}`,
+		`{"providers":[`+
+			`{"id":"acme","auth":{"type":"user-key"},"description":"Acme's own models."},`+
+			`{"id":"github-copilot","auth":{}},`+
+			`{"id":"google-vertex","auth":{},"description":"Vertex, as your company sees it."}]}`)
+	byID := map[string]string{}
+	for _, p := range Resolve().Providers {
+		byID[p.ID] = p.Description
+	}
+	want := map[string]string{
+		"acme":           "Acme's own models.",
+		"github-copilot": "Copilot's models.",
+		"google-vertex":  "Vertex, as your company sees it.",
+	}
+	for id, w := range want {
+		if byID[id] != w {
+			t.Errorf("%s: description %q, want %q", id, byID[id], w)
+		}
+	}
+}
+
 // A config-declared provider whose id matches a built-in must be offered with
 // the built-in's own sign-in flow. Without this a workspace in central-models
 // mode could see GitHub Copilot and Vertex in Accounts but had no way to sign

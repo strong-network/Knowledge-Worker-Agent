@@ -226,7 +226,7 @@ var semver = regexp.MustCompile(`\d+\.\d+\.\d+`)
 
 func collectOpencode() Opencode {
 	o := Opencode{
-		Pinned:      opencodeinstaller.PinnedVersion,
+		Pinned:      opencodeinstaller.Pinned(config.OpencodeMajor),
 		LogDir:      filepath.Join(opencodeDataDir(), "log"),
 		ConfigDir:   src.UserConfigDir,
 		PlatformDir: os.Getenv(config.EnvOpencodeConfigDir),

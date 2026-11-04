@@ -35,6 +35,7 @@ import (
 
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/config"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/env"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodev2"
 )
 
 // Provider is the opencode provider id for GitHub Copilot. opencode keys its
@@ -456,6 +457,9 @@ func opencodeAuthPath() string {
 	return filepath.Join(base, "opencode", "auth.json")
 }
 
+// DataDir returns opencode's data folder, which holds its credential files.
+func DataDir() string { return filepath.Dir(opencodeAuthPath()) }
+
 // GitHubToken returns the stored github-copilot access token from opencode's
 // credential store (auth.json), or "" if none is present or the store is
 // unreadable. This is the same token obtained via the device-flow login; it is
@@ -504,7 +508,18 @@ func writeOpencodeToken(token string) error {
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	// 2.x reads its own store (see opencodev2/credentials.go).
+	if opencodev2.Enabled() {
+		ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+		defer cancel()
+		return opencodev2.SetCredential(ctx, Provider, "OAuth", map[string]any{
+			"type": "oauth", "methodID": "device", "access": token, "refresh": token, "expires": 0,
+		})
+	}
+	return nil
 }
 
 func firstNonEmptyLine(s string) string {

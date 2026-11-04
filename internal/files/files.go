@@ -19,7 +19,17 @@ import (
 
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/config"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/durable"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/layout"
 )
+
+// reachable resolves path, or answers 403 and returns false.
+func reachable(w http.ResponseWriter, path string) (string, bool) {
+	abs, ok := layout.Reachable(path)
+	if !ok {
+		http.Error(w, layout.UnreachableMessage, http.StatusForbidden)
+	}
+	return abs, ok
+}
 
 // reservedNameMessage is the plain-language error for a reserved-name
 // collision at a share root. inputs/, working/ and .system/ are reserved so a
@@ -33,9 +43,9 @@ func HandleBrowse(w http.ResponseWriter, r *http.Request) {
 	if path == "" {
 		path = config.Workspace
 	}
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		abs = config.Workspace
+	abs, ok := reachable(w, path)
+	if !ok {
+		return
 	}
 	info, err := os.Stat(abs)
 	if err != nil || !info.IsDir() {
@@ -74,6 +84,9 @@ func HandleBrowse(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		full := filepath.Join(abs, e.Name())
+		if _, ok := layout.Reachable(full); !ok {
+			continue
+		}
 		var mod time.Time
 		size := int64(0)
 		if fi, err := e.Info(); err == nil {
@@ -93,7 +106,7 @@ func HandleBrowse(w http.ResponseWriter, r *http.Request) {
 	}
 
 	parent := filepath.Dir(abs)
-	if parent == abs {
+	if _, ok := layout.Reachable(parent); !ok || parent == abs {
 		parent = ""
 	}
 
@@ -111,7 +124,10 @@ func HandleFileView(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "path is required", http.StatusBadRequest)
 		return
 	}
-	abs, _ := filepath.Abs(path)
+	abs, ok := reachable(w, path)
+	if !ok {
+		return
+	}
 	info, err := os.Stat(abs)
 	if err != nil || info.IsDir() {
 		http.Error(w, "File not found", http.StatusNotFound)
@@ -167,7 +183,10 @@ func HandleFileSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	abs, _ := filepath.Abs(body.Path)
+	abs, ok := reachable(w, body.Path)
+	if !ok {
+		return
+	}
 	if name, blocked := durable.ReservedRootCollision(abs); blocked {
 		http.Error(w, reservedNameMessage(name), http.StatusConflict)
 		return
@@ -198,9 +217,8 @@ func HandleCreateDirectory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	abs, err := filepath.Abs(body.Path)
-	if err != nil {
-		http.Error(w, "Failed to resolve directory", http.StatusBadRequest)
+	abs, ok := reachable(w, body.Path)
+	if !ok {
 		return
 	}
 
@@ -210,6 +228,10 @@ func HandleCreateDirectory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if body.Unique {
+		// Another name goes beside it, so that folder must be in reach too.
+		if _, ok := reachable(w, filepath.Dir(abs)); !ok {
+			return
+		}
 		final, err := createUniqueDir(abs)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -303,9 +325,8 @@ func HandleFileUpload(w http.ResponseWriter, r *http.Request) {
 	if targetDir == "" {
 		targetDir = filepath.Join(config.Workspace, "upload")
 	}
-	targetDir, err := filepath.Abs(targetDir)
-	if err != nil {
-		http.Error(w, "Failed to resolve upload directory", http.StatusInternalServerError)
+	targetDir, ok := reachable(w, targetDir)
+	if !ok {
 		return
 	}
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
@@ -392,9 +413,8 @@ func HandleFileDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "path is required", http.StatusBadRequest)
 		return
 	}
-	abs, err := filepath.Abs(body.Path)
-	if err != nil {
-		http.Error(w, "Failed to resolve path", http.StatusBadRequest)
+	abs, ok := reachable(w, body.Path)
+	if !ok {
 		return
 	}
 	if abs == "/" || abs == "" {
@@ -430,14 +450,12 @@ func HandleFileRename(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "src and dest are required", http.StatusBadRequest)
 		return
 	}
-	src, err := filepath.Abs(body.Src)
-	if err != nil {
-		http.Error(w, "Failed to resolve src", http.StatusBadRequest)
+	src, ok := reachable(w, body.Src)
+	if !ok {
 		return
 	}
-	dest, err := filepath.Abs(body.Dest)
-	if err != nil {
-		http.Error(w, "Failed to resolve dest", http.StatusBadRequest)
+	dest, ok := reachable(w, body.Dest)
+	if !ok {
 		return
 	}
 	if name, blocked := durable.ReservedRootCollision(dest); blocked {
@@ -488,9 +506,8 @@ func HandleFileDuplicate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "src is required", http.StatusBadRequest)
 		return
 	}
-	src, err := filepath.Abs(body.Src)
-	if err != nil {
-		http.Error(w, "Failed to resolve src", http.StatusBadRequest)
+	src, ok := reachable(w, body.Src)
+	if !ok {
 		return
 	}
 	info, err := os.Stat(src)
@@ -501,7 +518,11 @@ func HandleFileDuplicate(w http.ResponseWriter, r *http.Request) {
 
 	dest := strings.TrimSpace(body.Dest)
 	if dest == "" {
-		dir := filepath.Dir(src)
+		// The copy goes beside the original, so that folder must be in reach too.
+		dir, ok := reachable(w, filepath.Dir(src))
+		if !ok {
+			return
+		}
 		base := filepath.Base(src)
 		ext := ""
 		stem := base
@@ -518,9 +539,7 @@ func HandleFileDuplicate(w http.ResponseWriter, r *http.Request) {
 			candidate = filepath.Join(dir, fmt.Sprintf("%s_copy_%d%s", stem, i, ext))
 		}
 	} else {
-		dest, err = filepath.Abs(dest)
-		if err != nil {
-			http.Error(w, "Failed to resolve dest", http.StatusBadRequest)
+		if dest, ok = reachable(w, dest); !ok {
 			return
 		}
 		if _, err := os.Stat(dest); err == nil {
@@ -581,7 +600,10 @@ func HandleFileDownload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "path is required", http.StatusBadRequest)
 		return
 	}
-	abs, _ := filepath.Abs(path)
+	abs, ok := reachable(w, path)
+	if !ok {
+		return
+	}
 	info, err := os.Stat(abs)
 	if err != nil {
 		http.Error(w, "File not found", http.StatusNotFound)
@@ -662,7 +684,10 @@ func HandleFileRaw(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "path is required", http.StatusBadRequest)
 		return
 	}
-	abs, _ := filepath.Abs(path)
+	abs, ok := reachable(w, path)
+	if !ok {
+		return
+	}
 	info, err := os.Stat(abs)
 	if err != nil || info.IsDir() {
 		http.Error(w, "File not found", http.StatusNotFound)
@@ -674,8 +699,8 @@ func HandleFileRaw(w http.ResponseWriter, r *http.Request) {
 }
 
 // SetInlineHeaders marks a file's bytes for showing in place rather than
-// downloading: a best-effort type, and for markup a policy that stops it
-// fetching anything.
+// downloading: a best-effort type, and for anything but a PDF a policy that
+// stops it running scripts or fetching anything.
 func SetInlineHeaders(h http.Header, name string) {
 	ext := strings.ToLower(filepath.Ext(name))
 	if ct := contentTypeByExt(ext); ct != "" {
@@ -688,8 +713,8 @@ func SetInlineHeaders(h http.Header, name string) {
 	h.Set("X-Content-Type-Options", "nosniff")
 }
 
-// contentSecurityPolicy returns the policy to serve a previewable document
-// under, or "" for types that carry no markup.
+// contentSecurityPolicy returns the policy to serve a file under: any type but
+// PDF.
 //
 // HTML files here are usually written by the agent or pulled off the web
 // rather than by the person reading them, so the preview treats the document
@@ -704,17 +729,22 @@ func SetInlineHeaders(h http.Header, name string) {
 // the policy travels with the response, so a future caller that embeds this
 // URL without a sandbox attribute still cannot be used to exfiltrate.
 //
+// Other types get it too, since these bytes are served on the app's origin,
+// where a script can call the whole API: an SVG, XHTML or XML file runs its
+// scripts when opened on its own, and a file of no known type is sniffed, so
+// one that starts with <script> is served as HTML. Chrome's PDF viewer refuses
+// a sandboxed response, and runs PDF scripts in its own sandbox.
+//
 // data: images are allowed because self-contained reports routinely inline
 // their charts, and inline styles because HTML written for a single file
 // almost always carries a <style> block — refusing those would render most
 // real documents as unformatted text for no security gain, since neither can
 // originate a request.
 func contentSecurityPolicy(ext string) string {
-	switch ext {
-	case ".html", ".htm":
-		return "default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; font-src data:; media-src data: blob:; form-action 'none'; base-uri 'none'; sandbox"
+	if ext == ".pdf" {
+		return ""
 	}
-	return ""
+	return "default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; font-src data:; media-src data: blob:; form-action 'none'; base-uri 'none'; sandbox"
 }
 
 // contentTypeByExt returns a Content-Type for extensions we want to render

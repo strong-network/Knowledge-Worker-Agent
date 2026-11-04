@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/db"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/layout"
 )
 
 type versionJSON struct {
@@ -33,7 +34,11 @@ func HandleList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "path is required", http.StatusBadRequest)
 		return
 	}
-	abs, _ := filepath.Abs(path)
+	abs, ok := layout.Reachable(path)
+	if !ok {
+		http.Error(w, layout.UnreachableMessage, http.StatusForbidden)
+		return
+	}
 	list := []versionJSON{}
 	if store != "" && Versioned(filepath.Base(abs)) {
 		Current(abs)
@@ -59,10 +64,14 @@ func HandleList(w http.ResponseWriter, r *http.Request) {
 // or with download=1 the file as it was then, named name-vN.ext.
 func HandleContent(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	abs, _ := filepath.Abs(q.Get("path"))
 	v, err := strconv.Atoi(q.Get("v"))
 	if q.Get("path") == "" || err != nil {
 		http.Error(w, "path and v are required", http.StatusBadRequest)
+		return
+	}
+	abs, ok := layout.Reachable(q.Get("path"))
+	if !ok {
+		http.Error(w, layout.UnreachableMessage, http.StatusForbidden)
 		return
 	}
 	fv, ok, err := db.FileVersionAt(abs, v)

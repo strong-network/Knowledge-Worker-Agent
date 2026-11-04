@@ -88,6 +88,11 @@ func removeUntouched(logw io.Writer, servers []DefaultServer) {
 		if IsProvisioned(key) {
 			continue
 		}
+		// Only a switch, from when the administrator assigned this name:
+		// RemoveUnassignedStubs handles it, and it isn't the user's edit.
+		if isStub(entry) {
+			continue
+		}
 		if !catalogueUntouched(entry, d) {
 			kept = append(kept, key)
 			continue

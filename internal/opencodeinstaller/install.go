@@ -1,9 +1,10 @@
 // Copyright 2026 Citrix Systems, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Package opencodeinstaller downloads and installs the OpenCode CLI from its
-// official GitHub release artifacts (github.com/anomalyco/opencode, linux-x64 /
-// linux-arm64 / -musl tarballs with a single `opencode` binary at the root).
+// Package opencodeinstaller downloads and installs the OpenCode CLI: 2.x from
+// its npm packages (@opencode/cli-<target>), 1.x from its GitHub release
+// artifacts (github.com/anomalyco/opencode), for linux-x64 / linux-arm64 /
+// -musl.
 package opencodeinstaller
 
 import (
@@ -25,10 +26,9 @@ import (
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodeembed"
 )
 
-// PinnedVersion is the only opencode release the installer puts on disk. To bump
-// it, take the new tarballs' digests from the GitHub release API into
-// pinnedSHA256, and update OPENCODE_VERSION and the SHA-256 args in
-// Dockerfile.release to match (a test checks they agree).
+// PinnedVersion is the opencode 1.x release the installer puts on disk when
+// 1.x is asked for. To bump it, take the new tarballs' digests from the GitHub
+// release API into pinnedSHA256.
 const PinnedVersion = "v1.19.4"
 
 // pinnedSHA256 is the SHA-256 of each PinnedVersion tarball, by installer target.
@@ -43,6 +43,56 @@ var pinnedSHA256 = map[string]string{
 // opencodeReleasesBase is the release host. It is a var, not a const, so tests
 // can point the installer at a local server instead of reaching GitHub.
 var opencodeReleasesBase = "https://github.com/anomalyco/opencode/releases"
+
+// PinnedVersion2 is the opencode 2.x release the installer puts on disk when
+// 2.x is asked for, as it is by default. 2.x is published on npm, one package
+// per target, not as GitHub release assets. To bump it, take each package's
+// tarball, check it against npm's sha512 integrity, pin its SHA-256 in
+// pinnedSHA256v2, and update OPENCODE_VERSION and the SHA-256 args in
+// Dockerfile.release to match (a test checks they agree).
+const PinnedVersion2 = "v2.2.5"
+
+// pinnedSHA256v2 is the SHA-256 of each PinnedVersion2 tarball, by target.
+var pinnedSHA256v2 = map[string]string{
+	"linux-x64":        "92690eee07a680d3cb760ca02ba43878de9eab1b4e5d5dfae8795518c53628f4",
+	"linux-x64-musl":   "60d1081dcc5fe92935b65b9b2da8fdb9897af1e1727249950e4207e7b29f279f",
+	"linux-arm64":      "f8c5a82075fede9b5b044ed6c8a6d13ad807a7e62caea1cd0a878adef49eb053",
+	"linux-arm64-musl": "ef26ea9a81b8adf4185a47b7d3aa5bb3a2a69bc4297cbdaaff9641881339b594",
+}
+
+// npmRegistry hosts the 2.x packages. A var so tests can serve their own.
+var npmRegistry = "https://registry.npmjs.org"
+
+// release is an opencode version the installer can put on disk.
+type release struct {
+	version string
+	sha256  map[string]string
+	url     func(target string) (url, name string)
+	// embedded is whether this build may carry the tarball as a fallback.
+	embedded bool
+}
+
+// releaseFor returns the pinned release of major (1 unless 2 or more).
+func releaseFor(major int) release {
+	if major >= 2 {
+		return release{version: PinnedVersion2, sha256: pinnedSHA256v2, url: npmURL, embedded: true}
+	}
+	return release{
+		version: PinnedVersion,
+		sha256:  pinnedSHA256,
+		url:     func(target string) (string, string) { return buildDownloadURL(PinnedVersion, target) },
+	}
+}
+
+// Pinned returns the version the installer pins for major.
+func Pinned(major int) string { return releaseFor(major).version }
+
+// npmURL is the 2.x package tarball for target, such as
+// .../@opencode/cli-linux-x64/-/cli-linux-x64-2.2.5.tgz.
+func npmURL(target string) (string, string) {
+	name := fmt.Sprintf("cli-%s-%s.tgz", target, strings.TrimPrefix(PinnedVersion2, "v"))
+	return npmRegistry + "/@opencode/cli-" + target + "/-/" + name, name
+}
 
 // embeddedTarball resolves the build-time fallback asset. Indirected through a
 // var so tests can exercise the fallback without staging a real asset into the
@@ -95,12 +145,16 @@ type InstallOptions struct {
 	InstallDir string
 	// HTTPClient lets callers inject a client (timeouts, proxies, tests).
 	HTTPClient *http.Client
+	// Major picks the pinned release: 2.x for 2 or more, else 1.x.
+	Major int
 }
 
 // EnsureOptions configures Ensure.
 type EnsureOptions struct {
 	CurrentBin string
 	InstallDir string
+	// Major picks the pinned release: 2.x for 2 or more, else 1.x.
+	Major int
 }
 
 // EnsureResult describes what Ensure decided to do.
@@ -111,32 +165,34 @@ type EnsureResult struct {
 	ToVersion   string
 }
 
-// Ensure installs PinnedVersion into opts.InstallDir unless opts.CurrentBin
-// already works and reports that version. Any other version, older or newer, is
-// replaced. If the install fails, a working existing binary is kept.
+// Ensure installs the pinned release of opts.Major into opts.InstallDir unless
+// opts.CurrentBin already works and reports that version. Any other version,
+// older or newer, is replaced. If the install fails, a working existing binary
+// is kept.
 func Ensure(out io.Writer, opts EnsureOptions) (EnsureResult, error) {
 	if out == nil {
 		out = os.Stderr
 	}
-	res := EnsureResult{Bin: opts.CurrentBin, ToVersion: PinnedVersion}
+	pinned := releaseFor(opts.Major).version
+	res := EnsureResult{Bin: opts.CurrentBin, ToVersion: pinned}
 
 	working := VerifyBin(opts.CurrentBin)
 	if working {
 		res.FromVersion = extractSemver(VersionString(opts.CurrentBin))
 	}
 
-	if working && res.FromVersion == PinnedVersion {
+	if working && res.FromVersion == pinned {
 		fmt.Fprintf(out, "  ✓ OpenCode at the pinned version (%s)\n", res.FromVersion)
 		return res, nil
 	}
 
 	if working {
-		fmt.Fprintf(out, "  ↻ Replacing opencode %s with the pinned %s\n", res.FromVersion, PinnedVersion)
+		fmt.Fprintf(out, "  ↻ Replacing opencode %s with the pinned %s\n", res.FromVersion, pinned)
 	} else {
-		fmt.Fprintf(out, "  ⤓ Installing opencode %s\n", PinnedVersion)
+		fmt.Fprintf(out, "  ⤓ Installing opencode %s\n", pinned)
 	}
 
-	bin, err := Install(out, InstallOptions{InstallDir: opts.InstallDir})
+	bin, err := Install(out, InstallOptions{InstallDir: opts.InstallDir, Major: opts.Major})
 	if err != nil {
 		if working {
 			fmt.Fprintf(out, "  ! Update failed (%v); keeping existing %s\n", err, opts.CurrentBin)
@@ -149,20 +205,21 @@ func Ensure(out io.Writer, opts EnsureOptions) (EnsureResult, error) {
 	return res, nil
 }
 
-// Install downloads PinnedVersion and installs it without shelling out. The
-// tarball, downloaded or embedded, is installed only if its SHA-256 matches
-// pinnedSHA256. Returns the path to the installed binary on success.
+// Install downloads the pinned release of opts.Major and installs it without
+// shelling out. The tarball, downloaded or embedded, is installed only if its
+// SHA-256 matches the pin. Returns the path to the installed binary on success.
 func Install(out io.Writer, opts InstallOptions) (string, error) {
 	if out == nil {
 		out = os.Stderr
 	}
+	rel := releaseFor(opts.Major)
 	target, err := detectTarget()
 	if err != nil {
 		return "", err
 	}
-	wantSHA, ok := pinnedSHA256[target]
+	wantSHA, ok := rel.sha256[target]
 	if !ok {
-		return "", fmt.Errorf("no pinned checksum for opencode %s on %s", PinnedVersion, target)
+		return "", fmt.Errorf("no pinned checksum for opencode %s on %s", rel.version, target)
 	}
 
 	installDir := opts.InstallDir
@@ -178,7 +235,7 @@ func Install(out io.Writer, opts InstallOptions) (string, error) {
 		client = &http.Client{Timeout: 5 * time.Minute}
 	}
 
-	tarballURL, tarballName := buildDownloadURL(PinnedVersion, target)
+	tarballURL, tarballName := rel.url(target)
 
 	fmt.Fprintf(out, "  ⤓ Installing OpenCode CLI (%s) into %s\n", target, installDir)
 	fmt.Fprintf(out, "    Tarball: %s\n", tarballURL)
@@ -206,8 +263,8 @@ func Install(out io.Writer, opts InstallOptions) (string, error) {
 	}
 	if netErr != nil {
 		embedded, ok := embeddedTarball(target)
-		if !ok {
-			return "", fmt.Errorf("download tarball: %w (this build has no embedded %s fallback)", netErr, target)
+		if !ok || !rel.embedded {
+			return "", fmt.Errorf("download tarball: %w (this build has no embedded %s %s fallback)", netErr, rel.version, target)
 		}
 		fmt.Fprintf(out, "  ! Download failed: %v\n", netErr)
 		if got := sha256Hex(embedded); got != wantSHA {

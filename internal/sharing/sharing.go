@@ -233,7 +233,7 @@ func HandleStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
-	if change.AllowPermissions != nil || change.AllowFiles != nil {
+	if change.AllowFiles != nil {
 		changeOptions(w, r, sid, change)
 		return
 	}
@@ -266,8 +266,7 @@ func HandleStart(w http.ResponseWriter, r *http.Request) {
 
 // optionsChange is PUT /share's body: only the options named change.
 type optionsChange struct {
-	AllowPermissions *bool `json:"allow_permissions"`
-	AllowFiles       *bool `json:"allow_files"`
+	AllowFiles *bool `json:"allow_files"`
 }
 
 // optionsMu keeps two quick toggles from overwriting each other.
@@ -280,9 +279,6 @@ var optionsMu sync.Mutex
 func changeOptions(w http.ResponseWriter, r *http.Request, sid string, change optionsChange) {
 	optionsMu.Lock()
 	o := db.SessionShareOptions(sid)
-	if change.AllowPermissions != nil {
-		o.AllowPermissions = *change.AllowPermissions
-	}
 	var err error
 	if change.AllowFiles != nil {
 		if *change.AllowFiles {
@@ -305,7 +301,7 @@ func changeOptions(w http.ResponseWriter, r *http.Request, sid string, change op
 		return
 	}
 	chat.ShareOptionsChanged(sid)
-	log.Printf("[sharing] %s: guests may answer=%t, see files=%t", sid, o.AllowPermissions, o.AllowFiles)
+	log.Printf("[sharing] %s: guests may see files=%t", sid, o.AllowFiles)
 	writeJSON(w, http.StatusOK, state(r.Context(), sid, workspaceapps.OwnerToken(r)))
 }
 

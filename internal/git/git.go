@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/config"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/layout"
 )
 
 // Status describes the high-level state of the repo containing path.
@@ -47,7 +48,7 @@ func HandleStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "path is required"})
 		return
 	}
-	abs, err := resolveDir(path)
+	abs, err := resolveRequestDir(path)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -134,7 +135,7 @@ func HandleChanges(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "path is required"})
 		return
 	}
-	abs, err := resolveDir(path)
+	abs, err := resolveRequestDir(path)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -233,7 +234,7 @@ func HandleCommit(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "commit message is required"})
 		return
 	}
-	abs, err := resolveDir(req.Path)
+	abs, err := resolveRequestDir(req.Path)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -480,7 +481,7 @@ func runOp(w http.ResponseWriter, r *http.Request, args ...string) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "path is required"})
 		return
 	}
-	abs, err := resolveDir(req.Path)
+	abs, err := resolveRequestDir(req.Path)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -922,6 +923,16 @@ func repoRoot(dir string) (string, bool) {
 	}
 	root := strings.TrimSpace(string(out))
 	return root, root != ""
+}
+
+// resolveRequestDir is resolveDir for a folder a request names: it refuses one
+// outside the home folder, so the git routes reach no further than the Files
+// panel does.
+func resolveRequestDir(path string) (string, error) {
+	if _, ok := layout.Reachable(path); !ok {
+		return "", errors.New(layout.UnreachableMessage)
+	}
+	return resolveDir(path)
 }
 
 // resolveDir turns the user-supplied path into an absolute directory we can

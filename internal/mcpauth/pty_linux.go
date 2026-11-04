@@ -51,5 +51,17 @@ func openPTY() (master, slave *os.File, err error) {
 		ptmx.Close()
 		return nil, nil, fmt.Errorf("open %s: %w", slavePath, err)
 	}
+	// A new terminal is zero columns wide, and opencode's prompts then wrap after
+	// every character. Wide enough that a sign-in link never wraps either.
+	size := struct{ rows, cols, x, y uint16 }{40, 1000, 0, 0}
+	if _, _, errno := syscall.Syscall(
+		syscall.SYS_IOCTL, pts.Fd(),
+		uintptr(syscall.TIOCSWINSZ),
+		uintptr(unsafe.Pointer(&size)),
+	); errno != 0 {
+		ptmx.Close()
+		pts.Close()
+		return nil, nil, fmt.Errorf("set window size: %w", errno)
+	}
 	return ptmx, pts, nil
 }

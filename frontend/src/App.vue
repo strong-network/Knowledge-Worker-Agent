@@ -9,6 +9,7 @@ import { useUploadsStore } from './stores/uploads'
 import { useChatStore } from './stores/chat'
 import { useProvidersStore } from './stores/providers'
 import { useShareStore } from './stores/share'
+import { useOnboardingStore } from './stores/onboarding'
 import { BACKEND_UNAVAILABLE_EVENT, checkBackendReady, fetchActiveStreams } from './api'
 import MigrationBanner from './components/MigrationBanner.vue'
 import DiskSpaceBanner from './components/DiskSpaceBanner.vue'
@@ -190,6 +191,8 @@ async function bootstrapApp() {
   window.addEventListener('drop', onWindowDrop)
   appBootstrapped.value = true
   startBackendHealthMonitor()
+  // The setup guide or what's new, if either has something to say.
+  void useOnboardingStore().check()
 }
 
 onMounted(async () => {

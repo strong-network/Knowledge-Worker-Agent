@@ -4,7 +4,7 @@
 #
 # Uses strongnetwork/cloud_editor_generic as the workspace base. Supply your own
 # model-provider credentials and central configuration. An embedded opencode
-# fallback lets the workspace start when github.com is unreachable.
+# fallback lets the workspace start when the npm registry is unreachable.
 #
 # Build:  DOCKER_BUILDKIT=1 docker build -f Dockerfile.release -t chat:0.0.8 .
 # Or:     make release
@@ -20,19 +20,20 @@ COPY frontend/ ./
 RUN npx vite build
 
 # --- opencode fallback asset ---
-# Fetched at build time and embedded into the chat binary as a *backup*. At
-# runtime the installer still downloads the pinned release from GitHub first;
-# the embedded copy is used only when that fails (no egress, proxy block,
-# corrupt or altered download). Either way the binary lands in the normal
-# install dir (~/.opencode/bin, or KWA_OPENCODE_INSTALL_DIR).
+# opencode 2.x, the version that runs by default, fetched at build time and
+# embedded into the chat binary as a *backup*. At runtime the installer still
+# downloads the pinned release from npm first; the embedded copy is used only
+# when that fails (no egress, proxy block, corrupt or altered download). Either
+# way the binary lands in the normal install dir (~/.opencode/bin/v2, or v2 in
+# KWA_OPENCODE_INSTALL_DIR). 1.x, set with KWA_OPENCODE_MAJOR=1, has no copy.
 #
-# The version and checksums must match PinnedVersion and pinnedSHA256 in
+# The version and checksums must match PinnedVersion2 and pinnedSHA256v2 in
 # internal/opencodeinstaller, which accepts only a matching embedded copy; a test
 # checks they agree. The build fails if the download doesn't match.
 FROM alpine:3.20 AS opencodeasset
-ARG OPENCODE_VERSION=v1.19.4
-ARG OPENCODE_SHA256_LINUX_X64=849bd6b3d959a1d2ef200ed1634a51c79a45ca236aa26665d75debd694805cce
-ARG OPENCODE_SHA256_LINUX_ARM64=8568230ccd847dc93e95b9f6894379077d3e014a16b48040743573e77c23e85f
+ARG OPENCODE_VERSION=v2.2.5
+ARG OPENCODE_SHA256_LINUX_X64=92690eee07a680d3cb760ca02ba43878de9eab1b4e5d5dfae8795518c53628f4
+ARG OPENCODE_SHA256_LINUX_ARM64=f8c5a82075fede9b5b044ed6c8a6d13ad807a7e62caea1cd0a878adef49eb053
 ARG TARGETARCH=amd64
 RUN apk add --no-cache curl \
     && case "${TARGETARCH}" in \
@@ -42,7 +43,7 @@ RUN apk add --no-cache curl \
     esac \
     && mkdir -p /asset \
     && curl -fsSL -o "/asset/opencode-${OC_TARGET}.tar.gz" \
-    "https://github.com/anomalyco/opencode/releases/download/${OPENCODE_VERSION}/opencode-${OC_TARGET}.tar.gz" \
+    "https://registry.npmjs.org/@opencode/cli-${OC_TARGET}/-/cli-${OC_TARGET}-${OPENCODE_VERSION#v}.tgz" \
     && echo "${OC_SHA256}  /asset/opencode-${OC_TARGET}.tar.gz" | sha256sum -c -
 
 # --- Go build ---
@@ -147,7 +148,6 @@ RUN ! ldd /usr/lib/knowledge-worker-agent/whisper/whisper-server /usr/lib/knowle
 
 RUN mkdir -p /home/developer
 
-ENV KWA_HOST=0.0.0.0
 ENV KWA_PORT=8765
 ENV COPILOT_WORKSPACE=/home/developer
 ENV COPILOT_DB_PATH=/home/developer/copilot-web.db

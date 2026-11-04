@@ -27,6 +27,8 @@ import DiagnosticsModal from './DiagnosticsModal.vue'
 import DiskSpaceModal from './DiskSpaceModal.vue'
 import ShareModal from './ShareModal.vue'
 import ArtifactShareModal from './ArtifactShareModal.vue'
+import SetupGuideModal from './SetupGuideModal.vue'
+import WhatsNewModal from './WhatsNewModal.vue'
 
 const ui = useUiStore()
 
@@ -40,6 +42,8 @@ const overlay = ref<HTMLElement | null>(null)
 useModalDialog(() => overlay.value?.querySelector<HTMLElement>('.modal'), {
   key: () => ui.activeModal,
   onClose: () => ui.closeModal(),
+  // A modal whose first field isn't where to start marks what is.
+  initialFocus: () => overlay.value?.querySelector<HTMLElement>('.modal[data-autofocus], .modal [data-autofocus]'),
 })
 
 // Only a click that also began on the backdrop closes the modal. A press inside
@@ -84,5 +88,7 @@ function closeOnOverlay(e: MouseEvent) {
     <DiskSpaceModal v-if="ui.activeModal === 'disk-space'" />
     <ShareModal v-if="ui.activeModal === 'share'" />
     <ArtifactShareModal v-if="ui.activeModal === 'artifact-share'" />
+    <SetupGuideModal v-if="ui.activeModal === 'setup-guide'" />
+    <WhatsNewModal v-if="ui.activeModal === 'whats-new'" />
   </div>
 </template>

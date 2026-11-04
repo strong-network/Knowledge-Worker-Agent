@@ -43,7 +43,8 @@ whole product.
 | `internal/defaults/` | Embedded bundles installed at startup into `~/.config/opencode`, in **every** workspace (not gated on `KWA_CENTRAL_CONFIG`): `skills/` (the pdf/docx/pptx/xlsx document skills — the capability floor for reading an attached file — and `reports-and-dashboards`, which teaches the agent to build reports and dashboards that the preview and shared files can show as written; a copy central configuration assigns under the same name hides it) and `plugin/` (OpenCode plugins that keep chat working; `pdf-guard.js` drops attachments the provider can't accept, which would otherwise poison a session's history permanently). Both are platform-owned: always overwritten, never manifest-tracked. The old content bundle (agents, product context, `AGENTS.md`, product-specific skills) is **retired**: central configuration provides that now, and `RetireLegacyDefaults` removes it from workspaces that already have it, preserving user-edited files | `//go:embed all:skills` + `all:plugin` |
 | `internal/mcp/` | MCP server management: the `mcp` block of opencode's `opencode.json`. opencode handles MCP OAuth itself (`internal/mcpauth` drives its commands) | **Security-relevant**: tokens, external IdPs |
 | `internal/chat/` | Chat backend lifecycle (`RunStream`), opencode JSONL parser (`ParseOpencodeJSONL`), `opencode serve` event translation (`server_stream.go`), process registry, stream buffering | **Security-relevant**: process exec |
-| `internal/opencodeserver/` | Server mode: supervises long-lived `opencode serve` processes, one per working folder, and adapts their HTTP/SSE events | **Security-relevant**: process exec |
+| `internal/opencodeserver/` | Server mode: supervises long-lived `opencode serve` processes, one per working folder, and adapts their HTTP/SSE events. opencode 1.x only | **Security-relevant**: process exec |
+| `internal/opencodev2/` | opencode 2.x: detects the installed major version, runs the one `opencode serve` every 2.x command goes to (loopback, random password), and calls its API | **Security-relevant**: process exec, local API password |
 | `internal/opencodeinstaller/`, `internal/opencodeembed/` | Installs the pinned opencode release, verified by SHA-256; the release binary embeds a fallback copy | **Security-relevant**: supply chain |
 | `internal/opencodeauth/`, `internal/vertexauth/`, `internal/providers/` | Model provider sign-in (GitHub Copilot device flow, Google Cloud), API keys, and which providers and preset models the workspace offers | **Security-relevant**: credentials, written to opencode's credential store |
 | `internal/sessions/` | Session & chat HTTP handlers, SSE dispatch loop, prompt queue, answer forwarding, and temporary chats: a once-a-minute sweeper deletes one 24 hours after its last message, unless a turn is running | **Security-relevant**: deletes chats, through `workdirs` |
@@ -54,7 +55,7 @@ whole product.
 | `internal/mcpauth/` | Drives opencode's MCP OAuth commands (`opencode mcp auth`, `logout`, `list`) | **Security-relevant**: external identity providers |
 | `internal/materializer/` | Central configuration: at startup and on a refresh from Diagnostics, clones or reads the configuration repository and writes the project's agents, skills, context, connectors, providers and vocabularies into a platform-owned opencode config folder, built beside the current one and swapped in | **Security-relevant**: exec `git`, writes config |
 | `internal/workspaceapps/` | Chat sharing: client for the workspace sidecar's Workspace App routes (`/var/strong-network/socks/sidecar-ipc`). Calls carry the owner's platform token, read per request from the `cloud_editor_user_token` header the platform proxy injects; `GET /api/share/platform` is a read-only probe of that path | **Security-relevant**: handles the owner's platform credential — never store, log or return it |
-| `internal/guest/` | Chat sharing: the guest surface — a **separate listener** (`127.0.0.1:8766`) with its own mux, reached by coworkers through the Workspace App. Only its own routes exist; every session route 404s unless the chat is shared; POSTs require `Origin` to equal the share URL's origin; turn frames pass an allow-list (`Frame`). With the owner's per-share toggles on, guests also answer permission requests (once or deny) and reach the chat's folder through `os.Root` — no delete/rename/move, hidden paths refused, home folder never — and guest prompts have a per-chat budget | **Security-relevant**: exposed beyond the owner. Must never import `internal/workspaceapps` or read the owner token (a test enforces this) |
+| `internal/guest/` | Chat sharing: the guest surface — a **separate listener** (`127.0.0.1:8766`) with its own mux, reached by coworkers through the Workspace App. Only its own routes exist; every session route 404s unless the chat is shared; POSTs require `Origin` to equal the share URL's origin; turn frames pass an allow-list (`Frame`). With the owner's per-share toggle on, guests also reach the chat's folder through `os.Root` — no delete/rename/move, hidden paths refused, home folder never — and guest prompts have a per-chat budget | **Security-relevant**: exposed beyond the owner. Must never import `internal/workspaceapps` or read the owner token (a test enforces this) |
 | `internal/fileshare/` | Sharing one file from a chat (an "artifact" in the UI): each shared file gets a port of its own from `KWA_ARTIFACT_PORTS` (default `8770-8799`) and a Workspace App on it, shared with the people the owner chose. Owner routes `/api/artifacts`; platform calls carry the owner's token, read per request. Sharing refuses an HTML or Markdown file that isn't self-contained (`internal/fileshare/check`: what it loads from the internet or from other files, as advice for the owner; the viewer's content policy is the boundary). A shared file follows renames and moves in the owner's file routes, and stops being shared before a delete, through hooks in `internal/files` (`AfterRename`, `BeforeDelete`) set in `main.go`. With `KWA_ARTIFACT_PORTS=off`, no shared file is served at startup; each is kept, shows as turned off, and is served again once sharing is back on. A file that isn't self-contained can be fixed in the background (`/api/artifacts/fixes`): a temporary chat, in a folder of its own, works on a copy of the file and the files it loads; the fixed file replaces the original only if it passes the check and the original hasn't changed meanwhile, and the original is kept in `.system/artifact-backups`. A fix still running when the server stops is marked failed at the next start. Preview links (`POST /api/files/preview-link`) run an HTML file's scripts on the preview listener, published by an app named `Knowledge Worker Agent preview` on `KWA_PREVIEW_PORT` (default `8769`) with nobody in its audience, created on first use. `GET /api/artifacts/can-share?folder=&file=` tells the agent whether files in a chat's folder can be shared (sharing on, the nearest chat folder not only a temporary chat's) and what the check finds in a file there; the reports-and-dashboards skill asks it through `KWA_URL`, which `main.go` exports to child processes. `internal/fileshare/check/skill_test.go` fails when the check gains a rule the skill doesn't name | **Security-relevant**: handles the owner's platform credential and decides what is published |
 | `internal/fileshare/viewer/` | What coworkers reach for a shared file: one listener per shared file on `127.0.0.1:<port>`, GET only, serving that one file and a small viewer page. The file is read through `os.Root` in its chat's folder (no hidden paths; HTML, Markdown, PDF and images up to 25 MB); HTML runs under a policy that refuses every load and connection, sandboxed without the page's origin, with a short script put first (`links.go`) that opens links to web pages in a new tab: followed in the frame, the viewer page refuses them. Downloads are the file as written. Markdown is rendered on the server (`internal/fileshare/markdown`: goldmark, GitHub flavour) without the HTML written into it, and served under the same policy with no scripts. Also the owner's preview listener: an HTML file the owner opens in the app, served only by a link made for it (one hour, in memory) and framed by the app | **Security-relevant**: exposed beyond the owner. Must never import `internal/workspaceapps` or read the owner token (a test enforces this) |
 | `internal/obsidianinstaller/` | Installs the Obsidian MCP server via `npm install -g obsidian-mcp@<PinnedVersion>` | **Security-relevant**: supply chain |
@@ -140,10 +141,11 @@ not pass `-race`.
 Single process, plus child processes:
 
 ```
-Browser (Vue SPA)  ──HTTP/SSE──>  Go server (cmd/server, default 127.0.0.1:8765; release image 0.0.0.0)
+Browser (Vue SPA)  ──HTTP/SSE──>  Go server (cmd/server, 127.0.0.1:8765 and [::1]:8765)
                                       │
                                       ├─ spawns: opencode run --format json … -- <prompt>  (per chat turn, default mode)
                                       ├─ or runs: opencode serve …           (server mode, one per working folder)
+                                      ├─ on opencode 2.x: opencode serve      (one; every opencode command goes to it)
                                       ├─ spawns: opencode auth / models / mcp …  (sign-in, models, MCP OAuth)
                                       ├─ spawns: git <verb> …                (source control, cwd = client path)
                                       ├─ spawns: npm install …               (Obsidian MCP install, startup)
@@ -167,7 +169,74 @@ Owner ──────Workspace App──> preview listener (127.0.0.1:8769), 
 - **Server mode** (`KWA_OPENCODE_USE_SERVER=true`): turns go to a long-lived `opencode serve` over
   HTTP/SSE (`internal/opencodeserver`), translated by `translateServerEvent`
   (`internal/chat/server_stream.go`). Only this mode can ask before the agent acts: a
-  `permission` event, answered with `POST /api/sessions/{id}/permission`.
+  `permission` event, answered with `POST /api/sessions/{id}/permission`. opencode 1.x only:
+  2.x replaced the API it uses, so on 2.x the setting is ignored.
+- **opencode 2.x** (`internal/opencodev2`): the default (`config.OpencodeMajor`) once the
+  one-folder migration has run. The migration and its undo re-point chats through 1.x, so a
+  workspace runs 1.x until the migration has run, and they switch to 1.x (`config.UseOpencode1`).
+  `KWA_OPENCODE_MAJOR=1` goes back to 1.x; `KWA_OPENCODE_MAJOR=2` runs 2.x before the migration
+  too, which then waits for 1.x. The installer puts the pinned 2.x release (`PinnedVersion2`, from
+  npm, SHA-256 per target) in a `v2` folder of the install folder, so 1.x stays for going back;
+  `KWA_OPENCODE_BIN` still overrides. Before 2.x first opens opencode's database (which it
+  upgrades), KWA keeps a copy in `.system/opencode-db-before-2.x.db`, unless that would leave
+  less than 1 GB free. The major version comes from `--version` when the
+  binary is made sure of (`opencodev2.Detect`). Bootstrap starts one `opencode serve` and waits
+  until its connectors have connected; every opencode command then runs with `--server <url>`
+  and the password in `OPENCODE_PASSWORD` (`opencodev2.Cmd`), or `--standalone` when the server
+  won't start. A private server per command would connect the connectors mid-turn, and 2.x then
+  adds a reminder about their tools that the model answers in its reply. Turns still use
+  `opencode run --format json` (`config.BuildOpencodeArgsV2`: the folder is the working
+  directory, `model#variant`, `--auto` for Yolo), whose events keep the 1.x shape. Stopping a
+  turn also interrupts it on the server, which would otherwise carry on. Skills come from
+  `GET /api/skill`.
+  - **Configuration on 2.x** (`internal/opencodev2/config.go`): 2.x reads `OPENCODE_CONFIG_DIR`
+    *instead of* the global configuration, where 1.x layers it on top. So on 2.x the platform
+    folder is handed over as one document, `OPENCODE_CONFIG=<folder>/opencode.kwa-v2.json`,
+    which 2.x layers over the global configuration: the folder's `opencode.json`, its skills
+    folder named in `skills`, its agents written into `agent`, the user's connector switches
+    (2.x ignores the global entries that hold only `enabled`), `experimental.todo` (the plan
+    display), `external_directory: ask` (as 1.x), and the hidden `kwa-text` agent day notes
+    run as. KWA rewrites it at every server start and before `opencode reload`, which runs when
+    a connector, agent or the central configuration changes (`chat.ReloadServerAgents`).
+  - **Turns on 2.x:** `opencodev2.Command` puts a `run`'s message (the argument after `--`) on
+    stdin, which 2.x reads as it is: 2.2.5 quotes message arguments that contain a space and
+    counts those after `--` twice. 2.x commands get no `PWD`, because 2.x takes its folder from
+    `PWD` before the working directory. 2.x connects connectors per folder, so before a turn
+    `opencodev2.WarmFolder` waits for the chat folder's (a new folder's list starts empty); a
+    turn that starts first gets a mid-turn note about the tool catalog, which small models answer.
+    Titles and day notes share one scratch folder (`opencodev2.ScratchDir`), because 2.x keeps a
+    folder's connectors for an hour. Connector tools run through Code Mode: the model runs a
+    program with the `execute` tool, and `chat/codemode.go` turns each call the program made
+    into a row named as on 1.x (`<server>_<tool>`), so the connectors bar attributes it. The
+    program can make HTTP requests but can't read files, so `config.CodeModeInstruction` tells
+    the model, every turn, to fetch a file from `GET /api/files/raw` (home-folder limit applies)
+    rather than start a web server to serve it. `opencode run` cancels the question tool's
+    questions and tells the model to assume answers, so the turn stops at them instead
+    (`chat/questions.go`): the reply lists them, a `question` frame carries them to the question
+    card, the answers go out as the next message, and `WaitingOnOwner` holds until then.
+    `config.QuestionsInstruction` tells the model each turn that asking works this way, and when
+    to ask. A scheduled run's turn is `Unattended` (never saved): told not to ask, it isn't
+    stopped at a question either. Copied
+    `<system-reminder>` blocks are removed from replies. 2.x renamed `bash` to `shell` and `task`
+    to `subagent`; agents' 1.x permission names still apply.
+  - **Credentials on 2.x** (`internal/opencodev2/credentials.go`): 2.x keeps them in its database
+    and reads auth.json only once, when it upgrades a 1.x database. So the Copilot sign-in, API
+    keys and their sign-outs go through `/api/credential` (and still into auth.json, for 1.x), and
+    connector status and sign-out through `/api/mcp`, since 2.x's `mcp list` no longer lists them.
+    `opencode mcp auth` still runs over a PTY; its callback listens on a loopback port named in the
+    URL's `redirect_uri`. At the first 2.x start, `ImportConnectorSignIns` copies the connector
+    sign-ins in 1.x's mcp-auth.json, once, and only to a connector of the same name and address.
+    Vertex needs nothing new: 2.x reads the same environment and gcloud credentials.
+  - **Models on 2.x:** its `models` has no `--verbose`, so the Vertex model check reads
+    `/api/model` (`opencodeauth.modelDetailsV2`, which names 2.x's client packages by the 1.x
+    package of the same API). 2.x fails a turn whose model lacks the reasoning level asked for,
+    where 1.x ignored it, so a turn drops a level the model doesn't list (`opencodev2.HasVariant`).
+    After `opencodev2.Stop` (shutdown) nothing starts the server again: a late request would
+    leave one running after KWA.
+  - **Plugins on 2.x:** 2.x can't load 1.x plugins, and does the work of KWA's two itself: it
+    replaces an attachment the model can't take with a notice, and leaves blank text out of
+    requests. So on 2.x bootstrap removes our unchanged copies (`defaults.RemovePlugins`) instead
+    of installing them; back on 1.x they are installed again.
 - **Questions:** `opencode run` gets `/dev/null` as stdin, so it can't take an answer mid-turn;
   the frontend sends the answer as the next message.
 - **Persistence:** SQLite at `~/Knowledge_Worker_Agent/.system/knowledge-worker-agent.db`
@@ -189,12 +258,15 @@ patterns documented here rather than the documented patterns themselves.
 
 ### Trust boundaries
 - **Browser → HTTP API (primary boundary).** The browser is the untrusted side. **There is no
-  authentication, authorization, session, CSRF, or Origin checking on the HTTP API.** Every
-  `/api/*` route is reachable by anyone who can reach the listening port. The server binds
-  `127.0.0.1:8765` by default; the release image sets `KWA_HOST=0.0.0.0`, because
-  the platform connects over `::1` as well. The security model assumes the port is reachable **only** by the
-  single owning user (network isolation provided by the surrounding workspace platform), not by
-  the open internet. `requireOpencodeReady` gates *readiness*, not identity.
+  authentication, authorization or session on the HTTP API.** Every `/api/*` route is reachable
+  by anyone who can reach the listening port. The server listens on `127.0.0.1:8765` and
+  `[::1]:8765` by default (`KWA_HOST=localhost`), where the platform connects. The security model
+  assumes the port is reachable **only** by the single owning user (network isolation provided by
+  the surrounding workspace platform), not by the open internet. One thing guards against the
+  owner's own browser: `refuseCrossOrigin` (`cmd/server/guard.go`, Go's
+  `http.CrossOriginProtection`) refuses any request but GET, HEAD and OPTIONS that a browser sends
+  from another origin, by `Sec-Fetch-Site` or `Origin` against `Host`, so a page elsewhere can't
+  act through it. `requireOpencodeReady` gates *readiness*, not identity.
 - **Coworkers → guest listener.** Chat sharing adds a second, separate listener on
   `127.0.0.1:8766` (`internal/guest`), which the platform's Workspace App exposes to coworkers
   the owner picked. It serves shared chats only and requires a matching `Origin` on writes.
@@ -217,10 +289,11 @@ patterns documented here rather than the documented patterns themselves.
 
 ### Where authN/authZ is enforced
 - **It isn't, at the HTTP layer.** There is no auth choke point/middleware in
-  `cmd/server/main.go`; routes are registered directly on a stdlib `http.ServeMux`. Treat the
-  whole API as unauthenticated-by-design. *Any* finding that assumes per-request user identity is
-  a false positive — but **the absence of auth on a network-exposed bind is itself the main thing
-  to reason about** when assessing exposure.
+  `cmd/server/main.go`; routes are registered directly on a stdlib `http.ServeMux`, wrapped only
+  in the cross-origin check above. Treat the whole API as unauthenticated-by-design. *Any* finding
+  that assumes per-request user identity is a false positive — but **the absence of auth on a
+  network-exposed bind is itself the main thing to reason about** when assessing exposure. A GET
+  must change nothing, since the cross-origin check passes every GET.
 - "Sign-in" in this codebase means **model provider sign-in** (`internal/opencodeauth`,
   `internal/vertexauth`): the GitHub Copilot device flow and Google Cloud sign-in, run through
   opencode. It authenticates opencode *to the provider*, not clients *to the server*.
@@ -237,6 +310,9 @@ patterns documented here rather than the documented patterns themselves.
   (dir 0700, files 0600, written atomically), read by opencode through a `{file:}` header the
   materializer writes. Never in `opencode.json`, API responses or logs. A referenced key file
   must always exist (empty when no key): a missing one makes opencode reject its whole config.
+- **MCP header and environment values** (`internal/mcp/hidden.go`) are never in an API response:
+  they show as `••••••••`. An edit or a check that sends that back keeps the saved value, but only
+  for the same server at the same URL or command, so a saved credential never goes anywhere new.
 - **Randomness:** `crypto/rand` for UUIDs (`chat.NewUUID`) and other identifiers — no
   `math/rand` for security-sensitive values. (`math/rand` appears only for non-security
   random-name shuffling in `internal/files`.)
@@ -264,7 +340,8 @@ patterns documented here rather than the documented patterns themselves.
 ### Exec / filesystem / SQL / deserialization sinks
 - **Process exec (`exec.Command`, arg-vector, no shell):**
   `internal/chat/chat.go` (`opencode run`), `internal/opencodeserver/supervisor.go`
-  (`opencode serve`), `internal/titler` and `internal/daynotes` (`opencode run` for titles and
+  (`opencode serve`), `internal/opencodev2` (`opencode serve` on 2.x, and the command builder
+  all opencode commands go through), `internal/titler` and `internal/daynotes` (`opencode run` for titles and
   notes), `internal/opencodeauth`, `internal/vertexauth` and `internal/mcpauth` (`opencode auth`,
   `models`, `mcp`), `cmd/server/providerprobe.go` (opencode), `internal/git/git.go` and
   `internal/materializer/repo.go` (`git`), `internal/mcp/probe.go` (a client-supplied stdio
@@ -274,20 +351,23 @@ patterns documented here rather than the documented patterns themselves.
   `internal/voice/engine.go` (`whisper-server` on
   `127.0.0.1`, and `--help` for the availability check; fixed arguments, absolute paths,
   minimal environment).
-  - opencode runs with **`--dangerously-skip-permissions` by default**
+  - opencode runs with **`--dangerously-skip-permissions` by default** (`--auto` on 2.x)
     (`DefaultSessionConfig().Yolo == true` → all tools auto-approved, no per-action
     confirmation). **This is intentional** — the product's purpose is to run an autonomous agent
-    in an isolated workspace. Server mode (`KWA_OPENCODE_USE_SERVER=true`) adds per-action approval. The `SessionConfig` allow/deny
+    in an isolated workspace. Server mode (`KWA_OPENCODE_USE_SERVER=true`, opencode 1.x only) adds per-action approval. The `SessionConfig` allow/deny
     tool/URL/path knobs in `internal/config/config.go` are the intended control surface.
   - Git runs with fixed sub-command verbs; the commit message is passed as `-m <msg>` (separate
-    arg, not interpolated). `cwd`/repo path comes from the client.
-- **Filesystem (`internal/files`):** handlers operate on **client-supplied absolute paths with no
-  workspace jail** — `filepath.Abs(path)` then read/write/delete/upload/download anywhere the
-  process user can reach (browse falls back to the workspace only when the path is missing/invalid).
-  This is **intentional** (it is a file manager for the user's own workspace), but it means
-  path-traversal-style reachability is real: a reachable path here is bounded only by OS
-  permissions of the server's user, not by the base folder (`layout.Workspace`). Worth confirming exposure
-  assumptions; not worth flagging as a traversal "bug" in isolation.
+    arg, not interpolated). `cwd`/repo path comes from the client, limited as the file manager's
+    is (`resolveRequestDir`); backups pass their own folders to `resolveDir`.
+- **Filesystem (`internal/files`):** handlers operate on **client-supplied absolute paths**,
+  limited by `layout.Reachable` to the home folder, apart from the hidden items directly in it
+  (`~/.ssh`, `~/.config`, `~/.local`) and the root's `.system` folder. A refused path answers 403
+  with `layout.UnreachableMessage`; browse lists only reachable entries, and its `parent` is `""`
+  at the top. The same check guards every other route that takes a path: versions, the office
+  preview, preview links, sharing, git, and a chat's or scheduled task's folder when the client
+  chooses it. A new route that takes a path must check it too. Symbolic links aren't followed,
+  and the agent isn't limited: it runs as the same user. The limit is defence in depth, not a
+  sandbox.
 - **SQL (`internal/db`):** all queries use parameterized placeholders (`?`). Migration
   `ALTER TABLE` statements are hardcoded string constants (not built from input). No string-built
   SQL — SQL injection findings here are false positives unless a new query interpolates input.
@@ -295,10 +375,12 @@ patterns documented here rather than the documented patterns themselves.
   opencode JSONL, config files). No gob/YAML/pickle/native deserialization.
 
 ### Supply chain
-- `internal/opencodeinstaller` installs only `PinnedVersion` of opencode, and only a tarball whose
-  **SHA-256** matches `pinnedSHA256` (taken from the GitHub release API's asset digests; opencode
-  publishes no checksum files). A download that doesn't match is refused, and the embedded copy
-  in the release binary is used only if it matches too. `Dockerfile.release` pins the same
+- `internal/opencodeinstaller` installs only the pinned opencode release, `PinnedVersion2` (2.x,
+  from npm) or `PinnedVersion` (1.x, from GitHub), and only a tarball whose **SHA-256** matches
+  `pinnedSHA256v2` (checked against npm's sha512 integrity) or `pinnedSHA256` (taken from the
+  GitHub release API's asset digests; opencode publishes no checksum files). A download that
+  doesn't match is refused. The release binary embeds the 2.x tarball, used only if the download
+  fails and it matches too; 1.x has no embedded copy. `Dockerfile.release` pins the same 2.x
   version and digests and checks them with `sha256sum -c`; a test keeps the two in agreement.
 - `internal/office` installs only LibreOffice `Version`, and only a download whose **SHA-256**
   matches `bundleSHA` (published by The Document Foundation). The URL is the permanent archive's,
@@ -330,7 +412,7 @@ patterns documented here rather than the documented patterns themselves.
   with `fmt.Sprintf`, a newly added unauthenticated mutating endpoint that writes outside expected
   areas); unverified-download or token-handling regressions.
 - **De-prioritize (intentional by design):** the unauthenticated API surface, auto-approved agent
-  execution, the un-jailed file manager, and arbitrary MCP/command registration — these are the
+  execution, the file manager's reach across the home folder, and arbitrary MCP/command registration — these are the
   product's purpose in an isolated single-user workspace. Flag them only if the deployment/exposure
   assumption (single user, network-isolated port) appears violated.
 
@@ -363,7 +445,12 @@ patterns documented here rather than the documented patterns themselves.
   `workdir`↔`workspace`, `label`↔`name`, and the types `SessionListItem`↔`Session`,
   `ChatMessage`↔`Message`.
 - **Frontend stack:** Vue 3 (composition API) + TypeScript (strict) + Pinia + Vite; rendered
-  markdown is sanitized with **DOMPurify** (+ `marked`, `highlight.js`, CodeMirror 6).
+  markdown is sanitized with **DOMPurify** (+ `marked`, `highlight.js`, CodeMirror 6). Replies
+  also draw Mermaid diagrams and SVG (`frontend/src/utils/replyVisuals.ts`): Mermaid loads on
+  first use, each drawing is shown as an `<img>` of its SVG, and a web image in a reply loads only
+  on a click. Mermaid's ELK layout is left out: `elkjs` is EPL-2.0, so `vite.config.ts` points it
+  at a stub. A link to a file in the chat's folder, or inline code naming one, opens it in the
+  Files widget.
 - **The SPA has two roots, chosen in `frontend/src/main.ts` by the `?doc=` query parameter:**
   `App.vue` (the chat app) and `DocWindowApp.vue` (the pop-out document window). There is
   no router — a query parameter is used because the Go handler serves `index.html` only for `/`

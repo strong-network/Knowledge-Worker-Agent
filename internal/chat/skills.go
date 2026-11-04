@@ -6,12 +6,14 @@ package chat
 import (
 	"context"
 	"log"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/config"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodeserver"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodev2"
 )
 
 // skillListTimeout bounds how long the picker (and the send path) will wait for
@@ -58,6 +60,9 @@ type SkillSummary struct {
 var listSkillsFn = fetchSkills
 
 func fetchSkills(ctx context.Context, workdir string) ([]opencodeserver.Skill, error) {
+	if opencodev2.Enabled() {
+		return fetchSkillsV2(ctx, workdir)
+	}
 	sup := Supervisor()
 	if sup == nil {
 		return nil, errSkillsUnavailable
@@ -76,6 +81,27 @@ func fetchSkills(ctx context.Context, workdir string) ([]opencodeserver.Skill, e
 // none", so the picker can say the workspace is still starting instead of
 // claiming a workspace with a dozen skills has none.
 var errSkillsUnavailable = errSkills("opencode server is not available")
+
+// fetchSkillsV2 asks KWA's opencode 2.x server. A skill's ID is the name its
+// tool loads it by.
+func fetchSkillsV2(ctx context.Context, workdir string) ([]opencodeserver.Skill, error) {
+	var resp struct {
+		Data []struct {
+			ID          string `json:"id"`
+			Description string `json:"description"`
+			Path        string `json:"path"`
+			Content     string `json:"content"`
+		} `json:"data"`
+	}
+	if err := opencodev2.Get(ctx, "/api/skill?location[directory]="+url.QueryEscape(workdir), &resp); err != nil {
+		return nil, err
+	}
+	out := make([]opencodeserver.Skill, 0, len(resp.Data))
+	for _, s := range resp.Data {
+		out = append(out, opencodeserver.Skill{Name: s.ID, Description: s.Description, Location: s.Path, Content: s.Content})
+	}
+	return out, nil
+}
 
 type errSkills string
 

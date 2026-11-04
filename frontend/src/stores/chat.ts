@@ -47,6 +47,15 @@ export interface QuestionEvent {
   question: string
   choices?: string[]
   allow_freeform?: boolean
+  // The agent's questions from opencode's question tool, answered together.
+  questions?: AgentQuestion[]
+}
+
+export interface AgentQuestion {
+  header?: string
+  question: string
+  options?: { label: string; description?: string }[]
+  multiple?: boolean
 }
 
 // PermissionRequest is an interactive tool-permission prompt raised by the
@@ -837,6 +846,7 @@ export const useChatStore = defineStore('chat', () => {
           question: data.question || data.text || '',
           choices: data.choices,
           allow_freeform: data.allow_freeform !== false,
+          questions: Array.isArray(data.questions) && data.questions.length ? data.questions : undefined,
         }
         notifyQuestion(sessionId, s.currentQuestion)
         scrollToBottomIfActive(sessionId)
@@ -953,7 +963,7 @@ export const useChatStore = defineStore('chat', () => {
     if (s.toolCalls.length > 0) {
       sessionsStore.setLastAssistantToolCalls(sessionId, [...s.toolCalls])
     }
-    notifyInactiveSession(sessionId, `${sessionName(sessionId)} finished`, 'The response is ready.')
+    if (!s.currentQuestion) notifyInactiveSession(sessionId, `${sessionName(sessionId)} finished`, 'The response is ready.')
     sessionsStore.loadSessions().catch(() => {})
     processQueue(sessionId)
     pumpFollower(sessionId)
@@ -987,7 +997,9 @@ export const useChatStore = defineStore('chat', () => {
     const s = getState(sessionId)
     s.currentQuestion = null
     s.notifiedQuestionKey = null
-    await sendMessage(answer, sessionId)
+    // The turn that asked may not have ended yet.
+    if (s.streaming) await queueMessage(answer, sessionId)
+    else await sendMessage(answer, sessionId)
   }
 
   // respondToPermission sends the user's decision (once/always/reject) on an

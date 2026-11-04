@@ -31,6 +31,7 @@ import (
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/env"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/fileshare/check"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/fileshare/viewer"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/layout"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/workspaceapps"
 )
 
@@ -486,6 +487,10 @@ func resolve(sessionID, path string) (folder, rel string, err error) {
 	}
 	if strings.TrimSpace(cfg.Workdir) == "" || !filepath.IsAbs(path) {
 		return "", "", &failure{http.StatusBadRequest, "Only files in this chat's folder can be shared."}
+	}
+	// A chat's folder may predate the home-folder limit, or be the home folder.
+	if _, ok := layout.Reachable(path); !ok {
+		return "", "", &failure{http.StatusForbidden, layout.UnreachableMessage}
 	}
 	folder = filepath.Clean(cfg.Workdir)
 	rel, err = filepath.Rel(folder, filepath.Clean(path))

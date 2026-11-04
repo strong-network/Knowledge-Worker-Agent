@@ -14,13 +14,14 @@ still welcome, and any fix is published in a new release.
 Knowledge Worker Agent is built for one user, in a Citrix SecurSpaces workspace that isolates it.
 It relies on the platform to decide who can reach it:
 
-- **The HTTP API has no authentication, authorization, CSRF, or Origin check.** Anyone who can
-  reach its port can act as the owner. It listens on `127.0.0.1` by default; the release image
-  sets `0.0.0.0` so the workspace platform can reach it.
+- **The HTTP API has no authentication or authorization.** Anyone who can reach its port can act
+  as the owner. It listens on `127.0.0.1` and `::1` by default, where the workspace platform connects.
+  A browser can't change anything from another origin: the server refuses such a request.
 - **The agent acts without asking by default.** opencode runs with
-  `--dangerously-skip-permissions`. Server mode (`KWA_OPENCODE_USE_SERVER=true`) asks before each
-  action.
-- **The file manager has no folder restriction.** It can open any file the server's user can.
+  `--dangerously-skip-permissions`, or `--auto` on opencode 2.x.
+- **The file manager opens only what's in the home folder,** apart from the hidden folders and
+  files directly in it, such as `~/.ssh` and `~/.config`. The agent isn't limited this way: it
+  runs as the server's user.
 - **Chat sharing uses a separate listener,** on `127.0.0.1:8766`, which the platform exposes only
   to the coworkers the owner chose. It serves shared chats only.
 - **Model provider credentials are stored by opencode,** in `~/.local/share/opencode/auth.json`.

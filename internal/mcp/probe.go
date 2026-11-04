@@ -87,6 +87,8 @@ type probeRequest struct {
 	Command   string            `json:"command"`
 	Args      []string          `json:"args"`
 	Env       map[string]string `json:"env"`
+	// The server being edited, whose hidden values a check of it may use.
+	Name string `json:"name"`
 }
 
 // probeResult is what the sheet renders. Note what is absent: no response body,
@@ -123,11 +125,15 @@ func HandleProbe(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	var res probeResult
-	switch transport {
-	case "stdio", "local":
-		res = probeStdio(ctx, body)
-	default:
-		res = probeHTTP(ctx, body)
+	if err := body.restoreHiddenValues(transport); err != nil {
+		res = probeResult{Error: err.Error()}
+	} else {
+		switch transport {
+		case "stdio", "local":
+			res = probeStdio(ctx, body)
+		default:
+			res = probeHTTP(ctx, body)
+		}
 	}
 	if res.Tools == nil {
 		res.Tools = []string{}

@@ -210,6 +210,11 @@ function openFile(entry: FileEntry) {
   openName.value = entry.name
 }
 
+// A file by its path, as a link in a reply opens it.
+function openAt(path: string) {
+  openFile({ path, name: baseName(path), is_dir: false, size: 0, mod_time: '' })
+}
+
 function closeFile(): boolean {
   if (dirty.value && !confirm('Discard unsaved changes?')) return false
   openPath.value = ''
@@ -520,7 +525,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
 })
 
-defineExpose({ refresh: fullRefresh })
+defineExpose({ refresh: fullRefresh, open: openAt })
 </script>
 
 <template>

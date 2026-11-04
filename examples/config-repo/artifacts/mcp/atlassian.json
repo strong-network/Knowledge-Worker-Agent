@@ -14,6 +14,8 @@
   // Read by Knowledge Worker Agent and removed before opencode sees the rest.
   // Without it, users may have no way to connect the server.
   "kwa": {
+    // One sentence on what it gives users, shown when it's new to them.
+    "description": "Find and update Jira issues and Confluence pages.",
     "auth": {
       "type": "oauth",
       "label": "Atlassian",

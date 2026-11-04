@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/layout"
 )
 
 // HandlePreview answers GET /api/files/office-preview?path=… with a PDF of the
@@ -23,7 +25,11 @@ func HandlePreview(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "path is required", false)
 		return
 	}
-	abs, _ := filepath.Abs(path)
+	abs, ok := layout.Reachable(path)
+	if !ok {
+		writeError(w, http.StatusForbidden, layout.UnreachableMessage, false)
+		return
+	}
 	if !Previewable(abs) {
 		writeError(w, http.StatusUnsupportedMediaType, "only PowerPoint, Word and Excel files are converted", false)
 		return

@@ -9,6 +9,8 @@ import { useProvidersStore } from '../../stores/providers'
 import { useUiStore } from '../../stores/ui'
 import { useSearchStore } from '../../stores/search'
 import { highlightIn, clearHighlights } from '../../utils/searchHighlight'
+import { ownerFileApi } from '../../api/files'
+import type { ChatFiles } from '../../utils/replyVisuals'
 import ChatHeader from './ChatHeader.vue'
 import MessageBubble from './MessageBubble.vue'
 import EmptyState from './EmptyState.vue'
@@ -25,6 +27,14 @@ const chatStore = useChatStore()
 const providers = useProvidersStore()
 const ui = useUiStore()
 const search = useSearchStore()
+
+// Images and file links in replies resolve against the chat's folder.
+const replyFiles = computed<ChatFiles | undefined>(() => {
+  const root = sessionsStore.currentSession?.workspace
+  return root
+    ? { root, rawUrl: ownerFileApi.rawUrl, downloadUrl: ownerFileApi.downloadUrl, browse: ownerFileApi.browse, open: ui.openChatFile }
+    : undefined
+})
 
 const hasMessages = computed(() => sessionsStore.currentMessages.length > 0)
 
@@ -395,6 +405,7 @@ onBeforeUnmount(() => {
             :newest="i === newestReply"
             :finished="i === newestReply && justFinished"
             :typing="i === newestReply && typing"
+            :files="replyFiles"
           />
         <QuestionCard
           v-if="chatStore.currentQuestion"

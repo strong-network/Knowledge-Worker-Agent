@@ -42,6 +42,9 @@ const transport = ref<Transport>('http')
 const url = ref('')
 const commandLine = ref('')
 const headersText = ref('')
+// What the API shows for a saved header or environment value; sent back as it is, it keeps the value.
+const HIDDEN = '••••••••'
+const hides = (text: string) => isEdit.value && text.includes(HIDDEN)
 const envText = ref('')
 const timeoutSecs = ref<number | null>(null)
 const advanced = ref(false)
@@ -197,7 +200,7 @@ async function check() {
   checking.value = true
   saveError.value = ''
   try {
-    result.value = await probeMcpServer(payload())
+    result.value = await probeMcpServer(isEdit.value ? { ...payload(), name: props.editing!.name } : payload())
     // Nothing to borrow and nothing to derive — open the disclosure rather than
     // pointing at a field the user would have to go hunting for.
     if (result.value.ok && !effectiveName.value) advanced.value = true
@@ -348,12 +351,14 @@ const sheetTitle = computed(() => {
           <label for="cs-headers">Headers</label>
           <textarea id="cs-headers" v-model="headersText" rows="2" placeholder="Authorization: Bearer xxx"></textarea>
           <small>One per line. Only needed if you were given an access token.</small>
+          <small v-if="hides(headersText)">A saved value shows as {{ HIDDEN }}. Leave it to keep it.</small>
         </div>
 
         <div class="cs-field">
           <label for="cs-env">Environment variables</label>
           <textarea id="cs-env" v-model="envText" rows="2" placeholder="KEY=value (one per line)"></textarea>
           <small>{{ transport === 'stdio' ? 'For API keys the command needs.' : 'Rarely needed for web connectors.' }}</small>
+          <small v-if="hides(envText)">A saved value shows as {{ HIDDEN }}. Leave it to keep it.</small>
         </div>
 
         <div class="cs-field cs-narrow">

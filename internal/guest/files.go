@@ -288,15 +288,11 @@ func (s *server) filesRaw(w http.ResponseWriter, r *http.Request) {
 	files.SetInlineHeaders(h, name)
 	h.Set("Content-Disposition", disposition("inline", name))
 	// The guest page previews in a frame of its own; every other guest
-	// response forbids framing. Anything but a PDF is sandboxed even when
-	// opened on its own, since this origin holds the guest's cookie: a script
-	// in an uploaded page must not be able to act as them. Chrome's PDF viewer
-	// refuses a sandboxed response, and runs PDF scripts in its own sandbox.
+	// response forbids framing. SetInlineHeaders sandboxes anything but a PDF
+	// even when opened on its own, since this origin holds the guest's cookie: a
+	// script in an uploaded page must not be able to act as them.
 	h.Set("X-Frame-Options", "SAMEORIGIN")
 	csp := h.Get("Content-Security-Policy")
-	if csp == "" && strings.ToLower(filepath.Ext(name)) != ".pdf" {
-		csp = "default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; sandbox"
-	}
 	if csp == "" {
 		csp = "frame-ancestors 'self'"
 	} else {

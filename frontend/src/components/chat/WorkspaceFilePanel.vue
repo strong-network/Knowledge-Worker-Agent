@@ -174,6 +174,13 @@ watch(() => ui.mobileFilesOpen, (open) => {
   if (open && workspace.value) ui.revealFiles(workspace.value)
 })
 
+// A file a reply links to; the project view's panel isn't the chat's.
+watch(() => ui.fileToOpen, (req) => {
+  if (!req || props.embedded || !workspace.value) return
+  ui.revealFiles(workspace.value)
+  browser.value?.open(req.path)
+})
+
 onBeforeUnmount(() => {
   if (pollTimer) clearInterval(pollTimer)
   // Don't strand the column at reading width once this panel is gone.

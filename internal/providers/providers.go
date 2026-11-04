@@ -81,6 +81,9 @@ type Provider struct {
 	// the vendor's own "how to get a key" page. Sanitized to https:// — it comes
 	// from the config repo and ends up in an href.
 	HelpURL string `json:"helpUrl,omitempty"`
+	// Description says in one sentence what the provider gives the user: the
+	// artifact's kwa.description, or the built-in's own.
+	Description string `json:"description,omitempty"`
 	// Reachability reports whether the provider actually answered when last
 	// probed. Independent of Authenticated: valid credentials and a blocked
 	// network path look identical to an auth check.
@@ -193,6 +196,8 @@ type Builtin struct {
 	ID       string
 	Label    string
 	AuthType AuthType
+	// Description says in one sentence what the provider gives the user.
+	Description string
 	// CheckAuth reports whether the user is signed in. It is a func so this
 	// package does not import the auth packages (which would be a cycle) and so
 	// tests can substitute it.
@@ -284,6 +289,7 @@ func builtinRegistry(mode Mode, fallbackReason string) Registry {
 			AuthType:      b.AuthType,
 			Authenticated: ok,
 			Builtin:       true,
+			Description:   b.Description,
 		}
 		if !ok {
 			p.Reason = ReasonNotSignedIn

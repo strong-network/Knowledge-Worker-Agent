@@ -174,16 +174,15 @@ function choose(c: 'project' | 'members') {
   void persist()
 }
 
-// What people in this chat may do. Each switch saves as it is
+// Whether people in this chat may work with files. The switch saves as it is
 // flipped; on a failure the modal re-reads, so the switch shows what holds.
 const toggling = ref(false)
-async function setOption(key: 'allow_permissions' | 'allow_files', on: boolean) {
+async function setFiles(on: boolean) {
   toggling.value = true
   error.value = ''
   try {
-    st.value = await setShareOptions(sid.value, { [key]: on })
-    const what = key === 'allow_files' ? 'work with files' : "approve the assistant's actions"
-    announce(on ? `People in this chat can now ${what}.` : `People in this chat can no longer ${what}.`)
+    st.value = await setShareOptions(sid.value, { allow_files: on })
+    announce(on ? 'People in this chat can now work with files.' : 'People in this chat can no longer work with files.')
   } catch (e) {
     const why = message(e)
     await load()
@@ -312,27 +311,6 @@ onMounted(() => {
         <section v-if="st?.shared" class="share-section" aria-labelledby="share-allow-h">
           <h3 id="share-allow-h">What people in this chat can do</h3>
           <div class="share-rows">
-            <div class="share-row option" :class="{ on: st.allow_permissions }">
-              <span class="share-row-main">
-                <span class="share-option-name">Approve the assistant's actions</span>
-                <span class="share-option-hint">
-                  They see what the assistant wants to do, and can allow it once or deny it.
-                  When this is off, only you can.
-                </span>
-              </span>
-              <label class="share-switch">
-                <input
-                  type="checkbox"
-                  role="switch"
-                  :checked="st.allow_permissions"
-                  :aria-checked="st.allow_permissions"
-                  :disabled="toggling"
-                  aria-label="Let people in this chat approve the assistant's actions"
-                  @change="setOption('allow_permissions', ($event.target as HTMLInputElement).checked)"
-                />
-                <span class="share-track" aria-hidden="true"></span>
-              </label>
-            </div>
             <div class="share-row option" :class="{ on: st.allow_files }">
               <span class="share-row-main">
                 <span class="share-option-name">Work with files</span>
@@ -350,7 +328,7 @@ onMounted(() => {
                   :aria-checked="st.allow_files"
                   :disabled="toggling || (!st.allow_files && !!st.files_unavailable)"
                   aria-label="Let people in this chat work with files"
-                  @change="setOption('allow_files', ($event.target as HTMLInputElement).checked)"
+                  @change="setFiles(($event.target as HTMLInputElement).checked)"
                 />
                 <span class="share-track" aria-hidden="true"></span>
               </label>

@@ -52,6 +52,7 @@ type mcpMetaEntry struct {
 		Help    string `json:"help"`
 		HelpURL string `json:"helpUrl"`
 	} `json:"auth"`
+	Description string `json:"description"`
 }
 
 type mcpMetaDoc struct {
@@ -185,6 +186,9 @@ func applyProvisionedMeta(sv serverView, p provisionedServer) serverView {
 	}
 	if u := safeHelpURL(p.Meta.Auth.HelpURL); u != "" {
 		sv.HelpURL = u
+	}
+	if d := strings.TrimSpace(p.Meta.Description); d != "" {
+		sv.Description = d
 	}
 
 	declared := AuthKind(strings.ToLower(strings.TrimSpace(p.Meta.Auth.Type)))
@@ -347,4 +351,68 @@ func EnsureProvisionedStubs(logw io.Writer) {
 	}
 	fmt.Fprintf(logw, "  ✓ MCP provisioning: %d provisioned server(s) available, switched off: %s\n",
 		len(seeded), strings.Join(seeded, ", "))
+}
+
+// isStub reports whether a Global entry holds nothing but the on/off switch
+// EnsureProvisionedStubs writes: it defines no server of its own.
+func isStub(entry map[string]any) bool {
+	for k := range entry {
+		if k != "enabled" {
+			return false
+		}
+	}
+	return true
+}
+
+// RemoveUnassignedStubs removes the switches EnsureProvisionedStubs wrote for
+// servers the administrator no longer assigns. Left behind, each one is a
+// server with no definition, which the list shows as a broken local server.
+//
+// Call it only after the central configuration was applied: with no platform
+// config every switch would look unassigned, and the user's choices would go.
+func RemoveUnassignedStubs(logw io.Writer) {
+	if logw == nil {
+		logw = io.Discard
+	}
+	dir := platformDirFn()
+	if dir == "" {
+		return
+	}
+	if _, err := os.Stat(filepath.Join(dir, "opencode.json")); err != nil {
+		return
+	}
+	prov := provisionedServers()
+
+	opencodeConfigMu.Lock()
+	defer opencodeConfigMu.Unlock()
+
+	path := opencodeConfigPath()
+	raw, err := readConfig(path)
+	if err != nil {
+		fmt.Fprintf(logw, "  ⚠ MCP provisioning: cannot read opencode config: %v\n", err)
+		return
+	}
+	block, _ := raw["mcp"].(map[string]any)
+	var removed []string
+	for name, v := range block {
+		entry, ok := v.(map[string]any)
+		if !ok || !isStub(entry) {
+			continue
+		}
+		if _, assigned := prov[strings.ToLower(name)]; assigned {
+			continue
+		}
+		delete(block, name)
+		removed = append(removed, name)
+	}
+	if len(removed) == 0 {
+		return
+	}
+	sort.Strings(removed)
+	if err := writeConfig(path, raw); err != nil {
+		fmt.Fprintf(logw, "  ⚠ MCP provisioning: cannot remove servers no longer assigned: %v\n", err)
+		return
+	}
+	fmt.Fprintf(logw, "  ✓ MCP provisioning: removed %d server(s) no longer assigned: %s\n",
+		len(removed), strings.Join(removed, ", "))
 }

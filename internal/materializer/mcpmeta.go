@@ -33,6 +33,9 @@ type MCPMeta struct {
 	// Auth describes how the server is signed in to, and the UI text shown
 	// alongside it.
 	Auth MCPAuthMeta `json:"auth"`
+	// Description says in one sentence what the connector gives the user,
+	// for the setup guide and what's new.
+	Description string `json:"description,omitempty"`
 }
 
 // MCPAuthMeta is the kwa.auth block of an MCP artifact.
@@ -112,6 +115,7 @@ func takeMCPMeta(artifactID string, frag map[string]any) ([]MCPMeta, []string) {
 	}
 
 	auth := parseMCPMetaBlock(raw)
+	description := metaDescription(raw)
 	if strings.EqualFold(strings.TrimSpace(auth.Type), "api-key") {
 		for _, name := range names {
 			entry, _ := block[name].(map[string]any)
@@ -120,7 +124,7 @@ func takeMCPMeta(artifactID string, frag map[string]any) ([]MCPMeta, []string) {
 	}
 	out := make([]MCPMeta, 0, len(names))
 	for _, name := range names {
-		out = append(out, MCPMeta{Name: name, Auth: auth})
+		out = append(out, MCPMeta{Name: name, Auth: auth, Description: description})
 	}
 	return out, warnings
 }

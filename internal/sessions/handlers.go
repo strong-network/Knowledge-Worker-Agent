@@ -17,6 +17,7 @@ import (
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/config"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/db"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/durable"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/layout"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/workdirs"
 )
 
@@ -72,6 +73,14 @@ func HandleNewSession(w http.ResponseWriter, r *http.Request) {
 	// directory (an existing folder, or a repo clone target) via the "+" menu /
 	// Advanced options, in which case we honor that path as-is.
 	autoWorkdir := false
+	if clientChoseWorkdir(body) && cfg.Workdir != "" {
+		abs, ok := layout.Reachable(cfg.Workdir)
+		if !ok {
+			http.Error(w, layout.UnreachableMessage, http.StatusForbidden)
+			return
+		}
+		cfg.Workdir = abs
+	}
 	if !clientChoseWorkdir(body) {
 		if dir, err := uniqueChatDir(); err == nil {
 			cfg.Workdir = dir
@@ -173,6 +182,7 @@ func HandleUpdateSessionConfig(w http.ResponseWriter, r *http.Request) {
 	// HandleSetTemporary, which checks first that the chat may be deleted.
 	wasTemporary := cfg.Temporary
 	parentID, fork := cfg.ParentID, cfg.Fork
+	workdir := cfg.Workdir
 
 	// Merge: serialize existing, overlay new fields, deserialize back
 	existing, _ := json.Marshal(cfg)
@@ -202,6 +212,16 @@ func HandleUpdateSessionConfig(w http.ResponseWriter, r *http.Request) {
 			_ = db.SetProjectKeep(projectID, cfg.Keep)
 			cfg.Keep = false
 		}
+	}
+
+	// A folder already in use stays, though it may predate the limit.
+	if cfg.Workdir != workdir && cfg.Workdir != "" {
+		abs, ok := layout.Reachable(cfg.Workdir)
+		if !ok {
+			http.Error(w, layout.UnreachableMessage, http.StatusForbidden)
+			return
+		}
+		cfg.Workdir = abs
 	}
 
 	db.UpdateSessionConfig(sid, cfg)

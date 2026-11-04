@@ -35,6 +35,7 @@ import (
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/db"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/env"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/mcp"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodev2"
 )
 
 // OpencodeBin lets tests substitute a fake opencode binary. When empty the
@@ -165,13 +166,24 @@ func startAuth(server string) error {
 	auth.startedAt = time.Now()
 
 	ctx, cancel := context.WithTimeout(context.Background(), authTimeout)
-	cmd := exec.CommandContext(ctx, resolveBin(), "mcp", "auth", server)
-	cmd.Env = append(os.Environ(),
+	cmd := opencodev2.Cmd(ctx, resolveBin(), "mcp", "auth", server)
+	// On 2.x the command already carries the server's password; keep it.
+	env := cmd.Env
+	if env == nil {
+		env = os.Environ()
+	}
+	cmd.Env = append(env,
 		"DISPLAY=", // suppress auto browser-open on the server
 		"WAYLAND_DISPLAY=",
 		"TERM=xterm-256color",
 		"OPENCODE_DISABLE_AUTOUPDATE=1",
 	)
+	// 2.x sets up every folder it is run in; the shared scratch one is set up.
+	if opencodev2.Enabled() {
+		if dir, err := opencodev2.ScratchDir(); err == nil {
+			cmd.Dir = dir
+		}
+	}
 
 	master, slave, ptyErr := openPTY()
 	var stdout io.Reader
@@ -221,6 +233,24 @@ func startAuth(server string) error {
 func consumeAuthOutput(server string, cmd *exec.Cmd, stdout io.Reader, master *os.File) {
 	buf := make([]byte, 4096)
 	var partial []byte
+	// opencode asks before replacing credentials it still holds. Selecting Sign
+	// in is the answer, so press Enter on its default, Yes; unanswered, the
+	// sign-in would hang until it times out. Prompts can arrive a byte at a time.
+	var tail []byte
+	answered := false
+	answerReauth := func(chunk []byte) {
+		if answered || master == nil {
+			return
+		}
+		tail = append(tail, chunk...)
+		if len(tail) > 2048 {
+			tail = tail[len(tail)-2048:]
+		}
+		if strings.Contains(strings.Join(strings.Fields(ansiRe.ReplaceAllString(string(tail), "")), ""), "Re-authenticate?") {
+			answered = true
+			master.Write([]byte("\r"))
+		}
+	}
 
 	flushLine := func(line string) {
 		clean := strings.TrimSpace(ansiRe.ReplaceAllString(line, ""))
@@ -241,6 +271,7 @@ func consumeAuthOutput(server string, cmd *exec.Cmd, stdout io.Reader, master *o
 	for {
 		n, err := stdout.Read(buf)
 		if n > 0 {
+			answerReauth(buf[:n])
 			partial = append(partial, buf[:n]...)
 			for {
 				idx := bytes.IndexByte(partial, '\n')
@@ -271,8 +302,16 @@ func consumeAuthOutput(server string, cmd *exec.Cmd, stdout io.Reader, master *o
 	}
 
 	// Confirm success by re-scraping the server list rather than trusting the
-	// exit code — opencode persists the credential just before exiting.
-	authed := ServerAuthenticated(server)
+	// exit code — opencode persists the credential just before exiting. 2.x
+	// then reconnects the server, so there the stored credential is the answer.
+	var authed bool
+	if opencodev2.Enabled() {
+		ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+		authed, _ = opencodev2.ConnectorSignedIn(ctx, server)
+		cancel()
+	} else {
+		authed = ServerAuthenticated(server)
+	}
 	auth.mu.Lock()
 	auth.master = nil
 	auth.running = false
@@ -350,11 +389,20 @@ func snapshotLocked() AuthInfo {
 func ServerAuthenticated(server string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, resolveBin(), "mcp", "list").CombinedOutput()
-	if err != nil {
-		return false
+	var authed bool
+	if opencodev2.Enabled() {
+		statuses, err := opencodev2.ConnectorStatuses(ctx)
+		if err != nil {
+			return false
+		}
+		authed = statuses[strings.ToLower(strings.TrimSpace(server))]
+	} else {
+		out, err := opencodev2.Cmd(ctx, resolveBin(), "mcp", "list").CombinedOutput()
+		if err != nil {
+			return false
+		}
+		authed = parseServerConnected(string(out), server)
 	}
-	authed := parseServerConnected(string(out), server)
 	// Keep the cache warm as a side effect of a live check.
 	db.SetMcpStatus(strings.ToLower(strings.TrimSpace(server)), authed)
 	return authed
@@ -387,11 +435,22 @@ func refreshInBackground() {
 
 // RefreshAllStatuses runs `opencode mcp list` ONCE and updates the DB cache for
 // every server it reports. One list call covers all servers (far cheaper than
-// checking each individually). Safe to call from a background goroutine.
+// checking each individually). Safe to call from a background goroutine. On
+// 2.x, whose `mcp list` no longer lists them, the server's API answers.
 func RefreshAllStatuses() {
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, resolveBin(), "mcp", "list").CombinedOutput()
+	if opencodev2.Enabled() {
+		statuses, err := opencodev2.ConnectorStatuses(ctx)
+		if err != nil {
+			return
+		}
+		for name, connected := range statuses {
+			db.SetMcpStatus(name, connected)
+		}
+		return
+	}
+	out, err := opencodev2.Cmd(ctx, resolveBin(), "mcp", "list").CombinedOutput()
 	if err != nil {
 		return
 	}
@@ -431,7 +490,8 @@ func serverRow(line string) (name string, connected, ok bool) {
 	name = strings.ToLower(fields[i])
 	status := strings.ToLower(strings.Join(fields[i+1:], " "))
 	switch {
-	case status == "connected":
+	// opencode adds " (OAuth)" when the server's config has an oauth block.
+	case status == "connected", strings.HasPrefix(status, "connected ("):
 		return name, true, true
 	case status == "failed", status == "error",
 		strings.HasPrefix(status, "needs "), strings.HasPrefix(status, "not "):
@@ -465,12 +525,19 @@ func parseServerConnected(raw, server string) bool {
 }
 
 // Logout removes the stored OAuth credentials for a server via
-// `opencode mcp logout <name>`.
+// `opencode mcp logout <name>`, or on 2.x through its API.
 func Logout(server string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, resolveBin(), "mcp", "logout", server).CombinedOutput()
-	clean := strings.TrimSpace(ansiRe.ReplaceAllString(string(out), ""))
+	var clean string
+	var err error
+	if opencodev2.Enabled() {
+		err = opencodev2.SignOutConnector(ctx, server)
+	} else {
+		var out []byte
+		out, err = opencodev2.Cmd(ctx, resolveBin(), "mcp", "logout", server).CombinedOutput()
+		clean = strings.TrimSpace(ansiRe.ReplaceAllString(string(out), ""))
+	}
 	if err == nil {
 		// Reflect the sign-out in the cache immediately.
 		db.SetMcpStatus(strings.ToLower(strings.TrimSpace(server)), false)
@@ -658,13 +725,32 @@ func isLoopbackHost(host string) bool {
 	return false
 }
 
+// callbackTarget is where the running sign-in sends the browser back to: the
+// redirect_uri of its authorization URL. A connector can set its own with
+// oauth.redirectUri, and Figma needs that: it accepts OpenCode only at /callback.
+func callbackTarget() *url.URL {
+	auth.mu.Lock()
+	v := auth.verifyURL
+	auth.mu.Unlock()
+	a, err := url.Parse(v)
+	if v == "" || err != nil {
+		return nil
+	}
+	r, err := url.Parse(a.Query().Get("redirect_uri"))
+	if err != nil || r.Host == "" {
+		return nil
+	}
+	return r
+}
+
 // DeliverCallback forwards a pasted OAuth callback URL to opencode's local
 // listener server-side. In this deployment the user's browser cannot reach the
 // server's 127.0.0.1 callback port, so they paste the redirected URL and we
 // deliver it from the server (which shares the host with the opencode process).
 //
-// Security: only loopback hosts and the /mcp/oauth/callback path are allowed,
-// so this endpoint cannot be turned into a general SSRF primitive.
+// Security: only loopback hosts are allowed, on the running sign-in's callback
+// port and path (or an /oauth/callback path while none is known), so this
+// endpoint cannot be turned into a general SSRF primitive.
 func DeliverCallback(rawURL string) (int, string, error) {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
@@ -680,7 +766,11 @@ func DeliverCallback(rawURL string) (int, string, error) {
 	if !isLoopbackHost(u.Hostname()) {
 		return 0, "", fmt.Errorf("callback host must be localhost/127.0.0.1 (paste the URL your browser was redirected to)")
 	}
-	if !strings.Contains(u.Path, "/oauth/callback") {
+	if t := callbackTarget(); t != nil {
+		if u.Port() != t.Port() || u.Path != t.Path {
+			return 0, "", fmt.Errorf("that isn't the address this sign-in is waiting for")
+		}
+	} else if !strings.Contains(u.Path, "/oauth/callback") {
 		return 0, "", fmt.Errorf("that doesn't look like an OAuth callback URL")
 	}
 	if u.Query().Get("code") == "" {

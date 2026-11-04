@@ -34,11 +34,11 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/env"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodev2"
 )
 
 const (
@@ -99,6 +99,11 @@ func Generate(ctx context.Context, bin, model, prompt string) (string, error) {
 	if len(prompt) > maxPromptChars {
 		prompt = prompt[:maxPromptChars]
 	}
+	// 2.x's title agent tends to answer a message that asks for work unless
+	// the message is set apart as the thing to name.
+	if opencodev2.Major(bin) >= 2 {
+		prompt = "Name this conversation. Its first message is below, between the lines; name it, don't answer it.\n---\n" + prompt + "\n---"
+	}
 
 	out, err := runTitle(ctx, bin, model, prompt)
 	if err != nil && len(out) == 0 {
@@ -134,13 +139,24 @@ func Generate(ctx context.Context, bin, model, prompt string) (string, error) {
 func execTitle(ctx context.Context, bin, model, prompt string) ([]byte, error) {
 	// A dedicated empty directory keeps the session workspace's context files
 	// out of the request (see package doc) and gives the run nothing to read.
+	if opencodev2.Major(bin) >= 2 {
+		scratch, err := opencodev2.ScratchDir()
+		if err != nil {
+			return nil, err
+		}
+		// The message goes on stdin (see opencodev2.Command).
+		cmd := opencodev2.Cmd(ctx, bin,
+			"run", "--agent", "title", "--model", model, "--format", "json", "--", prompt)
+		cmd.Dir = scratch
+		return cmd.CombinedOutput()
+	}
 	scratch, err := os.MkdirTemp("", "chat-title-")
 	if err != nil {
 		return nil, err
 	}
 	defer os.RemoveAll(scratch)
 
-	cmd := exec.CommandContext(ctx, bin,
+	cmd := opencodev2.Cmd(ctx, bin,
 		"run", "--agent", "title", "--model", model, "--format", "json", prompt)
 	cmd.Dir = scratch
 	// Leave stdin nil: `opencode run` reads stdin when it is attached, which
@@ -227,7 +243,7 @@ func cleanTitle(s string) string {
 func deleteOpencodeSession(bin, sessionID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := exec.CommandContext(ctx, bin, "session", "delete", sessionID).Run(); err != nil {
+	if err := opencodev2.Cmd(ctx, bin, "session", "delete", sessionID).Run(); err != nil {
 		log.Printf("[TITLE] could not delete throwaway opencode session %s: %v", sessionID, err)
 	}
 }

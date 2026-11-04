@@ -29,7 +29,7 @@ import (
 // defaults as the server). When --url is provided it overrides host/port.
 func runHealthCheck(args []string) int {
 	host := envOr("KWA_HOST", "127.0.0.1")
-	if host == "0.0.0.0" || host == "" {
+	if host == "0.0.0.0" || host == "localhost" || host == "" {
 		host = "127.0.0.1"
 	}
 	port := 8765

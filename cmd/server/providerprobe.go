@@ -7,11 +7,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strings"
 
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/config"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodeauth"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodev2"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/providers"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/vertexauth"
 )
@@ -37,7 +37,7 @@ func probeProvider(ctx context.Context, providerID string) error {
 		// passing: a provider offering no models cannot serve a turn either.
 		return fmt.Errorf("no model is available to test this provider")
 	}
-	cmd := exec.CommandContext(ctx, config.OpencodeBin,
+	cmd := opencodev2.Cmd(ctx, config.OpencodeBin,
 		"run", "--agent", "title", "--model", model, "--format", "json", "hi")
 	cmd.Dir = config.Workspace
 	out, err := cmd.CombinedOutput()

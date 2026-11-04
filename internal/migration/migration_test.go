@@ -454,13 +454,19 @@ func TestOnlyAnOpencodeOnTheSameDatabaseCounts(t *testing.T) {
 	ours := filepath.Join(h, "data")
 	t.Setenv("XDG_DATA_HOME", ours)
 	bin := filepath.Join(t.TempDir(), "opencode")
-	if err := os.Symlink("/bin/sleep", bin); err != nil {
+	// The test binary idling under opencode's name: sleep may be a multi-call
+	// binary (Rust coreutils) that refuses to run under another name.
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(self, bin); err != nil {
 		t.Fatal(err)
 	}
 	// A grandchild, since the check leaves this process's own children alone.
 	start := func(env ...string) string {
-		cmd := exec.Command("/bin/sh", "-c", `"$0" 30 >/dev/null 2>&1 & echo $!`, bin)
-		cmd.Env = env
+		cmd := exec.Command("/bin/sh", "-c", `"$0" >/dev/null 2>&1 & echo $!`, bin)
+		cmd.Env = append(env, "KWA_TEST_IDLE=1")
 		out, err := cmd.Output()
 		if err != nil {
 			t.Fatal(err)
@@ -471,6 +477,16 @@ func TestOnlyAnOpencodeOnTheSameDatabaseCounts(t *testing.T) {
 				syscall.Kill(n, syscall.SIGKILL)
 			}
 		})
+		// Until it has replaced the shell's fork.
+		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+			args, _ := os.ReadFile("/proc/" + pid + "/cmdline")
+			if argv0, _, _ := strings.Cut(string(args), "\x00"); filepath.Base(argv0) == "opencode" {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("the stand-in opencode %s isn't running", pid)
+			}
+		}
 		return pid
 	}
 	elsewhere := start("HOME="+h, "XDG_DATA_HOME="+filepath.Join(h, "other"))

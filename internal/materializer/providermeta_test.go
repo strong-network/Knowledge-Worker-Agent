@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -301,5 +302,35 @@ func TestTakeMetaBlockPrefersKWA(t *testing.T) {
 	})
 	if len(names) != 1 || names[0].Auth.Type != "oauth" || names[0].Auth.Label != "Acme" {
 		t.Errorf("connector meta from a kwa block: %+v", names)
+	}
+}
+
+// kwa.description reaches both sidecars, from a kwa block or an sds one,
+// trimmed to one line; a long one is cut at a word.
+func TestMetaDescription(t *testing.T) {
+	provider := takeProviderMeta(map[string]any{
+		"provider": map[string]any{"acme": map[string]any{}},
+		"kwa":      map[string]any{"description": "  Acme's models,\n for everyone. "},
+	})
+	if len(provider) != 1 || provider[0].Description != "Acme's models, for everyone." {
+		t.Errorf("provider description: %+v", provider)
+	}
+	connector, _ := takeMCPMeta("mcp.acme.v1", map[string]any{
+		"mcp": map[string]any{"acme": map[string]any{"type": "remote", "url": "https://acme.example.com/mcp"}},
+		"sds": map[string]any{"description": "Find Acme orders."},
+	})
+	if len(connector) != 1 || connector[0].Description != "Find Acme orders." {
+		t.Errorf("connector description: %+v", connector)
+	}
+
+	long := strings.Repeat("word ", 100)
+	got := metaDescription(map[string]any{"description": long})
+	if n := len([]rune(got)); n > maxDescription+1 || !strings.HasSuffix(got, "word…") {
+		t.Errorf("long description cut to %d characters: %q", n, got)
+	}
+	for _, raw := range []any{nil, "text", map[string]any{"description": 42}} {
+		if got := metaDescription(raw); got != "" {
+			t.Errorf("metaDescription(%v) = %q, want none", raw, got)
+		}
 	}
 }

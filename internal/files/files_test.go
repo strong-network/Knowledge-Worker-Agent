@@ -103,7 +103,7 @@ func TestHandleFileView(t *testing.T) {
 }
 
 func TestHandleFileViewNotFound(t *testing.T) {
-	req := httptest.NewRequest("GET", "/api/files/view?path=/nonexistent/file.txt", nil)
+	req := httptest.NewRequest("GET", "/api/files/view?path="+filepath.Join(t.TempDir(), "nonexistent.txt"), nil)
 	w := httptest.NewRecorder()
 	HandleFileView(w, req)
 
@@ -371,20 +371,36 @@ func TestHandleFileRawHTMLIsLockedDown(t *testing.T) {
 	}
 }
 
-// Only HTML is treated as active content. A CSP on a PDF would break the
-// browser's built-in viewer for no benefit.
-func TestHandleFileRawNonHTMLHasNoCSP(t *testing.T) {
+// Only a PDF is served without the policy: on the app's origin, an SVG or a
+// sniffed page could otherwise run script that calls the whole API, and the
+// browser's PDF viewer refuses a sandboxed response.
+func TestHandleFileRawSandboxesAllButPDF(t *testing.T) {
 	dir := t.TempDir()
-	for _, name := range []string{"doc.pdf", "notes.txt", "pic.png"} {
+	for name, body := range map[string]string{
+		"doc.pdf":    "%PDF-1.4",
+		"pic.svg":    `<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`,
+		"page.xhtml": `<html xmlns="http://www.w3.org/1999/xhtml"><script>alert(1)</script></html>`,
+		"data.xml":   `<x/>`,
+		"noext":      "<script>alert(1)</script>",
+		"notes.txt":  "data",
+		"pic.png":    "data",
+	} {
 		fp := filepath.Join(dir, name)
-		os.WriteFile(fp, []byte("data"), 0o644)
+		os.WriteFile(fp, []byte(body), 0o644)
 
 		req := httptest.NewRequest("GET", "/api/files/raw?path="+fp, nil)
 		w := httptest.NewRecorder()
 		HandleFileRaw(w, req)
 
-		if csp := w.Header().Get("Content-Security-Policy"); csp != "" {
-			t.Errorf("%s: unexpected CSP %q", name, csp)
+		csp := w.Header().Get("Content-Security-Policy")
+		if name == "doc.pdf" {
+			if csp != "" {
+				t.Errorf("%s: unexpected CSP %q", name, csp)
+			}
+			continue
+		}
+		if !strings.Contains(csp, "sandbox") || !strings.Contains(csp, "default-src 'none'") || strings.Contains(csp, "script-src") {
+			t.Errorf("%s: not sandboxed: %q", name, csp)
 		}
 	}
 }
@@ -586,8 +602,8 @@ func TestHandleFileDelete_MissingPath(t *testing.T) {
 
 func TestHandleFileDelete_RefuseRoot(t *testing.T) {
 	w := postJSON(t, HandleFileDelete, "/api/files/delete", map[string]string{"path": "/"})
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", w.Code)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", w.Code)
 	}
 }
 

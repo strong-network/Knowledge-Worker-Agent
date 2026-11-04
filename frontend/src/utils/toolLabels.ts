@@ -13,9 +13,13 @@
 // replacement for the truth.
 
 // Built-in tools, named as the actions they are. The keys are opencode's
-// tool names, lowercased.
+// tool names, lowercased. opencode 2.x renamed some (`bash` is `shell`, `task`
+// is `subagent`), and runs connector tools from short programs (`execute`)
+// whose calls arrive as rows of their own; `search` and `fetch` are that
+// runtime's own functions.
 const TOOL_ACTIONS: Record<string, string> = {
   bash: 'Running a command',
+  shell: 'Running a command',
   read: 'Reading a file',
   write: 'Writing a file',
   edit: 'Editing a file',
@@ -28,6 +32,7 @@ const TOOL_ACTIONS: Record<string, string> = {
   webfetch: 'Reading a web page',
   websearch: 'Searching the web',
   task: 'Running a sub-task',
+  subagent: 'Running a sub-task',
   todowrite: 'Updating the plan',
   todoread: 'Checking the plan',
   skill: 'Loading a skill',
@@ -35,6 +40,11 @@ const TOOL_ACTIONS: Record<string, string> = {
   ask_user: 'Asking a question',
   list_mcp_resources: 'Listing connector resources',
   list_mcp_resource_templates: 'Listing connector resources',
+  read_mcp_resource: 'Reading a connector resource',
+  execute: 'Running code',
+  search: 'Finding connector tools',
+  fetch: 'Reading a web page',
+  experimental_image_generate: 'Generating an image',
   invalid: 'Unrecognised tool call',
 }
 
@@ -43,6 +53,7 @@ const TOOL_ACTIONS: Record<string, string> = {
 // kind of thing it is, so "Reading a file  main.go" needs no "filePath:".
 const TOOL_SUBJECT_KEYS: Record<string, string[]> = {
   bash: ['command'],
+  shell: ['command'],
   read: ['filePath', 'path'],
   write: ['filePath', 'path'],
   edit: ['filePath', 'path'],
@@ -55,7 +66,12 @@ const TOOL_SUBJECT_KEYS: Record<string, string[]> = {
   webfetch: ['url'],
   websearch: ['query'],
   task: ['description', 'prompt'],
-  skill: ['name'],
+  subagent: ['description', 'prompt'],
+  skill: ['name', 'id'],
+  read_mcp_resource: ['uri'],
+  search: ['query'],
+  fetch: ['url'],
+  experimental_image_generate: ['prompt'],
 }
 
 // Fallback for connector (MCP) tools, whose arguments follow no single

@@ -59,9 +59,17 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
   }
 })
 
-export function renderMarkdown(text: string): string {
+// transform rewrites the HTML before it is sanitized, in a template, where
+// nothing in it runs or loads; what it adds is sanitized with the rest.
+export function renderMarkdown(text: string, transform?: (root: DocumentFragment) => void): string {
   if (!text) return ''
-  const raw = marked.parse(text) as string
+  let raw = marked.parse(text) as string
+  if (transform) {
+    const tpl = document.createElement('template')
+    tpl.innerHTML = raw
+    transform(tpl.content)
+    raw = tpl.innerHTML
+  }
   // A form in an answer, or in text it quotes, could send what the user types to another site.
   return DOMPurify.sanitize(raw, { FORBID_TAGS: ['form'] })
 }
@@ -85,12 +93,16 @@ interface Unit {
 
 const WORDY = new Set(['paragraph', 'heading', 'blockquote', 'text'])
 
+// Changes are marked here before the markup is sanitized: an element in this
+// document loads nothing and runs no handler, unlike a detached one in the page's.
+const inert = document.implementation.createHTMLDocument('')
+
 function layout(text: string): { root: HTMLElement; units: Unit[] } {
   const tokens = marked.lexer(text.replace(/\r\n?/g, '\n'))
-  const root = document.createElement('div')
+  const root = inert.createElement('div')
   const units: Unit[] = []
   for (const token of tokens) {
-    const tpl = document.createElement('template')
+    const tpl = inert.createElement('template')
     const html = marked.parser(Object.assign([token], { links: tokens.links }) as TokensList)
     tpl.innerHTML = html
     const nodes = Array.from(tpl.content.childNodes)
@@ -120,7 +132,7 @@ function layout(text: string): { root: HTMLElement; units: Unit[] } {
 }
 
 function note(text: string): HTMLElement {
-  const span = document.createElement('span')
+  const span = inert.createElement('span')
   span.className = 'sr-only md-note'
   span.textContent = text
   return span
@@ -159,7 +171,7 @@ function insertDeleted(nodes: Node[], at: number, text: string) {
   const ps = pieces(nodes)
   const p = ps.find(x => at < x.start + x.len) ?? ps[ps.length - 1]
   if (!p) return
-  const del = document.createElement('del')
+  const del = inert.createElement('del')
   del.className = 'md-del'
   del.append(note('Deleted: '), text)
   if (at >= p.start + p.len) p.node.parentNode?.insertBefore(del, p.node.nextSibling)
@@ -176,7 +188,7 @@ function wrapAdded(nodes: Node[], from: number, to: number) {
     if (!node.data.slice(s, e).trim()) continue
     if (e < node.data.length) node.splitText(e)
     if (s > 0) node = node.splitText(s)
-    const ins = document.createElement('ins')
+    const ins = inert.createElement('ins')
     ins.className = 'md-ins'
     node.replaceWith(ins)
     ins.append(node)
@@ -193,7 +205,7 @@ function flag(u: Unit, cls: string, text: string) {
     ;((u.kind === 'tr' ? el.firstElementChild : el) ?? el).prepend(note(text))
     return
   }
-  const box = document.createElement('div')
+  const box = inert.createElement('div')
   box.className = cls
   u.nodes[0].parentNode?.insertBefore(box, u.nodes[0])
   box.append(note(text), ...u.nodes)
@@ -232,7 +244,7 @@ function insertGone(gone: Unit[], next: Unit | undefined, prev: Unit | undefined
   for (const old of gone) {
     const sibling = next?.kind === old.kind && old.kind !== 'block' ? next : prev?.kind === old.kind && old.kind !== 'block' ? prev : undefined
     if (sibling) {
-      const el = document.createElement(old.kind)
+      const el = inert.createElement(old.kind)
       el.className = 'md-deleted'
       el.innerHTML = (old.nodes[0] as Element).innerHTML
       ;((old.kind === 'tr' ? el.firstElementChild : el) ?? el).prepend(note('Deleted: '))
@@ -241,7 +253,7 @@ function insertGone(gone: Unit[], next: Unit | undefined, prev: Unit | undefined
       else { (after ?? at).after(el); after = el }
       continue
     }
-    const box = document.createElement('div')
+    const box = inert.createElement('div')
     box.className = 'md-deleted'
     box.innerHTML = old.kind === 'li' ? `<ul>${old.html}</ul>` : old.kind === 'tr' ? `<table><tbody>${old.html}</tbody></table>` : old.html
     box.prepend(note('Deleted: '))
@@ -287,6 +299,8 @@ export function highlightCode(el: HTMLElement) {
   el.querySelectorAll('pre code').forEach((block) => {
     // Removed code shows as it was, without a Copy button.
     if (block.closest('.md-deleted')) return
+    // A diagram's source has its own buttons (utils/replyVisuals.ts).
+    if (block.closest('.kwa-visual')) return
     const codeEl = block as HTMLElement
     // Try to detect language from class
     const langClass = Array.from(codeEl.classList).find(c => c.startsWith('language-'))
@@ -297,16 +311,28 @@ export function highlightCode(el: HTMLElement) {
     } else {
       hljs.highlightElement(codeEl)
     }
+    // highlight.js leaves a language it doesn't know (text, toml) unmarked, and the card's colours need it.
+    codeEl.classList.add('hljs')
 
     // Wrap in header + code block structure
     const pre = codeEl.parentElement
     if (pre && !pre.querySelector('.pre-header')) {
       const header = document.createElement('div')
       header.className = 'pre-header'
-      header.innerHTML = `
-        <span class="pre-lang">${lang || 'code'}</span>
-        <button class="copy-btn" onclick="navigator.clipboard.writeText(this.closest('pre').querySelector('code').textContent).then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1500)})">Copy</button>
-      `
+      // The language comes from the Markdown, so it's text: as markup it could run script.
+      const label = document.createElement('span')
+      label.className = 'pre-lang'
+      label.textContent = lang || 'code'
+      const copy = document.createElement('button')
+      copy.className = 'copy-btn'
+      copy.textContent = 'Copy'
+      copy.addEventListener('click', () => {
+        navigator.clipboard.writeText(codeEl.textContent ?? '').then(() => {
+          copy.textContent = 'Copied!'
+          setTimeout(() => { copy.textContent = 'Copy' }, 1500)
+        })
+      })
+      header.append(label, copy)
       pre.insertBefore(header, pre.firstChild)
     }
   })

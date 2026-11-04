@@ -9,6 +9,7 @@
     }
   },
   "kwa": {
+    "description": "Look things up in Microsoft's documentation.",
     "auth": {
       "type": "none",
       "label": "Microsoft Learn",

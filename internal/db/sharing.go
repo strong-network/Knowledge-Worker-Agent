@@ -97,16 +97,15 @@ func IsSessionShared(sessionID string) bool {
 
 // ShareOptions are what the owner lets guests do in one shared chat.
 type ShareOptions struct {
-	AllowPermissions bool `json:"allow_permissions"`
-	AllowFiles       bool `json:"allow_files"`
+	AllowFiles bool `json:"allow_files"`
 }
 
 // SessionShareOptions returns the chat's options, all off unless it is shared.
 func SessionShareOptions(sessionID string) ShareOptions {
 	var o ShareOptions
 	var at sql.NullString
-	err := DB.QueryRow(`SELECT shared_at, share_allow_permissions, share_allow_files FROM sessions WHERE id = ?`, sessionID).
-		Scan(&at, &o.AllowPermissions, &o.AllowFiles)
+	err := DB.QueryRow(`SELECT shared_at, share_allow_files FROM sessions WHERE id = ?`, sessionID).
+		Scan(&at, &o.AllowFiles)
 	if err != nil || !at.Valid {
 		return ShareOptions{}
 	}
@@ -117,8 +116,8 @@ func SessionShareOptions(sessionID string) ShareOptions {
 // chat is not shared: options exist only for the share they were set for.
 func SetShareOptions(sessionID string, o ShareOptions) (bool, error) {
 	res, err := DB.Exec(
-		`UPDATE sessions SET share_allow_permissions = ?, share_allow_files = ? WHERE id = ? AND shared_at IS NOT NULL`,
-		o.AllowPermissions, o.AllowFiles, sessionID,
+		`UPDATE sessions SET share_allow_files = ? WHERE id = ? AND shared_at IS NOT NULL`,
+		o.AllowFiles, sessionID,
 	)
 	if err != nil {
 		return false, err
@@ -130,7 +129,7 @@ func SetShareOptions(sessionID string, o ShareOptions) (bool, error) {
 // SetSessionShared starts or stops sharing a session. Stopping also turns the
 // options off, so the next share starts from nothing allowed.
 func SetSessionShared(sessionID string, shared bool) error {
-	q := `UPDATE sessions SET shared_at = NULL, share_allow_permissions = 0, share_allow_files = 0 WHERE id = ?`
+	q := `UPDATE sessions SET shared_at = NULL, share_allow_files = 0 WHERE id = ?`
 	if shared {
 		q = `UPDATE sessions SET shared_at = COALESCE(shared_at, CURRENT_TIMESTAMP) WHERE id = ?`
 	}

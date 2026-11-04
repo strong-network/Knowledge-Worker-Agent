@@ -54,6 +54,7 @@ var (
 		if err != nil {
 			cfg = config.DefaultSessionConfig()
 		}
+		cfg.Unattended = true
 		stream, _ := chat.SendOrEnqueue(sessionID, prompt, cfg)
 		return stream
 	}

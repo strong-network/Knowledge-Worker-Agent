@@ -6,8 +6,11 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -113,31 +116,55 @@ func TestTheStatusPageSaysWhenItsAnUndo(t *testing.T) {
 
 func TestTheMigrationRunsWithThePinnedOpencode(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	t.Setenv("KWA_WORKSPACE_HEARTBEAT", "false")
-	host, port, bin := config.Host, config.Port, config.OpencodeBin
+	bin1 := filepath.Join(t.TempDir(), "opencode")
+	if err := os.WriteFile(bin1, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KWA_OPENCODE_BIN", bin1)
+	host, port, bin, major, set := config.Host, config.Port, config.OpencodeBin, config.OpencodeMajor, config.OpencodeMajorSet
 	t.Cleanup(func() {
 		config.Host, config.Port, config.OpencodeBin = host, port, bin
-		prepareOpencode, runMigration = ensureOpencode, migration.Run
+		config.OpencodeMajor, config.OpencodeMajorSet = major, set
+		prepareOpencode, runMigration, reloadConfig = ensureOpencode, migration.Run, config.Init
 		migrationState.Store(nil)
 	})
 	config.Host, config.Port = "127.0.0.1", 0
 
 	var calls []string
 	runMigration = func(o migration.Options) error {
-		calls = append(calls, "run with "+o.OpencodeBin)
+		calls = append(calls, fmt.Sprintf("run %d.x %s", config.OpencodeMajor, o.OpencodeBin))
 		return &migration.Refused{Reasons: []string{"stopped by the test"}}
+	}
+	reloadConfig = func() { calls = append(calls, "reload") }
+	db := migration.OpencodeDatabase()
+	if err := os.MkdirAll(filepath.Dir(db), 0o700); err != nil {
+		t.Fatal(err)
 	}
 	for _, c := range []struct {
 		name    string
 		mode    migration.Mode
+		major   int
+		set     bool // by KWA_OPENCODE_MAJOR
+		noDB    bool
 		install error
 		want    []string
 	}{
-		{"installed first", migration.On, nil, []string{"install", "run with /pinned/opencode"}},
-		{"install failed", migration.On, errors.New("offline"), []string{"install", "run with /other/opencode"}},
-		{"nothing to undo", migration.Undo, nil, nil},
+		{"installed first", migration.On, 1, false, false, nil, []string{"install", "run 1.x /pinned/opencode", "reload"}},
+		{"install failed", migration.On, 1, false, false, errors.New("offline"), []string{"install", "run 1.x /other/opencode", "reload"}},
+		{"no chats to re-point", migration.On, 1, false, true, nil, []string{"run 1.x /other/opencode", "reload"}},
+		{"on 2.x by default", migration.On, 2, false, true, nil, []string{"run 1.x " + bin1, "reload"}},
+		{"KWA_OPENCODE_MAJOR=2", migration.On, 2, true, false, nil, nil},
+		{"nothing to undo", migration.Undo, 1, false, false, nil, nil},
 	} {
 		calls, config.OpencodeBin = nil, "/other/opencode"
+		config.OpencodeMajor, config.OpencodeMajorSet = c.major, c.set
+		if c.noDB {
+			_ = os.Remove(db)
+		} else if err := os.WriteFile(db, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
 		prepareOpencode = func() error {
 			calls = append(calls, "install")
 			if c.install == nil {

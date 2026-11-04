@@ -71,6 +71,9 @@ type DefaultServer struct {
 	// provisioned artifact's text still wins where both exist.
 	Help    string
 	HelpURL string
+	// Description says in one sentence what the server gives the user, as an
+	// artifact's kwa.description does.
+	Description string
 }
 
 // AtlassianDefault is the Atlassian Rovo MCP server (formerly "Atlassian Remote
@@ -85,10 +88,11 @@ type DefaultServer struct {
 // /v1/mcp endpoint (no resource_metadata) and the legacy HTTP+SSE endpoint at
 // /v1/sse (sunset 30 June 2026) are superseded; see LegacyAtlassianURLs.
 var AtlassianDefault = DefaultServer{
-	Name:      "atlassian",
-	Transport: "http",
-	URL:       AtlassianURL,
-	Auth:      AuthOAuth,
+	Name:        "atlassian",
+	Transport:   "http",
+	URL:         AtlassianURL,
+	Auth:        AuthOAuth,
+	Description: "Find and update Jira issues and Confluence pages.",
 }
 
 // AtlassianURL is the current Atlassian Rovo MCP Streamable-HTTP endpoint.
@@ -128,6 +132,8 @@ var GitHubDefault = DefaultServer{
 	Auth:      AuthSetup,
 	Help:      "Needs a GitHub personal access token with repo scope. Add one under Accounts — signing in to GitHub Copilot is not enough, because that login only grants read:user and every repository call fails with “insufficient scopes”.",
 	HelpURL:   "https://github.com/settings/tokens",
+
+	Description: "Work with your repositories, issues and pull requests.",
 }
 
 // GitHubURL is the hosted GitHub MCP Streamable-HTTP endpoint.
@@ -149,7 +155,10 @@ const GitHubURL = "https://api.githubcopilot.com/mcp"
 // and is surfaced as a badge in the modal.
 var DefaultServers = []DefaultServer{
 	AtlassianDefault,
-	{Name: "microsoft-learn", Transport: "http", URL: "https://learn.microsoft.com/api/mcp", Auth: AuthNone},
+	{
+		Name: "microsoft-learn", Transport: "http", URL: "https://learn.microsoft.com/api/mcp", Auth: AuthNone,
+		Description: "Look things up in Microsoft's documentation.",
+	},
 }
 
 // RetiredServers were in the built-in catalogue of earlier releases. They are
@@ -224,6 +233,21 @@ func CatalogueEntry(name string) (DefaultServer, bool) {
 	return DefaultServer{}, false
 }
 
+// IsBuiltin reports whether a server is one Knowledge Worker Agent offers from
+// its catalogue today: the starter servers and GitHub. Retired entries aren't:
+// only a user who kept one still has it.
+func IsBuiltin(name string) bool {
+	if strings.EqualFold(name, GitHubDefault.Name) {
+		return true
+	}
+	for _, s := range DefaultServers {
+		if strings.EqualFold(s.Name, name) {
+			return true
+		}
+	}
+	return false
+}
+
 // EnsureGitHub registers (or updates) the GitHub MCP server, attaching a
 // bearer Authorization header when a usable token exists.
 //
@@ -278,6 +302,8 @@ func EnsureGitHub(logw io.Writer, token string) {
 		fmt.Fprintf(logw, "  ⚠ MCP defaults: failed to configure %q: %v\n", GitHubDefault.Name, err)
 		return
 	}
+	// A running opencode server reads its configuration only when told to.
+	configChanged()
 	if token == "" {
 		fmt.Fprintf(logw, "  … MCP defaults: registered %q without a token — add a GitHub PAT to use it\n", GitHubDefault.Name)
 		return

@@ -220,6 +220,36 @@ func InstallPlugins(w io.Writer, targetDir string) error {
 	return nil
 }
 
+// RemovePlugins removes the plugins InstallPlugins wrote to targetDir/plugin,
+// for opencode 2.x. 2.x does what they do by itself: it replaces an attachment
+// the model can't take with a notice, and leaves blank text out of requests.
+// It also can't load a 1.x plugin, and logs a warning about it on every
+// start. A copy that differs from ours is someone's edit and stays.
+func RemovePlugins(w io.Writer, targetDir string) error {
+	if strings.TrimSpace(targetDir) == "" {
+		return fmt.Errorf("remove opencode plugins: empty target dir")
+	}
+	removed := 0
+	for p := range treePaths(pluginFS, pluginRoot) {
+		data, err := fs.ReadFile(pluginFS, p)
+		if err != nil {
+			return fmt.Errorf("read embedded %s: %w", p, err)
+		}
+		dest := filepath.Join(targetDir, filepath.FromSlash(p))
+		if existing, err := os.ReadFile(dest); err != nil || string(existing) != string(data) {
+			continue
+		}
+		if err := os.Remove(dest); err != nil {
+			return fmt.Errorf("remove %s: %w", dest, err)
+		}
+		removed++
+	}
+	if removed > 0 {
+		fmt.Fprintf(w, "  ✓ Removed %d opencode 1.x plugin(s) from %s\n", removed, filepath.Join(targetDir, pluginRoot))
+	}
+	return nil
+}
+
 // RetireLegacyDefaults removes the content bundle earlier builds installed: the
 // Citrix agents, the product context files, AGENTS.md, and the
 // product-specific skills.

@@ -16,6 +16,7 @@ import (
 
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/env"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/fileshare/viewer"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/layout"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/workspaceapps"
 )
 
@@ -63,7 +64,11 @@ func HandlePreviewLink(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, &failure{http.StatusBadRequest, "The path must be absolute."})
 		return
 	}
-	path := filepath.Clean(req.Path)
+	path, ok := layout.Reachable(req.Path)
+	if !ok {
+		writeFailure(w, &failure{http.StatusForbidden, layout.UnreachableMessage})
+		return
+	}
 	f, _, err := viewer.OpenPreview(path)
 	if err != nil {
 		writeFailure(w, &failure{http.StatusConflict, err.Error()})

@@ -49,8 +49,9 @@ type providerMetaEntry struct {
 		Help      string `json:"help"`
 		HelpURL   string `json:"helpUrl"`
 	} `json:"auth"`
-	Presets   map[string]string `json:"presets"`
-	Endpoints []Endpoint        `json:"endpoints"`
+	Presets     map[string]string `json:"presets"`
+	Endpoints   []Endpoint        `json:"endpoints"`
+	Description string            `json:"description"`
 }
 
 type providerMetaDoc struct {
@@ -150,12 +151,13 @@ func providerFromMeta(m providerMetaEntry) Provider {
 		label = m.ID
 	}
 	p := Provider{
-		ID:       m.ID,
-		Label:    label,
-		AuthType: AuthType(strings.TrimSpace(m.Auth.Type)),
-		Help:     strings.TrimSpace(m.Auth.Help),
-		HelpURL:  safeHelpURL(m.Auth.HelpURL),
-		Presets:  m.Presets,
+		ID:          m.ID,
+		Label:       label,
+		AuthType:    AuthType(strings.TrimSpace(m.Auth.Type)),
+		Help:        strings.TrimSpace(m.Auth.Help),
+		HelpURL:     safeHelpURL(m.Auth.HelpURL),
+		Presets:     m.Presets,
+		Description: strings.TrimSpace(m.Description),
 	}
 	// An artifact that omits kwa.auth.type gets the type the user can act on.
 	if p.AuthType != AuthManaged {
@@ -209,6 +211,10 @@ func builtinBackedProvider(b Builtin, m providerMetaEntry) Provider {
 		label = b.Label
 	}
 	ok := b.CheckAuth != nil && b.CheckAuth()
+	description := strings.TrimSpace(m.Description)
+	if description == "" {
+		description = b.Description
+	}
 	p := Provider{
 		ID:            b.ID,
 		Label:         label,
@@ -218,6 +224,7 @@ func builtinBackedProvider(b Builtin, m providerMetaEntry) Provider {
 		Help:          strings.TrimSpace(m.Auth.Help),
 		HelpURL:       safeHelpURL(m.Auth.HelpURL),
 		Presets:       m.Presets,
+		Description:   description,
 	}
 	if !ok {
 		p.Reason = ReasonNotSignedIn

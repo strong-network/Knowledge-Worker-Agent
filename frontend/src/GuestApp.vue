@@ -8,10 +8,9 @@
 import { ref, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import MessageBubble from './components/chat/MessageBubble.vue'
 import FileBrowser from './components/chat/FileBrowser.vue'
-import PermissionCard from './components/chat/PermissionCard.vue'
-import type { ToolCall, PermissionRequest } from './stores/chat'
-import type { PermissionResponse } from './api'
+import type { ToolCall } from './stores/chat'
 import { guestFileApi } from './api/files'
+import type { ChatFiles } from './utils/replyVisuals'
 import { TurnFollower, type TurnStart } from './utils/turnFollower'
 
 interface GuestMessage {
@@ -43,14 +42,18 @@ const notice = ref('')
 const waiting = ref<{ reason: string; text?: string } | null>(null)
 const endedReason = ref('')
 const listEl = ref<HTMLElement | null>(null)
-// What the owner lets people in this chat do; the owner can
-// change either while the page is open, and share_options says so.
-const allowPermissions = ref(false)
+// Whether the owner lets people in this chat work with files; the owner can
+// change it while the page is open, and share_options says so.
 const allowFiles = ref(false)
-const permission = ref<PermissionRequest | null>(null)
-const permissionTry = ref(0)
 const files = guestFileApi(sid)
 const fileBrowser = ref<InstanceType<typeof FileBrowser> | null>(null)
+// File links in replies open in the Files panel, when the owner shows it.
+const replyFiles = computed<ChatFiles>(() => ({
+  root: '',
+  rawUrl: files.rawUrl,
+  downloadUrl: files.downloadUrl,
+  ...(allowFiles.value ? { browse: files.browse, open: (path: string) => fileBrowser.value?.open(path) } : {}),
+}))
 const attachInput = ref<HTMLInputElement | null>(null)
 const attachments = ref<Array<{ key: number; name: string; path: string; uploading: boolean }>>([])
 
@@ -184,9 +187,7 @@ function turnFrame(event: string, d: any) {
     case 'tool_blocked': upsertTool(d.call_id, { name: d.tool, status: 'blocked' }); break
     case 'question': waiting.value = { reason: 'question', text: d.question || '' }; break
     case 'waiting_on_owner': waiting.value = { reason: d.reason || 'approval' }; break
-    case 'permission': showPermission(d); break
     case 'permission_answered':
-      if (permission.value?.permissionId === d.permission_id) permission.value = null
       if (waiting.value?.reason === 'approval') waiting.value = null
       break
     case 'error':
@@ -213,13 +214,12 @@ const follower = new TurnFollower({
     }
     live = null
     waiting.value = null
-    permission.value = null
     if (allowFiles.value) fileBrowser.value?.refresh()
   },
   closed: () => end('sharing_ended'),
 })
 
-const FRAMES = ['ready', 'turn_start', 'chunk', 'step', 'tool_call', 'tool_done', 'tool_blocked', 'question', 'waiting_on_owner', 'permission', 'permission_answered', 'error', 'done', 'title', 'share_options', 'sharing_ended', 'session_deleted']
+const FRAMES = ['ready', 'turn_start', 'chunk', 'step', 'tool_call', 'tool_done', 'tool_blocked', 'question', 'waiting_on_owner', 'permission_answered', 'error', 'done', 'title', 'share_options', 'sharing_ended', 'session_deleted']
 
 function openEvents() {
   es?.close()
@@ -331,50 +331,8 @@ const waitingText = computed(() => {
 const FILE_TOOLS = /file|edit|write|patch|create|bash|shell|terminal|command/i
 
 function applyOptions(d: any) {
-  const had = allowPermissions.value
-  allowPermissions.value = !!d?.allow_permissions
   allowFiles.value = !!d?.allow_files
-  if (!allowPermissions.value && permission.value) {
-    permission.value = null
-    waiting.value = { reason: 'approval' }
-  } else if (allowPermissions.value && !had && waiting.value?.reason === 'approval') {
-    // The request was shown to this page as "waiting on the owner"; fetch it.
-    void fetchPending()
-  }
   if (!allowFiles.value) attachments.value = []
-}
-
-async function fetchPending() {
-  const { status, body } = await getJSON(`/guest/api/sessions/${encodeURIComponent(sid)}/permission`)
-  if (status === 200 && body?.permission_id) showPermission(body)
-}
-
-function showPermission(d: any) {
-  permission.value = {
-    permissionId: d.permission_id || '',
-    permission: d.permission || '',
-    patterns: Array.isArray(d.patterns) ? d.patterns : undefined,
-  }
-  waiting.value = null
-  scrollToEnd()
-}
-
-async function respond(response: PermissionResponse) {
-  const p = permission.value
-  if (!p) return
-  notice.value = ''
-  const { status, body } = await postJSON(`/guest/api/sessions/${encodeURIComponent(sid)}/permission`, { permission_id: p.permissionId, response })
-  if (status === 200) { permission.value = null; return }
-  if (status === 403) {
-    allowPermissions.value = false
-    permission.value = null
-    waiting.value = { reason: 'approval' }
-  } else if (status === 404) {
-    permission.value = null
-  } else {
-    permissionTry.value++ // offer the buttons again
-  }
-  notice.value = body?.error || 'Your answer could not be sent.'
 }
 
 function pickAttachments() { attachInput.value?.click() }
@@ -480,17 +438,10 @@ onBeforeUnmount(() => {
             :newest="m.key === newestReply"
             :finished="m.key === finishedReply"
             :typing="m.key === newestReply && typing"
+            :files="replyFiles"
           />
         </main>
-        <PermissionCard
-          v-if="permission && allowPermissions"
-          class="guest-permission"
-          :key="`${permission.permissionId}:${permissionTry}`"
-          :permission="permission"
-          :allow-always="false"
-          @respond="respond"
-        />
-        <p v-else-if="waitingText" class="guest-waiting" role="status">
+        <p v-if="waitingText" class="guest-waiting" role="status">
           {{ waitingText }}
           <span v-if="waiting?.text" class="guest-question">{{ waiting.text }}</span>
         </p>
@@ -580,7 +531,6 @@ onBeforeUnmount(() => {
 }
 .guest-list { flex: 1; overflow-y: auto; padding: 16px 20px; }
 /* A flex item with auto margins shrinks to its content; the card is as wide as the owner's. */
-.guest-permission { width: calc(100% - 48px); box-sizing: border-box; }
 .guest-empty { color: var(--text2); }
 .guest-waiting {
   margin: 0 20px; padding: 8px 12px; font-size: 12px;

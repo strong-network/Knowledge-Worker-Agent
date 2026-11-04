@@ -74,6 +74,10 @@ a `kwa` block that tells users how to connect (`sds`, its old name, still works)
 An artifact never sets `enabled`. Assigned connectors start switched off, and
 each user turns on the ones they want.
 
+`kwa.description`, in connectors and the model provider, says in one sentence
+what the item gives users. Knowledge Worker Agent shows it when it tells users
+about a connector or model provider they haven't set up.
+
 **The model provider** defines a private endpoint and its models, with a cost
 and a limit for each. Its `kwa` block says who provides the key (`managed`: you
 do) and which models back **Default** and **Thinking**.

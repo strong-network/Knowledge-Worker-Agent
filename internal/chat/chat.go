@@ -17,12 +17,14 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/config"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/db"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/env"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodeinstaller"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodev2"
 )
 
 // ActiveProcess tracks a running chat backend process.
@@ -115,7 +117,7 @@ func deleteOpencodeSession(bin, opencodeSessionID string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, bin, "session", "delete", opencodeSessionID).CombinedOutput()
+	out, err := opencodev2.Cmd(ctx, bin, "session", "delete", opencodeSessionID).CombinedOutput()
 	if err == nil {
 		return
 	}
@@ -136,17 +138,18 @@ var (
 
 // Event represents a parsed chat-backend event normalized for the SSE layer.
 type Event struct {
-	Kind      string         `json:"kind"`
-	Text      string         `json:"text,omitempty"`
-	Tool      string         `json:"tool,omitempty"`
-	CallID    string         `json:"call_id,omitempty"`
-	Args      map[string]any `json:"args,omitempty"`
-	Success   bool           `json:"success,omitempty"`
-	Output    string         `json:"output,omitempty"`
-	Question  string         `json:"question,omitempty"`
-	Choices   []string       `json:"choices,omitempty"`
-	SessionID string         `json:"session_id,omitempty"`
-	McpServer string         `json:"mcp_server,omitempty"`
+	Kind      string          `json:"kind"`
+	Text      string          `json:"text,omitempty"`
+	Tool      string          `json:"tool,omitempty"`
+	CallID    string          `json:"call_id,omitempty"`
+	Args      map[string]any  `json:"args,omitempty"`
+	Success   bool            `json:"success,omitempty"`
+	Output    string          `json:"output,omitempty"`
+	Question  string          `json:"question,omitempty"`
+	Choices   []string        `json:"choices,omitempty"`
+	Questions []AskedQuestion `json:"questions,omitempty"`
+	SessionID string          `json:"session_id,omitempty"`
+	McpServer string          `json:"mcp_server,omitempty"`
 	// Permission fields (Kind == "permission"): an interactive permission
 	// request from the opencode server backend that the user can allow/deny.
 	PermissionID  string   `json:"permission_id,omitempty"`
@@ -166,6 +169,11 @@ type Event struct {
 	// user armed in the composer. It never reaches the browser; the dispatcher
 	// uses it to keep counts that mean "work the model did" honest.
 	Synthetic bool `json:"-"`
+
+	// Calls are the rows that stand in for an opencode 2.x Code Mode program,
+	// one per tool it called (see codemode.go). When set, they are emitted
+	// instead of the event itself.
+	Calls []*Event `json:"-"`
 }
 
 // ParseOpencodeJSONL parses a single JSONL line from opencode run --format json.
@@ -218,7 +226,7 @@ func ParseOpencodeJSONL(line string) *Event {
 		return ev
 
 	case "text":
-		text := extractContentText(part["text"])
+		text := stripSystemReminders(extractContentText(part["text"]))
 		if text == "" {
 			return nil
 		}
@@ -255,7 +263,14 @@ func ParseOpencodeJSONL(line string) *Event {
 		if status == "error" && isPermissionDenied(output) {
 			return &Event{Kind: "tool_blocked", CallID: callID, Tool: tool, Args: args, Output: output, SessionID: sid}
 		}
-		return &Event{Kind: "tool_done", CallID: callID, Tool: tool, Args: args, Success: success, Output: output, SessionID: sid}
+		ev := &Event{Kind: "tool_done", CallID: callID, Tool: tool, Args: args, Success: success, Output: output, SessionID: sid}
+		if tool == codeModeTool {
+			ev.Calls = codeModeCalls(callID, sid, state, output)
+			if codeModeFailed(state) {
+				ev.Success = false
+			}
+		}
+		return ev
 
 	case "error":
 		msg := extractOpencodeError(obj["error"])
@@ -369,7 +384,8 @@ func prependEvents(src <-chan *Event, head []*Event) <-chan *Event {
 func useServerBackend() bool {
 	switch strings.ToLower(strings.TrimSpace(env.Get("KWA_OPENCODE_USE_SERVER"))) {
 	case "1", "true", "yes", "on":
-		return true
+		// Server mode drives opencode 1.x's server API, which 2.x replaced.
+		return !opencodev2.Enabled()
 	default:
 		return false
 	}
@@ -385,7 +401,23 @@ func runOpencodeStream(sessionID, prompt string, cfg config.SessionConfig, force
 
 	opencodeSession, fork := resumeOrFork(sessionID, cfg)
 	prompt = config.PromptWithSessionPreambleAs(prompt, cfg, author.guestName(), forced...)
-	args := config.BuildOpencodeArgs(prompt, opencodeSession, cfg)
+	v2 := opencodev2.Enabled()
+	var args []string
+	if v2 {
+		// 2.x fails a turn whose model doesn't offer the reasoning level asked
+		// for, where 1.x went on without it.
+		if effort := strings.TrimSpace(cfg.ReasoningEffort); effort != "" {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			if !opencodev2.HasVariant(ctx, config.ResolveModel(cfg.Model), effort) {
+				log.Printf("[opencode-v2] session=%s: %s has no reasoning level %q; running without it", sessionID, cfg.Model, effort)
+				cfg.ReasoningEffort = ""
+			}
+			cancel()
+		}
+		args = config.BuildOpencodeArgsV2(prompt, opencodeSession, cfg)
+	} else {
+		args = config.BuildOpencodeArgs(prompt, opencodeSession, cfg)
+	}
 	if fork {
 		args = config.WithFork(args)
 	}
@@ -398,9 +430,15 @@ func runOpencodeStream(sessionID, prompt string, cfg config.SessionConfig, force
 	log.Printf("[DEBUG] session=%s opencode_resume=%q cwd=%s cmd=%s %s",
 		sessionID, opencodeSession, cwd, config.OpencodeBin, argsForLog(args))
 
-	cmd := exec.Command(config.OpencodeBin, args...)
+	var cmd *exec.Cmd
+	if v2 {
+		cmd = opencodev2.Command(context.Background(), config.OpencodeBin, args...)
+		opencodev2.WarmFolder(context.Background(), cwd)
+	} else {
+		cmd = exec.Command(config.OpencodeBin, args...)
+		cmd.Env = os.Environ()
+	}
 	cmd.Dir = cwd
-	cmd.Env = os.Environ()
 
 	// Opencode's `run` reads stdin to detect piped input and BLOCKS until
 	// it sees EOF. If we attach a pipe whose writer we keep open, opencode
@@ -408,14 +446,20 @@ func runOpencodeStream(sessionID, prompt string, cfg config.SessionConfig, force
 	// "no output within 90s". opencode doesn't surface interactive questions over
 	// stdin in `run --format json` mode anyway (permission asks come back as
 	// auto-rejected tool_use error events, which we already handle as
-	// tool_blocked), so we attach /dev/null and skip the pipe.
-	devNull, err := os.OpenFile(os.DevNull, os.O_RDONLY, 0)
-	if err != nil {
-		ch <- &Event{Kind: "error", Text: fmt.Sprintf("opencode backend: cannot open /dev/null: %v", err)}
-		close(ch)
-		return ch, nil
+	// tool_blocked), so we attach /dev/null and skip the pipe. On 2.x the
+	// message itself is on stdin (see opencodev2.Command), which ends with it.
+	// (Close on the nil file below is a no-op.)
+	var devNull *os.File
+	if cmd.Stdin == nil {
+		f, err := os.OpenFile(os.DevNull, os.O_RDONLY, 0)
+		if err != nil {
+			ch <- &Event{Kind: "error", Text: fmt.Sprintf("opencode backend: cannot open /dev/null: %v", err)}
+			close(ch)
+			return ch, nil
+		}
+		devNull = f
+		cmd.Stdin = devNull
 	}
-	cmd.Stdin = devNull
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -443,6 +487,18 @@ func runOpencodeStream(sessionID, prompt string, cfg config.SessionConfig, force
 	}
 
 	proc := &ActiveProcess{Cmd: cmd}
+	// The opencode session the turn runs in; a new one is named by its first event.
+	var turnSession atomic.Value
+	turnSession.Store(opencodeSession)
+	if v2 {
+		proc.Abort = func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := opencodev2.Interrupt(ctx, turnSession.Load().(string)); err != nil {
+				log.Printf("[opencode-v2] session=%s could not interrupt the turn: %v", sessionID, err)
+			}
+		}
+	}
 	Procs.Store(sessionID, proc)
 
 	go func() {
@@ -493,9 +549,12 @@ func runOpencodeStream(sessionID, prompt string, cfg config.SessionConfig, force
 		tokensOutAccum := 0
 		tokensInKnown := false
 		costAccum := 0.0
+		// asked is set once the turn stops at the agent's questions; what follows is dropped.
+		asked := false
 		// processOpencodeLine parses one JSONL line and fans the resulting
 		// event(s) onto ch, updating the turn-local accumulators/flags. Kept
 		// as a closure so the read loop below stays focused on IO + EOF.
+		var emit func(event *Event)
 		processOpencodeLine := func(raw string) {
 			event := ParseOpencodeJSONL(raw)
 			if event == nil {
@@ -503,8 +562,22 @@ func runOpencodeStream(sessionID, prompt string, cfg config.SessionConfig, force
 				return
 			}
 			log.Printf("[JSONL] session=%s backend=opencode line=%d bytes=%d kind=%s", sessionID, lineNum, len(raw), event.Kind)
+			if asked && event.Kind != "step_finish" {
+				return
+			}
+			if len(event.Calls) > 0 {
+				for _, call := range event.Calls {
+					emit(call)
+				}
+				return
+			}
+			emit(event)
+		}
+		// emit handles one event: a parsed line, or one call of a Code Mode program.
+		emit = func(event *Event) {
 			if event.SessionID != "" {
 				lastSessionID = event.SessionID
+				turnSession.Store(event.SessionID)
 			}
 			if event.Kind == "chunk" && strings.TrimSpace(event.Text) != "" {
 				sawAssistantOutput = true
@@ -552,6 +625,17 @@ func runOpencodeStream(sessionID, prompt string, cfg config.SessionConfig, force
 				tokensOutAccum += event.TokensOut
 				costAccum += event.Cost
 				return
+			}
+			if event.Kind == "tool_done" && !event.Success && !cfg.Unattended {
+				if qs := askedQuestions(event.Tool, event.Args); len(qs) > 0 {
+					// Stop before the agent goes on without the answers it was told to assume.
+					asked = true
+					event.Success, event.Output = true, "Waiting for your answer."
+					ch <- event
+					ch <- &Event{Kind: "question", Question: qs[0].Question, Questions: qs, CallID: event.CallID}
+					proc.Kill()
+					return
+				}
 			}
 			ch <- event
 		}
@@ -620,6 +704,14 @@ func runOpencodeStream(sessionID, prompt string, cfg config.SessionConfig, force
 func ensureOpencodeAvailable() error {
 	opencodeInstallMu.Lock()
 	defer opencodeInstallMu.Unlock()
+	err := ensureOpencodeLocked()
+	if err == nil {
+		opencodev2.Detect(config.OpencodeBin)
+	}
+	return err
+}
+
+func ensureOpencodeLocked() error {
 	if opencodeEnsured && opencodeinstaller.VerifyBin(config.OpencodeBin) {
 		return nil
 	}
@@ -629,14 +721,14 @@ func ensureOpencodeAvailable() error {
 		autoUpdate = "true"
 	}
 	skipUpdate := autoUpdate == "0" || autoUpdate == "false" || autoUpdate == "no" || autoUpdate == "off"
-	installDir := config.EnvOrDefault("KWA_OPENCODE_INSTALL_DIR", opencodeinstaller.DefaultInstallDir)
+	installDir := config.OpencodeInstallDir()
 
 	if skipUpdate {
 		if opencodeinstaller.VerifyBin(config.OpencodeBin) {
 			opencodeEnsured = true
 			return nil
 		}
-		installed, err := opencodeinstaller.Install(os.Stderr, opencodeinstaller.InstallOptions{InstallDir: installDir})
+		installed, err := opencodeinstaller.Install(os.Stderr, opencodeinstaller.InstallOptions{InstallDir: installDir, Major: config.OpencodeMajor})
 		if err != nil {
 			return fmt.Errorf("auto-install failed: %w", err)
 		}
@@ -648,6 +740,7 @@ func ensureOpencodeAvailable() error {
 	res, err := opencodeinstaller.Ensure(os.Stderr, opencodeinstaller.EnsureOptions{
 		CurrentBin: config.OpencodeBin,
 		InstallDir: installDir,
+		Major:      config.OpencodeMajor,
 	})
 	if err != nil {
 		return fmt.Errorf("install/update failed: %w", err)

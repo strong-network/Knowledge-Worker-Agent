@@ -5,7 +5,7 @@
 import { ref, onMounted } from 'vue'
 import { useSessionsStore } from '../../stores/sessions'
 import { useUiStore } from '../../stores/ui'
-import { browseFiles } from '../../api'
+import { browseFolder } from '../../api'
 import { loadBaseDir } from '../../composables/useMe'
 
 // Focused "Use an existing folder" picker. Browse the workspace and
@@ -14,6 +14,7 @@ const sessionsStore = useSessionsStore()
 const ui = useUiStore()
 
 const currentPath = ref('')
+const parentPath = ref('')
 const dirs = ref<{ name: string; path: string }[]>([])
 const creating = ref(false)
 const error = ref('')
@@ -21,17 +22,13 @@ const error = ref('')
 async function browse(path: string) {
   error.value = ''
   try {
-    const entries = await browseFiles(path)
-    dirs.value = entries.filter(e => e.is_dir).map(e => ({ name: e.name, path: e.path }))
-    currentPath.value = path
+    const data = await browseFolder(path)
+    dirs.value = data.dirs.map(d => ({ name: d.name, path: d.path }))
+    currentPath.value = data.path
+    parentPath.value = data.parent
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Could not open folder'
   }
-}
-
-function goUp() {
-  const parent = currentPath.value.split('/').slice(0, -1).join('/') || '/'
-  browse(parent)
 }
 
 onMounted(async () => browse(await loadBaseDir()))
@@ -66,7 +63,7 @@ async function useFolder() {
     </div>
 
     <div class="dir-browser">
-      <div class="dir-item nav-up" @click="goUp">⬆ ..</div>
+      <div v-if="parentPath" class="dir-item nav-up" @click="browse(parentPath)">⬆ ..</div>
       <div
         v-for="d in dirs"
         :key="d.path"

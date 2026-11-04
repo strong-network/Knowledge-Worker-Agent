@@ -478,16 +478,13 @@ func TestShareOptionsBelongToTheShare(t *testing.T) {
 	guestView := chat.AddViewer("c1", "g-1")
 	defer chat.RemoveViewer("c1", guestView)
 	code, st, _ := do(t, "PUT", "/api/sessions/c1/share", `{"allow_files":true}`, false)
-	if code != 200 || st["allow_files"] != true || st["allow_permissions"] != false || st["files_folder"] != dir {
+	if code != 200 || st["allow_files"] != true || st["files_folder"] != dir {
 		t.Errorf("files on without a token = %d %v", code, st)
 	}
 	select {
 	case <-guestView.Options():
 	default:
 		t.Error("an open guest page was not told")
-	}
-	if _, st, _ := do(t, "PUT", "/api/sessions/c1/share", `{"allow_permissions":true}`, true); st["allow_files"] != true || st["allow_permissions"] != true {
-		t.Errorf("one toggle reset the other: %v", st)
 	}
 	for _, c := range p.calls[calls:] {
 		if c != "list" { // listing only builds the link shown with the state
@@ -499,11 +496,11 @@ func TestShareOptionsBelongToTheShare(t *testing.T) {
 	}
 
 	do(t, "DELETE", "/api/sessions/c1/share", "", true)
-	if o := db.SessionShareOptions("c1"); o.AllowFiles || o.AllowPermissions {
+	if o := db.SessionShareOptions("c1"); o.AllowFiles {
 		t.Errorf("options outlived the share: %+v", o)
 	}
 	do(t, "PUT", "/api/sessions/c1/share", "", true)
-	if _, st, _ := do(t, "GET", "/api/sessions/c1/share", "", true); st["allow_files"] != false || st["allow_permissions"] != false {
+	if _, st, _ := do(t, "GET", "/api/sessions/c1/share", "", true); st["allow_files"] != false {
 		t.Errorf("a new share started with %v", st)
 	}
 }
@@ -523,11 +520,11 @@ func TestFilesAreRefusedForTheHomeFolder(t *testing.T) {
 	if why, _ := st["files_unavailable"].(string); !strings.Contains(why, "home folder") || st["files_folder"] != nil {
 		t.Errorf("state = %v", st)
 	}
-	code, body, _ := do(t, "PUT", "/api/sessions/c1/share", `{"allow_files":true,"allow_permissions":true}`, true)
+	code, body, _ := do(t, "PUT", "/api/sessions/c1/share", `{"allow_files":true}`, true)
 	if code != 409 || !strings.Contains(body["error"].(string), "home folder") {
 		t.Errorf("files on for the home folder = %d %v", code, body)
 	}
-	if o := db.SessionShareOptions("c1"); o.AllowFiles || o.AllowPermissions {
+	if o := db.SessionShareOptions("c1"); o.AllowFiles {
 		t.Errorf("a refused change was half-applied: %+v", o)
 	}
 }

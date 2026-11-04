@@ -8,6 +8,10 @@ import { resolve } from 'path'
 export default defineConfig({
   plugins: [vue()],
   root: '.',
+  // mermaid's ELK layouts need elkjs, which is under the EPL-2.0: leave it out.
+  resolve: {
+    alias: { 'elkjs/lib/elk.bundled.js': resolve(import.meta.dirname, 'src/utils/noElk.ts') },
+  },
   build: {
     outDir: resolve(import.meta.dirname, '../cmd/server/html'),
     emptyOutDir: true,

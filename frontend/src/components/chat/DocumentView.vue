@@ -15,6 +15,7 @@ import { ref, computed, watch, onBeforeUnmount, nextTick } from 'vue'
 import { ownerFileApi, type FileApi, type FileVersion } from '../../api/files'
 import { fetchOfficeStatus, installOffice, type OfficeInstallStatus, type PreviewLink } from '../../api'
 import { renderMarkdownChanges, highlightCode } from '../../composables/useMarkdown'
+import { drawVisuals, onReplyClick } from '../../utils/replyVisuals'
 import { parseCsv } from '../../utils/csv'
 import { triggerDownload } from '../../utils/download'
 import { diffItems, lineChanges, splitLines } from '../../utils/linediff'
@@ -236,7 +237,11 @@ async function showVersion(v: number | null) {
 }
 watch([renderedMarkdown, viewMode], () => {
   if (viewMode.value !== 'markdown') return
-  nextTick(() => { if (markdownPreviewEl.value) highlightCode(markdownPreviewEl.value) })
+  nextTick(() => {
+    if (!markdownPreviewEl.value) return
+    drawVisuals(markdownPreviewEl.value)
+    highlightCode(markdownPreviewEl.value)
+  })
 })
 
 // A cache-busted raw URL. The iframe serves the file from disk, and without
@@ -734,7 +739,7 @@ defineExpose({ reload, reopen, save })
 
     <div class="fp-editor-body">
       <div v-show="viewMode === 'code'" ref="editorContainer" class="fp-cm"></div>
-      <div v-if="viewMode === 'markdown'" ref="markdownPreviewEl" class="fp-md markdown-body" v-html="renderedMarkdown"></div>
+      <div v-if="viewMode === 'markdown'" ref="markdownPreviewEl" class="fp-md markdown-body" v-html="renderedMarkdown" @click="onReplyClick($event)"></div>
       <div v-else-if="viewMode === 'image'" class="fp-image"><img :src="imageDataUrl" :alt="name" /></div>
       <!--
         Deliberately not sandboxed: any sandbox attribute (even
@@ -945,6 +950,27 @@ defineExpose({ reload, reopen, save })
 .fp-cm { flex: 1; overflow: auto; }
 .fp-cm :deep(.cm-editor) { height: 100%; }
 .fp-md { flex: 1; overflow: auto; padding: 20px 22px; font-size: 14px; }
+/* The GitHub styles make code in a block inline and unpadded, which wins over the shared card. */
+.fp-md :deep(pre:has(> .pre-header) > code) { display: block; padding: 14px; }
+/* Diagrams and SVG, as in replies (MessageBubble.vue). */
+.fp-md :deep(.kwa-visual) { margin: 0 0 16px; }
+.fp-md :deep(.kwa-visual-view img) { display: block; max-width: 100%; height: auto; background: none; }
+.fp-md :deep(.kwa-visual[data-kind="svg"] .kwa-visual-view img) { background: #fff; border-radius: 8px; padding: 8px; }
+.fp-md :deep(.kwa-visual-note) { font-size: 13px; color: var(--text2); }
+.fp-md :deep(.kwa-visual-note:empty) { display: none; }
+.fp-md :deep(.kwa-visual-source) { margin: 6px 0 0; }
+.fp-md :deep(.kwa-visual-source code) { white-space: pre; }
+.fp-md :deep(.kwa-visual:is([data-state="new"], [data-state="pending"], [data-state="done"]) .kwa-visual-source) { display: none; }
+.fp-md :deep(.kwa-visual:not([data-state="done"]) .kwa-visual-view) { display: none; }
+.fp-md :deep(.kwa-visual[data-state="done"] .kwa-visual-note) { display: none; }
+.fp-md :deep(.kwa-visual[data-state="failed"] [data-action="download"]) { display: none; }
+.fp-md :deep(.kwa-visual-bar) { display: flex; gap: 6px; margin-top: 6px; }
+.fp-md :deep(.kwa-visual-btn) {
+  font: inherit; font-size: 12px; line-height: 1; color: var(--text2);
+  background: transparent; border: 1px solid var(--border); border-radius: 6px;
+  padding: 5px 10px; cursor: pointer;
+}
+.fp-md :deep(.kwa-visual-btn:hover) { background: var(--hover); color: var(--text); }
 .fp-image {
   flex: 1; display: flex; align-items: center; justify-content: center; overflow: auto; padding: 14px;
   background: repeating-conic-gradient(var(--surface2) 0 25%, var(--surface) 0 50%) 0 0/24px 24px;

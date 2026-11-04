@@ -353,12 +353,16 @@ func TestRegistryPresetsSkipsUndiscoveredNominations(t *testing.T) {
 // shared file's record with it, and a delete stops sharing it first.
 func TestFileRoutesKeepSharedFilesInStep(t *testing.T) {
 	setupServerTestDB(t)
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	prevRename, prevDelete := files.AfterRename, files.BeforeDelete
 	t.Cleanup(func() { files.AfterRename, files.BeforeDelete = prevRename, prevDelete })
 	mux := http.NewServeMux()
 	registerRoutes(mux)
-	dir := t.TempDir()
+	dir := filepath.Join(home, "Reports")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(dir, "report.html"), []byte("<p>Q3</p>"), 0o644); err != nil {
 		t.Fatal(err)
 	}

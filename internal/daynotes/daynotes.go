@@ -46,11 +46,11 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/db"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodev2"
 )
 
 const (
@@ -233,14 +233,24 @@ func execNote(ctx context.Context, bin, model, prompt string) ([]byte, error) {
 	// A dedicated empty directory keeps the workspace's context files
 	// (AGENTS.md and friends) out of the request. internal/titler measured
 	// that at ~7.7k input tokens versus ~20 for an identical result.
+	if opencodev2.Major(bin) >= 2 {
+		scratch, err := opencodev2.ScratchDir()
+		if err != nil {
+			return nil, err
+		}
+		// 2.x's title agent only writes titles; notes run as KWA's own agent
+		// there. The message goes on stdin (see opencodev2.Command).
+		cmd := opencodev2.Cmd(ctx, bin, "run", "--agent", opencodev2.NoteAgent, "--model", model, "--format", "json", "--", prompt)
+		cmd.Dir = scratch
+		return cmd.CombinedOutput()
+	}
 	scratch, err := os.MkdirTemp("", "chat-daynote-")
 	if err != nil {
 		return nil, err
 	}
 	defer os.RemoveAll(scratch)
 
-	cmd := exec.CommandContext(ctx, bin,
-		"run", "--agent", "title", "--model", model, "--format", "json", prompt)
+	cmd := opencodev2.Cmd(ctx, bin, "run", "--agent", "title", "--model", model, "--format", "json", prompt)
 	cmd.Dir = scratch
 	// Leave stdin nil: `opencode run` reads stdin when it is attached, which
 	// would let it consume the parent's input.
@@ -320,7 +330,7 @@ func cleanNote(s string) string {
 func deleteOpencodeSession(bin, sessionID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := exec.CommandContext(ctx, bin, "session", "delete", sessionID).Run(); err != nil {
+	if err := opencodev2.Cmd(ctx, bin, "session", "delete", sessionID).Run(); err != nil {
 		log.Printf("[DAYNOTE] could not delete throwaway opencode session %s: %v", sessionID, err)
 	}
 }

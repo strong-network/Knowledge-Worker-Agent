@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"sync"
@@ -59,6 +58,7 @@ var migrationState atomic.Pointer[migrationView]
 var (
 	prepareOpencode = ensureOpencode
 	runMigration    = migration.Run
+	reloadConfig    = config.Init
 )
 
 // viewOf turns a report into the banner's state: planned when the migration
@@ -84,14 +84,19 @@ func minutes(d time.Duration) int { return int((d + time.Minute - 1) / time.Minu
 // runMigrationAtStartup carries the migration out, or with mode Undo undoes
 // it, before anything else opens a file it moves. Meanwhile a status page
 // answers on KWA's port, and the workspace heartbeat reports the workspace as
-// busy, so it isn't stopped for being idle. On success, the configuration is
-// read again, now in the root or back at the old places.
+// busy, so it isn't stopped for being idle. Afterwards, the configuration is
+// read again: in the root or at the old places, with the opencode for them.
 func runMigrationAtStartup(mode migration.Mode) {
 	undo := mode == migration.Undo
 	if layout.Migrated() != undo {
 		if undo {
 			fmt.Fprintf(os.Stderr, "  ⚠ %s=%s: the one-folder migration hasn't run, so there's nothing to undo\n", migration.EnvMode, mode)
 		}
+		return
+	}
+	// It re-points opencode's sessions through 1.x's commands and database.
+	if config.OpencodeMajor >= 2 && config.OpencodeMajorSet {
+		fmt.Fprintf(os.Stderr, "  ⚠ %s=%s waits for opencode 1.x: it doesn't run while KWA_OPENCODE_MAJOR=2\n", migration.EnvMode, mode)
 		return
 	}
 	if reason, failed := migration.LastFailure(version, mode); failed {
@@ -103,15 +108,19 @@ func runMigrationAtStartup(mode migration.Mode) {
 	migrating.Store(true)
 	stopHeartbeat := workspaceheartbeat.Start(context.Background(), migrating.Load)
 	status := &statusPage{undo: undo}
-	stop, err := startStatusServer(fmt.Sprintf("%s:%d", config.Host, config.Port), status)
+	stop, err := startStatusServer(config.ListenAddrs(), status)
 	if err != nil {
 		stopHeartbeat()
 		fmt.Fprintf(os.Stderr, "  ⚠ One-folder migration: port %d is in use, so another server may be running; nothing changed\n", config.Port)
 		return
 	}
 	// Bootstrap installs the pinned opencode only later, and the checks refuse any other version.
-	if err := prepareOpencode(); err != nil {
-		fmt.Fprintf(os.Stderr, "  ⚠ One-folder migration: opencode %s: %v\n", opencodeinstaller.PinnedVersion, err)
+	// Without a database, as in a new workspace, opencode has no chats to re-point.
+	config.UseOpencode1()
+	if _, err := os.Stat(migration.OpencodeDatabase()); err == nil {
+		if err := prepareOpencode(); err != nil {
+			fmt.Fprintf(os.Stderr, "  ⚠ One-folder migration: opencode %s: %v\n", opencodeinstaller.PinnedVersion, err)
+		}
 	}
 	err = runMigration(migration.Options{
 		OurDB: config.DBPath, OpencodeBin: config.OpencodeBin, Host: config.Host, Port: config.Port,
@@ -120,18 +129,17 @@ func runMigrationAtStartup(mode migration.Mode) {
 	stop()
 	migrating.Store(false)
 	stopHeartbeat()
+	reloadConfig()
 
 	var refused *migration.Refused
 	switch {
-	case err == nil:
-		config.Init()
 	case errors.As(err, &refused):
 		v := &migrationView{State: "blocked", Reasons: refused.Reasons, Undo: undo}
 		if refused.Report != nil {
 			v = viewOf(*refused.Report)
 		}
 		migrationState.Store(v)
-	default:
+	case err != nil:
 		log.Printf("%s=%s: %v", migration.EnvMode, mode, err)
 		migrationState.Store(&migrationView{State: "failed", Reasons: []string{err.Error()}, Undo: undo})
 	}
@@ -183,15 +191,17 @@ func statusHandler(s *statusPage) http.Handler {
 	return mux
 }
 
-// startStatusServer serves the status page on addr until the returned
+// startStatusServer serves the status page on addrs until the returned
 // function stops it, freeing the port for the server proper.
-func startStatusServer(addr string, s *statusPage) (func(), error) {
-	l, err := net.Listen("tcp", addr)
+func startStatusServer(addrs []string, s *statusPage) (func(), error) {
+	ls, err := listenAll(addrs)
 	if err != nil {
 		return nil, err
 	}
 	srv := &http.Server{Handler: statusHandler(s), ReadHeaderTimeout: 10 * time.Second}
-	go srv.Serve(l)
+	for _, l := range ls {
+		go srv.Serve(l)
+	}
 	return func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -218,6 +228,7 @@ func runMigrate(args []string) int {
 		return 1
 	}
 	config.Init()
+	config.UseOpencode1()
 	if mode == migration.DryRun {
 		assess := migration.Assess
 		if layout.Migrated() {

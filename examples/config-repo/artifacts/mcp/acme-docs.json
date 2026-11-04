@@ -13,6 +13,7 @@
     }
   },
   "kwa": {
+    "description": "Search Acme's product documentation.",
     "auth": {
       "type": "api-key",
       "label": "Acme Docs",

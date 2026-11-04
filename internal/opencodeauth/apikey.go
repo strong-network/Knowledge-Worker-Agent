@@ -4,11 +4,14 @@
 package opencodeauth
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodev2"
 )
 
 // This file holds the GENERIC half of opencode's credential store: reading and
@@ -38,7 +41,16 @@ func SetAPIKey(provider, key string) error {
 		return err
 	}
 	creds[provider] = map[string]any{"type": "api", "key": key}
-	return writeCredentials(creds)
+	if err := writeCredentials(creds); err != nil {
+		return err
+	}
+	// 2.x reads its own store (see opencodev2/credentials.go).
+	if opencodev2.Enabled() {
+		ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+		defer cancel()
+		return opencodev2.SetCredential(ctx, provider, "", map[string]any{"type": "key", "key": key})
+	}
+	return nil
 }
 
 // RemoveAPIKey deletes a provider's stored credential. Removing one that is not
@@ -52,6 +64,13 @@ func RemoveAPIKey(provider string) error {
 	creds, err := readCredentials()
 	if err != nil {
 		return err
+	}
+	if opencodev2.Enabled() {
+		ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+		defer cancel()
+		if err := opencodev2.RemoveCredentials(ctx, provider); err != nil {
+			return err
+		}
 	}
 	if _, ok := creds[provider]; !ok {
 		return nil
@@ -72,6 +91,15 @@ func HasCredential(provider string) bool {
 	provider = strings.TrimSpace(provider)
 	if provider == "" {
 		return false
+	}
+	// On 2.x its own store is what counts. When its server can't answer, the
+	// file is the best guess there is.
+	if opencodev2.Enabled() {
+		ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+		defer cancel()
+		if has, err := opencodev2.HasCredential(ctx, provider); err == nil {
+			return has
+		}
 	}
 	creds, err := readCredentials()
 	if err != nil {

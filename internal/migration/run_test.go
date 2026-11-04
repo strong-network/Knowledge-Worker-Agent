@@ -18,14 +18,19 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/layout"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodeinstaller"
 )
 
-// TestMain lets the test binary stand in for opencode, and run a migration that
-// dies at a given step, as a crash would.
+// TestMain lets the test binary stand in for opencode, idle or run a migration
+// that dies at a given step, as a crash would.
 func TestMain(m *testing.M) {
+	if os.Getenv("KWA_TEST_IDLE") == "1" {
+		time.Sleep(time.Minute)
+		os.Exit(0)
+	}
 	if os.Getenv("KWA_FAKE_OPENCODE") == "1" {
 		os.Exit(fakeOpencode(os.Args[1:]))
 	}

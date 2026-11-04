@@ -13,13 +13,14 @@
 //
 // An anchor carrying the `download` attribute asks for the same bytes with no
 // browsing context at all, so nothing is opened and the app is left alone.
-export function triggerDownload(url: string): void {
+export function triggerDownload(url: string, name = ''): void {
   const a = document.createElement('a')
   a.href = url
-  // Empty on purpose: for a same-origin response this defers to the filename
+  // Empty by default: for a same-origin response this defers to the filename
   // the server already sends in Content-Disposition, rather than second-
-  // guessing it here (and getting folder .zip names wrong).
-  a.download = ''
+  // guessing it here (and getting folder .zip names wrong). A blob URL has no
+  // such header, so its caller names the file.
+  a.download = name
   a.rel = 'noopener'
   // Firefox only dispatches the click for an anchor that is in the document.
   a.style.display = 'none'

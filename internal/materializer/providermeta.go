@@ -3,7 +3,10 @@
 
 package materializer
 
-import "sort"
+import (
+	"sort"
+	"strings"
+)
 
 // ProviderMetaFile is the sidecar the materializer writes next to opencode.json
 // carrying Knowledge Worker Agent's own half of each assigned provider artifact.
@@ -31,6 +34,8 @@ type ProviderMeta struct {
 	// Carried as written: the provider registry validates them, picks one, and
 	// exports it for the artifact's {env:} placeholder.
 	Endpoints []ProviderEndpoint `json:"endpoints,omitempty"`
+	// Description says in one sentence what the provider gives the user.
+	Description string `json:"description,omitempty"`
 }
 
 // ProviderEndpoint is one entry of a provider artifact's kwa.endpoints list.
@@ -81,11 +86,33 @@ func takeProviderMeta(frag map[string]any) []ProviderMeta {
 
 	auth, presets := parseMetaBlock(raw)
 	endpoints := parseEndpoints(raw)
+	description := metaDescription(raw)
 	out := make([]ProviderMeta, 0, len(ids))
 	for _, id := range ids {
-		out = append(out, ProviderMeta{ID: id, Auth: auth, Presets: presets, Endpoints: endpoints})
+		out = append(out, ProviderMeta{ID: id, Auth: auth, Presets: presets, Endpoints: endpoints, Description: description})
 	}
 	return out
+}
+
+// maxDescription is the longest description kept, in characters. The text
+// belongs in one line of a modal; a longer one is cut at a word.
+const maxDescription = 300
+
+// metaDescription returns the block's description, trimmed and capped. Like the
+// other fields, anything that isn't a string counts as no description.
+func metaDescription(raw any) string {
+	block, _ := raw.(map[string]any)
+	s, _ := block["description"].(string)
+	s = strings.Join(strings.Fields(s), " ")
+	r := []rune(s)
+	if len(r) <= maxDescription {
+		return s
+	}
+	cut := string(r[:maxDescription])
+	if i := strings.LastIndex(cut, " "); i > 0 {
+		cut = cut[:i]
+	}
+	return strings.TrimRight(cut, " ,;:") + "…"
 }
 
 // takeMetaBlock removes an artifact's block for Knowledge Worker Agent and

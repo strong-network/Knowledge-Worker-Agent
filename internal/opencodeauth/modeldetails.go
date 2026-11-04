@@ -6,8 +6,9 @@ package opencodeauth
 import (
 	"context"
 	"encoding/json"
-	"os/exec"
 	"strings"
+
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodev2"
 )
 
 // ModelDetail is what `opencode models --verbose` reports about one model.
@@ -30,15 +31,80 @@ type ModelDetail struct {
 }
 
 // FetchModelDetails lists a provider's models with their catalogue metadata,
-// by running `opencode models <provider> --verbose`.
+// by running `opencode models <provider> --verbose`. 2.x's `models` has no
+// --verbose; there the server's model list answers.
 func FetchModelDetails(provider string) ([]ModelDetail, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), modelsTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, resolveBin(), "models", provider, "--verbose").Output()
+	if opencodev2.Enabled() {
+		var raw json.RawMessage
+		if err := opencodev2.Get(ctx, "/api/model", &raw); err != nil {
+			return nil, err
+		}
+		return modelDetailsV2(raw, provider), nil
+	}
+	out, err := opencodev2.Cmd(ctx, resolveBin(), "models", provider, "--verbose").Output()
 	if err != nil {
 		return nil, describeFailure(ctx, err, string(out))
 	}
 	return parseModelDetails(string(out)), nil
+}
+
+// v2Packages names 2.x's model clients by the 1.x package that speaks the
+// same API, which is what NPM is read for.
+var v2Packages = map[string]string{
+	"@opencode/ai/providers/google-vertex/gemini":   "@ai-sdk/google-vertex",
+	"@opencode/ai/providers/google-vertex/messages": "@ai-sdk/google-vertex/anthropic",
+	"@opencode/ai/providers/google-vertex/chat":     "@ai-sdk/openai-compatible",
+}
+
+// modelDetailsV2 reads a provider's models out of 2.x's model list. URL is
+// the model's address with the project and location already filled in.
+func modelDetailsV2(raw []byte, provider string) []ModelDetail {
+	var resp struct {
+		Data []struct {
+			ID         string `json:"id"`
+			ProviderID string `json:"providerID"`
+			Package    string `json:"package"`
+			Status     string `json:"status"`
+			Settings   struct {
+				BaseURL string `json:"baseURL"`
+			} `json:"settings"`
+			Capabilities struct {
+				Tools  bool     `json:"tools"`
+				Output []string `json:"output"`
+			} `json:"capabilities"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(raw, &resp) != nil {
+		return nil
+	}
+	var out []ModelDetail
+	for _, m := range resp.Data {
+		if m.ProviderID != provider || m.ID == "" {
+			continue
+		}
+		npm := strings.TrimPrefix(m.Package, "aisdk:")
+		if v1, ok := v2Packages[npm]; ok {
+			npm = v1
+		}
+		d := ModelDetail{
+			ID: m.ProviderID + "/" + m.ID, Model: m.ID, NPM: npm, URL: m.Settings.BaseURL, Status: m.Status,
+			ToolCall: m.Capabilities.Tools,
+		}
+		for _, o := range m.Capabilities.Output {
+			switch o {
+			case "text":
+				d.OutputText = true
+			case "image":
+				d.OutputImage = true
+			case "audio":
+				d.OutputAudio = true
+			}
+		}
+		out = append(out, d)
+	}
+	return out
 }
 
 // parseModelDetails reads the verbose listing: each model is its

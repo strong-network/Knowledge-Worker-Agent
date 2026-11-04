@@ -212,6 +212,17 @@ export const useUiStore = defineStore('ui', () => {
   // the header's Files button.
   const fileChangeCount = ref(0)
 
+  // A file a reply links to, for the chat's Files widget to open. Shows the
+  // widget wherever it is put away; a new object each time, so the same file
+  // opens again.
+  const fileToOpen = ref<{ path: string } | null>(null)
+  function openChatFile(path: string) {
+    if (window.matchMedia('(max-width: 900px)').matches) mobileFilesOpen.value = true
+    else if (filesHidden.value) toggleFilesPanel()
+    filePanelCollapsed.value = false
+    fileToOpen.value = { path }
+  }
+
   // User-initiated collapse/expand of the file panel (records an override).
   function toggleFilePanelCollapsed() {
     filePanelCollapsed.value = !filePanelCollapsed.value
@@ -263,12 +274,20 @@ export const useUiStore = defineStore('ui', () => {
     localStorage.setItem('sidebarCollapsed', v ? '1' : '0')
   }
 
-  function openModal(id: string) {
+  // A modal to go back to when the one opened from it closes: the setup guide
+  // opens Accounts this way, and gets the user back after a sign-in. Kept here,
+  // not in a modal, so it survives Accounts handing over to a sign-in modal.
+  const returnTo = ref<string | null>(null)
+
+  function openModal(id: string, opts?: { returnTo?: string }) {
+    if (opts?.returnTo) returnTo.value = opts.returnTo
     activeModal.value = id
   }
 
   function closeModal() {
-    activeModal.value = null
+    const back = returnTo.value
+    returnTo.value = null
+    activeModal.value = back && back !== activeModal.value ? back : null
   }
 
   // Workspace hygiene: how many chats are waiting to be reviewed, for the Settings badge.
@@ -325,7 +344,7 @@ export const useUiStore = defineStore('ui', () => {
     filePanelReading, setFilePanelReading,
     revealFiles, filesRevealed,
     mobileFilesOpen, toggleMobileFiles, closeMobileFiles,
-    filesHidden, toggleFilesPanel, fileChangeCount,
+    filesHidden, toggleFilesPanel, fileChangeCount, fileToOpen, openChatFile,
     newChatTemporary,
     setFilePanelWidth, toggleFilePanelCollapsed, autoSetFilePanelCollapsed, resetFilePanelManual,
     setTheme, toggleTheme, initTheme, toggleSidebar, closeSidebar,

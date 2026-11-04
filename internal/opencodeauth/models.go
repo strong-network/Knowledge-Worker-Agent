@@ -6,10 +6,11 @@ package opencodeauth
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodev2"
 )
 
 // modelsTimeout bounds the `opencode models` call. Model listing reads a local
@@ -29,7 +30,25 @@ var modelsTimeout = 60 * time.Second
 func FetchModelsFor(provider string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), modelsTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, resolveBin(), "models", provider).CombinedOutput()
+	bin := resolveBin()
+	// opencode 2.x lists every provider's models and takes no provider.
+	if opencodev2.Major(bin) >= 2 {
+		out, err := opencodev2.Cmd(ctx, bin, "models").CombinedOutput()
+		if err != nil {
+			return []string{}, describeFailure(ctx, err, string(out))
+		}
+		var mine []string
+		for _, m := range parseModels(string(out)) {
+			if strings.HasPrefix(m, provider+"/") {
+				mine = append(mine, m)
+			}
+		}
+		if mine == nil {
+			mine = []string{}
+		}
+		return mine, nil
+	}
+	out, err := opencodev2.Cmd(ctx, bin, "models", provider).CombinedOutput()
 	if err != nil {
 		return []string{}, describeFailure(ctx, err, string(out))
 	}

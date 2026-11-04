@@ -6,7 +6,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useSessionsStore } from '../../stores/sessions'
 import { useUiStore } from '../../stores/ui'
 import { TEMPORARY_SHORT } from '../../utils/temporary'
-import { browseFiles, createDirectory } from '../../api'
+import { browseFolder, createDirectory } from '../../api'
 import type { SessionConfig } from '../../api'
 import { useMe, loadBaseDir } from '../../composables/useMe'
 
@@ -67,10 +67,10 @@ watch(createFolder, (enabled) => {
   }
 })
 
-const dirEntries = ref<{ name: string; path: string; is_dir: boolean }[]>([])
-const currentBrowsePath = ref('')
-const parentDirEntries = ref<{ name: string; path: string; is_dir: boolean }[]>([])
-const parentBrowsePath = ref('')
+const dirEntries = ref<{ name: string; path: string }[]>([])
+const currentBrowseParent = ref('')
+const parentDirEntries = ref<{ name: string; path: string }[]>([])
+const parentBrowseParent = ref('')
 
 onMounted(async () => {
   sessionsStore.loadAgents()
@@ -119,9 +119,9 @@ function removeContextFile(i: number) {
 
 async function browseTo(path: string) {
   try {
-    const entries = await browseFiles(path)
-    dirEntries.value = entries.filter(e => e.is_dir)
-    currentBrowsePath.value = path
+    const data = await browseFolder(path)
+    dirEntries.value = data.dirs
+    currentBrowseParent.value = data.parent
   } catch (e) {
     console.error(e)
   }
@@ -133,9 +133,9 @@ function selectDir(path: string) {
 
 async function browseParentTo(path: string) {
   try {
-    const entries = await browseFiles(path)
-    parentDirEntries.value = entries.filter(e => e.is_dir)
-    parentBrowsePath.value = path
+    const data = await browseFolder(path)
+    parentDirEntries.value = data.dirs
+    parentBrowseParent.value = data.parent
   } catch (e) {
     console.error(e)
   }
@@ -288,7 +288,7 @@ async function createChat() {
         <label class="form-label">Parent directory</label>
         <input v-model="parentDir" class="form-input" :placeholder="baseDir" @focus="browseParentTo(parentDir || baseDir)" />
         <div class="dir-browser" v-if="parentDirEntries.length">
-          <div class="dir-item nav-up" @click="browseParentTo(parentBrowsePath.split('/').slice(0,-1).join('/') || '/')">⬆ ..</div>
+          <div v-if="parentBrowseParent" class="dir-item nav-up" @click="browseParentTo(parentBrowseParent)">⬆ ..</div>
           <div class="dir-item" v-for="d in parentDirEntries" :key="d.path" @click="selectParentDir(d.path); browseParentTo(d.path)">
             📁 {{ d.name }}
           </div>
@@ -300,7 +300,7 @@ async function createChat() {
         <label class="form-label">Workspace directory</label>
         <input v-model="workspace" class="form-input" :placeholder="baseDir" @focus="browseTo(workspace || baseDir)" />
         <div class="dir-browser" v-if="dirEntries.length">
-          <div class="dir-item nav-up" @click="browseTo(currentBrowsePath.split('/').slice(0,-1).join('/') || '/')">⬆ ..</div>
+          <div v-if="currentBrowseParent" class="dir-item nav-up" @click="browseTo(currentBrowseParent)">⬆ ..</div>
           <div class="dir-item" v-for="d in dirEntries" :key="d.path" @click="selectDir(d.path); browseTo(d.path)">
             📁 {{ d.name }}
           </div>

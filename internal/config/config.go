@@ -4,6 +4,8 @@
 package config
 
 import (
+	"log"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/env"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/layout"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodeinstaller"
 )
 
 var (
@@ -524,10 +527,75 @@ func EnvOrDefault(key, fallback string) string {
 	return fallback
 }
 
+// ListenAddrs returns the addresses the server listens on: for "localhost",
+// both 127.0.0.1 and ::1, where listening by name would take only one.
+func ListenAddrs() []string {
+	port := strconv.Itoa(Port)
+	if Host == "localhost" {
+		return []string{net.JoinHostPort("127.0.0.1", port), net.JoinHostPort("::1", port)}
+	}
+	return []string{net.JoinHostPort(Host, port)}
+}
+
+// OpencodeMajor is the opencode major version KWA runs: KWA_OPENCODE_MAJOR, or
+// else 2 once the one-folder migration, which needs 1.x, has run.
+var OpencodeMajor = 1
+
+// OpencodeMajorSet is whether KWA_OPENCODE_MAJOR chose the version.
+var OpencodeMajorSet bool
+
+func opencodeMajorSetting() (major int, set bool) {
+	switch v := strings.TrimSpace(env.Get("KWA_OPENCODE_MAJOR")); v {
+	case "":
+		return defaultOpencodeMajor(), false
+	case "1":
+		return 1, true
+	case "2":
+		return 2, true
+	default:
+		major = defaultOpencodeMajor()
+		log.Printf("[config] KWA_OPENCODE_MAJOR=%q isn't 1 or 2; using opencode %d.x", v, major)
+		return major, false
+	}
+}
+
+func defaultOpencodeMajor() int {
+	if layout.Migrated() {
+		return 2
+	}
+	return 1
+}
+
+// UseOpencode1 switches to opencode 1.x, unless KWA_OPENCODE_MAJOR chose 2.x.
+// The one-folder migration and its undo need it; Init switches back.
+func UseOpencode1() {
+	if OpencodeMajor >= 2 && !OpencodeMajorSet {
+		OpencodeMajor = 1
+		OpencodeBin = ResolveOpencodeBin(env.Get("KWA_OPENCODE_BIN"))
+	}
+}
+
+// OpencodeInstallDir is where KWA installs opencode: KWA_OPENCODE_INSTALL_DIR,
+// or ~/.opencode/bin. 2.x goes in a v2 folder there, so 1.x stays for going
+// back to it.
+func OpencodeInstallDir() string {
+	dir := EnvOrDefault("KWA_OPENCODE_INSTALL_DIR", opencodeinstaller.DefaultInstallDir)
+	if OpencodeMajor >= 2 {
+		return filepath.Join(dir, "v2")
+	}
+	return dir
+}
+
 func Init() {
-	OpencodeBin = ResolveOpencodeBin(env.Get("KWA_OPENCODE_BIN"))
-	// Loopback by default: the API has no authentication. The images set 0.0.0.0.
-	Host = EnvOrDefault("KWA_HOST", "127.0.0.1")
+	OpencodeMajor, OpencodeMajorSet = opencodeMajorSetting()
+	if OpencodeMajor >= 2 && env.Get("KWA_OPENCODE_BIN") == "" {
+		OpencodeBin = filepath.Join(OpencodeInstallDir(), "opencode")
+	} else {
+		OpencodeBin = ResolveOpencodeBin(env.Get("KWA_OPENCODE_BIN"))
+	}
+	// Both loopback addresses by default: the API has no authentication, and
+	// the platform connects over ::1.
+	Host = EnvOrDefault("KWA_HOST", "localhost")
 	Port, _ = strconv.Atoi(EnvOrDefault("KWA_PORT", "8765"))
 	if Port == 0 {
 		Port = 8765
@@ -689,6 +757,54 @@ func PlanningInstruction() string {
 		"Skip the list entirely for single-step, conversational, or purely informational requests.\n\n"
 }
 
+// DisplayInstruction tells the agent how its replies are shown. opencode's own
+// prompt says the output goes to a terminal in a monospace font, so without
+// this the model never draws a diagram, though the chat renders Mermaid, SVG
+// and images from the chat folder. Sent with every turn because it has to
+// outweigh that base prompt. Keep it terse: it pays its context cost each turn.
+// It names no skill: a drawing skill is used where a workspace has one.
+func DisplayInstruction() string {
+	return "[System — chat display]\n" +
+		"Your replies are shown in a web chat, not a terminal, and Markdown is rendered. " +
+		"A ```mermaid code block is drawn as a diagram, a ```svg block holding one <svg> element is drawn as an image, " +
+		"and ![alt](path) shows an image file from this chat's folder: give the path relative to the folder. " +
+		"Use a diagram or chart when it explains something better than prose; don't add one for its own sake. " +
+		"If one of your skills draws diagrams or charts as images, use it for one worth keeping, such as an architecture " +
+		"or process diagram, a data chart or an infographic: make it a standalone PNG (a GIF if it moves) in the chat's folder " +
+		"and show it with ![alt](path). Use Mermaid or SVG for a quick sketch, when the user asks for them, or without such a skill. " +
+		"SVG can't run scripts or load other files, and web images show only when the user clicks them. " +
+		"When you mention a file in this chat's folder, link it as [name](path), with the path relative to the folder: " +
+		"a click opens it beside the chat.\n\n"
+}
+
+// CodeModeInstruction is for 2.x, whose Code Mode can fetch but not read files; "" on 1.x.
+func CodeModeInstruction() string {
+	if OpencodeMajor < 2 {
+		return ""
+	}
+	return "[System — Code Mode]\n" +
+		"Code inside `execute` can't read files. To use a file's content there, for example a long text to send with a tool, " +
+		"fetch it from this app instead of pasting it or starting a web server: " +
+		"`await (await fetch(\"http://127.0.0.1:" + strconv.Itoa(Port) + "/api/files/raw?path=\" + encodeURIComponent(absolutePath))).text()`, " +
+		"or `.arrayBuffer()` for a binary file. It serves files in the home folder, apart from the hidden ones directly in it.\n\n"
+}
+
+// QuestionsInstruction says when to ask: on 2.x a question stops the turn; nobody answers an unattended one.
+func QuestionsInstruction(cfg SessionConfig) string {
+	if cfg.Unattended {
+		return "[System — unattended run]\n" +
+			"No one is watching this run, so don't ask questions: decide, and say what you assumed.\n\n"
+	}
+	if OpencodeMajor < 2 {
+		return ""
+	}
+	return "[System — questions]\n" +
+		"To ask the user for a decision, use the question tool. Your turn stops there, and their answers arrive as their next message, " +
+		"even though the tool reports the question as cancelled. Ask when the choice is theirs and costly to get wrong, " +
+		"such as what to create, send or delete outside this chat's folder, or when the request could reasonably mean different things. " +
+		"Otherwise decide, and say what you assumed.\n\n"
+}
+
 // PromptWithSystemContext injects user identity metadata ahead of a prompt.
 func PromptWithSystemContext(prompt string) string {
 	if ctx := SystemContext(); ctx != "" {
@@ -820,7 +936,7 @@ func PromptWithSessionPreambleAs(prompt string, cfg SessionConfig, guestName str
 	if guestName != "" {
 		identity = GuestContext(guestName)
 	}
-	preamble := identity + WorkspaceInstruction(cfg.Workdir) + FolderConventionInstruction(cfg.Workdir) + PlanningInstruction() + ProjectInstructionsBlock(cfg.ProjectInstructions)
+	preamble := identity + WorkspaceInstruction(cfg.Workdir) + FolderConventionInstruction(cfg.Workdir) + PlanningInstruction() + DisplayInstruction() + CodeModeInstruction() + QuestionsInstruction(cfg) + ProjectInstructionsBlock(cfg.ProjectInstructions)
 	for _, skill := range forced {
 		preamble += ForcedSkillInstruction(skill)
 	}
@@ -927,6 +1043,8 @@ type SessionConfig struct {
 	// as it is then, by forking the parent's opencode session. Dropped once the
 	// side chat has an opencode session of its own.
 	Fork bool `json:"fork,omitempty"`
+	// Unattended marks one turn no one is watching, a scheduled run's; never saved.
+	Unattended bool `json:"-"`
 	// McpSelection is the per-chat connector selection: a map of
 	// MCP server name → whether it should be connected for this chat. A nil map
 	// means "not yet seeded" and callers treat it as "all globally-enabled
@@ -1015,4 +1133,29 @@ func WithFork(args []string) []string {
 	n := len(args)
 	out := append([]string{}, args[:n-2]...)
 	return append(out, "--fork", args[n-2], args[n-1])
+}
+
+// BuildOpencodeArgsV2 is BuildOpencodeArgs for opencode 2.x. The run's working
+// directory is the folder, the reasoning variant is part of the model
+// reference, and --auto approves what isn't denied.
+func BuildOpencodeArgsV2(prompt string, opencodeSessionID string, cfg SessionConfig) []string {
+	args := []string{"run", "--format", "json"}
+	if cfg.Yolo {
+		args = append(args, "--auto")
+	}
+	if m := ResolveModel(cfg.Model); m != "" {
+		if v := strings.TrimSpace(cfg.ReasoningEffort); v != "" {
+			m += "#" + v
+		}
+		args = append(args, "--model", m)
+	}
+	if agent := strings.TrimSpace(cfg.Agent); agent != "" {
+		args = append(args, "--agent", agent)
+	} else if strings.EqualFold(strings.TrimSpace(cfg.Mode), "plan") {
+		args = append(args, "--agent", "plan")
+	}
+	if opencodeSessionID != "" {
+		args = append(args, "--session", opencodeSessionID)
+	}
+	return append(args, "--", prompt)
 }

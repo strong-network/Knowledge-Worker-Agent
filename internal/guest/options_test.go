@@ -45,12 +45,12 @@ func TestShareOptionsReachAnOpenGuestPage(t *testing.T) {
 		}
 		return nil
 	}
-	if m := next(); m["allow_files"] != false || m["allow_permissions"] != false {
+	if m := next(); m["allow_files"] != false {
 		t.Errorf("initial options %v", m)
 	}
 	db.SetShareOptions(e.shared, db.ShareOptions{AllowFiles: true})
 	chat.ShareOptionsChanged(e.shared)
-	if m := next(); m["allow_files"] != true || m["allow_permissions"] != false {
+	if m := next(); m["allow_files"] != true {
 		t.Errorf("after the change %v", m)
 	}
 	if code, body, _ := e.do("GET", "/guest/api/sessions/"+e.shared, "", nil); code != 200 || !strings.Contains(body, `"allow_files":true`) {

@@ -26,6 +26,9 @@ func HandleList(w http.ResponseWriter, r *http.Request) {
 	if servers == nil {
 		servers = []serverView{}
 	}
+	for i := range servers {
+		servers[i] = servers[i].withHiddenValues()
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"servers": servers})
 }
 
@@ -45,7 +48,7 @@ func HandleGet(w http.ResponseWriter, r *http.Request) {
 		writeJSONErr(w, http.StatusNotFound, "server not found: "+name)
 		return
 	}
-	writeJSON(w, http.StatusOK, sv)
+	writeJSON(w, http.StatusOK, sv.withHiddenValues())
 }
 
 // provisionedRefusal is the message returned when the client tries to edit or
@@ -139,13 +142,22 @@ func HandleAdd(w http.ResponseWriter, r *http.Request) {
 		writeJSONErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	existing, had, err := getServer(name)
+	if err != nil {
+		writeJSONErr(w, http.StatusInternalServerError, "Failed to read MCP config: "+err.Error())
+		return
+	}
+	if err := restoreHiddenValues(&sv, existing, had); err != nil {
+		writeJSONErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	stored, err := upsertServer(sv)
 	if err != nil {
 		writeJSONErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	configChanged()
-	writeJSON(w, http.StatusOK, stored)
+	writeJSON(w, http.StatusOK, stored.withHiddenValues())
 }
 
 // HandleUpdate edits a configured server in place.
@@ -190,13 +202,17 @@ func HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSONErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := restoreHiddenValues(&sv, existing, true); err != nil {
+		writeJSONErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	stored, err := upsertServer(sv)
 	if err != nil {
 		writeJSONErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	configChanged()
-	writeJSON(w, http.StatusOK, stored)
+	writeJSON(w, http.StatusOK, stored.withHiddenValues())
 }
 
 // HandleSetEnabled enables or disables a configured MCP server.
@@ -229,6 +245,7 @@ func HandleSetEnabled(w http.ResponseWriter, r *http.Request) {
 		writeJSONErr(w, http.StatusNotFound, "server not found: "+name)
 		return
 	}
+	configChanged()
 	writeJSON(w, http.StatusOK, map[string]any{"name": name, "enabled": body.Enabled})
 }
 

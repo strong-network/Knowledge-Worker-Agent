@@ -42,8 +42,10 @@ import (
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/migration"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/obsidianinstaller"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/office"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/onboarding"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodeauth"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodeinstaller"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodev2"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/projects"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/providers"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/recall"
@@ -200,7 +202,7 @@ func main() {
 		go versions.Sweep()
 	}
 
-	if migrateMode == migration.DryRun && !layout.Migrated() {
+	if migrateMode == migration.DryRun && !layout.Migrated() && config.OpencodeMajor < 2 {
 		// It only reads, so it needn't hold up the server.
 		go func() {
 			<-opencodeEnsured // a migration would install the pinned version first too
@@ -258,7 +260,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:         addr,
-		Handler:      mux,
+		Handler:      refuseCrossOrigin(mux),
 		ReadTimeout:  0,
 		WriteTimeout: 0,
 	}
@@ -267,12 +269,18 @@ func main() {
 	// cleanly. A clean shutdown matters here because the process owns child
 	// `opencode serve` processes that must be killed (otherwise they leak on
 	// every restart/redeploy).
-	serveErr := make(chan error, 1)
-	go func() {
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			serveErr <- err
-		}
-	}()
+	serveErr := make(chan error, 3)
+	listeners, err := listenAll(config.ListenAddrs())
+	if err != nil {
+		serveErr <- err
+	}
+	for _, l := range listeners {
+		go func() {
+			if err := server.Serve(l); err != nil && err != http.ErrServerClosed {
+				serveErr <- err
+			}
+		}()
+	}
 
 	// Chat sharing: the guest surface is its own listener, never a route on this one.
 	stopGuest := func(context.Context) {}
@@ -307,6 +315,7 @@ func main() {
 	// Terminate any managed `opencode serve` child processes. db.Close runs via
 	// the deferred call above.
 	chat.CloseSupervisor()
+	opencodev2.Stop()
 }
 
 // bootstrap performs all startup work that doesn't need to block the HTTP
@@ -314,6 +323,14 @@ func main() {
 // parallel, then registers MCP defaults and discovers models. Idempotent —
 // handlers gate on opencodeReady before spawning opencode processes.
 func bootstrap() {
+	// Vertex AI (google-vertex provider): seed GOOGLE_VERTEX_PROJECT/LOCATION and
+	// GOOGLE_CLOUD_PROJECT so opencode lights up the provider. First, because
+	// opencode 2.x's one server keeps the environment it starts with, and a
+	// request from the UI can start it at any point below. The model-cache
+	// refresh after a "Sign in with Google Cloud" (gcloud ADC) flow is hooked
+	// below.
+	vertexauth.EnsureEnv()
+
 	// Auth change hooks are registered FIRST, before any of the install work
 	// below, because the UI is already reachable: main() starts the HTTP
 	// listener alongside this goroutine.
@@ -380,7 +397,14 @@ func bootstrap() {
 			fmt.Fprintf(os.Stderr, "  ⚠ Cannot determine config dir for opencode defaults\n")
 			return
 		}
-		if err := defaults.InstallPlugins(os.Stderr, dir); err != nil {
+		// The plugins are for opencode 1.x: 2.x does their work itself (see
+		// defaults.RemovePlugins). The setting says which one runs before the
+		// binary is installed; a 2.x binary given without it is detected.
+		if config.OpencodeMajor >= 2 || opencodev2.Detect(config.OpencodeBin) >= 2 {
+			if err := defaults.RemovePlugins(os.Stderr, dir); err != nil {
+				fmt.Fprintf(os.Stderr, "  ⚠ Removing opencode 1.x plugins: %v\n", err)
+			}
+		} else if err := defaults.InstallPlugins(os.Stderr, dir); err != nil {
 			fmt.Fprintf(os.Stderr, "  ⚠ Installing opencode plugins: %v\n", err)
 		}
 		if err := defaults.InstallSkills(os.Stderr, dir); err != nil {
@@ -436,7 +460,7 @@ func bootstrap() {
 	// must exist before any opencode process loads the config referencing it.
 	materializer.SetMCPKeyFile(mcp.EnsureKeyFile)
 	mcp.SetConfigChangeHook(chat.ReloadServerAgents)
-	runMaterializer()
+	matRes, matErr := runMaterializer()
 
 	// Model providers: the provider registry reads what the materializer just wrote, so
 	// it is initialised here — after materialization, before model discovery.
@@ -478,18 +502,15 @@ func bootstrap() {
 	// would be connected the moment its artifact was assigned — provisioning
 	// would mean enabling, and the user would be paying for tools nobody chose.
 	mcp.EnsureProvisionedStubs(os.Stderr)
+	if matErr == nil && !matRes.Skipped {
+		mcp.RemoveUnassignedStubs(os.Stderr)
+	}
 	// GitHub MCP has no sign-in flow we can drive: its auth server does not
 	// support OAuth dynamic client registration, and the Copilot login token
 	// lacks the scopes for repo work. A personal access token is the only path.
 	// The change hooks were registered at the top of bootstrap; this is the
 	// startup pass, for a workspace that already has a token in env or on disk.
 	ensureGitHubMCP()
-
-	// Vertex AI (google-vertex provider): seed GOOGLE_VERTEX_PROJECT/LOCATION and
-	// GOOGLE_CLOUD_PROJECT so child opencode processes light up the provider. The
-	// model-cache refresh after a "Sign in with Google Cloud" (gcloud ADC) flow
-	// is hooked above.
-	vertexauth.EnsureEnv()
 
 	if obsRes.Bin != "" {
 		mcp.EnsureOwnedServer(os.Stderr, mcp.DefaultServer{
@@ -503,6 +524,16 @@ func bootstrap() {
 
 	ensureRecallMCP()
 	mcp.WarnMissingCommands(os.Stderr)
+
+	// On opencode 2.x, model discovery has started the server by now, before
+	// the connector writes above, and it reads its configuration only when told.
+	if opencodev2.Enabled() {
+		reloadCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		if err := opencodev2.Reload(reloadCtx); err != nil {
+			fmt.Fprintf(os.Stderr, "  ⚠ OpenCode server: could not reload the configuration: %v\n", err)
+		}
+		cancel()
+	}
 
 	// Cache MCP auth status (which server is signed in) so the UI can render it
 	// instantly, and keep it fresh in the background. Checking status runs
@@ -520,6 +551,28 @@ func bootstrap() {
 	// so it only runs while the workspace is up; its first pass catches up
 	// occurrences missed while the workspace was off.
 	scheduledtasks.StartScheduler()
+
+	// opencode 2.x: start the server every opencode command goes to, so the
+	// first turn waits neither for it nor for its connectors.
+	if opencodev2.Enabled() {
+		if v := env.Get("KWA_OPENCODE_USE_SERVER"); v != "" {
+			fmt.Fprintf(os.Stderr, "  ⚠ KWA_OPENCODE_USE_SERVER=%s is ignored: server mode needs opencode 1.x\n", v)
+		}
+		startCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		if _, _, err := opencodev2.Ensure(startCtx); err != nil {
+			fmt.Fprintf(os.Stderr, "  ⚠ OpenCode server did not start: %v\n", err)
+		} else {
+			fmt.Println("  ✓ OpenCode server ready")
+			mcpAuth := filepath.Join(opencodeauth.DataDir(), "mcp-auth.json")
+			if n, err := opencodev2.ImportConnectorSignIns(startCtx, mcpAuth); err != nil {
+				fmt.Fprintf(os.Stderr, "  ⚠ Could not import the connector sign-ins of opencode 1.x: %v\n", err)
+			} else if n > 0 {
+				fmt.Printf("  ✓ Imported %d connector sign-ins of opencode 1.x\n", n)
+				go mcpauth.RefreshAllStatuses()
+			}
+		}
+		cancel()
+	}
 
 	// Server backend (KWA_OPENCODE_USE_SERVER): pre-warm a server at the workspace
 	// root so the first chat turn is fast and any auth/model problems surface
@@ -546,7 +599,7 @@ func bootstrap() {
 func serverBackendEnabled() bool {
 	switch strings.ToLower(strings.TrimSpace(env.Get("KWA_OPENCODE_USE_SERVER"))) {
 	case "1", "true", "yes", "on":
-		return true
+		return !opencodev2.Enabled()
 	default:
 		return false
 	}
@@ -624,6 +677,7 @@ func refreshCentralConfig(step func(string)) error {
 	providers.ProbeAllInBackground()
 	step("Updating connectors")
 	mcp.EnsureProvisionedStubs(os.Stderr)
+	mcp.RemoveUnassignedStubs(os.Stderr)
 	go mcpauth.RefreshAllStatuses()
 	// A running `opencode serve` reads its config only at startup.
 	chat.ReloadServerAgents()
@@ -658,12 +712,12 @@ func ensureOpencode() error {
 	}
 	skipUpdate := autoUpdate == "0" || autoUpdate == "false" || autoUpdate == "no" || autoUpdate == "off"
 
-	installDir := config.EnvOrDefault("KWA_OPENCODE_INSTALL_DIR", opencodeinstaller.DefaultInstallDir)
+	installDir := config.OpencodeInstallDir()
 
 	if skipUpdate {
 		if !opencodeinstaller.VerifyBin(config.OpencodeBin) {
 			fmt.Fprintf(os.Stderr, "  ⤓ OpenCode binary not usable at: %s — installing ...\n", config.OpencodeBin)
-			installed, ierr := opencodeinstaller.Install(os.Stderr, opencodeinstaller.InstallOptions{InstallDir: installDir})
+			installed, ierr := opencodeinstaller.Install(os.Stderr, opencodeinstaller.InstallOptions{InstallDir: installDir, Major: config.OpencodeMajor})
 			if ierr != nil {
 				return fmt.Errorf("auto-install failed: %w", ierr)
 			}
@@ -675,6 +729,7 @@ func ensureOpencode() error {
 	res, err := opencodeinstaller.Ensure(os.Stderr, opencodeinstaller.EnsureOptions{
 		CurrentBin: config.OpencodeBin,
 		InstallDir: installDir,
+		Major:      config.OpencodeMajor,
 	})
 	if err != nil {
 		return fmt.Errorf("install/update failed: %w", err)
@@ -689,6 +744,7 @@ func verifyOpencodeRuns() error {
 	if !opencodeinstaller.VerifyBin(config.OpencodeBin) {
 		return fmt.Errorf("opencode binary not usable at %s", config.OpencodeBin)
 	}
+	opencodev2.Detect(config.OpencodeBin)
 	return nil
 }
 
@@ -846,19 +902,21 @@ func preferredDefaultProvider(authenticated []string) string {
 // reads what the materializer just wrote.
 func initProviderRegistry() {
 	providers.RegisterBuiltin(providers.Builtin{
-		ID:        vertexauth.Provider,
-		Label:     "Google Cloud (Vertex AI)",
-		AuthType:  providers.AuthGcloudADC,
-		CheckAuth: func() bool { return vertexauth.CheckStatus().Authenticated },
+		ID:          vertexauth.Provider,
+		Label:       "Google Cloud (Vertex AI)",
+		AuthType:    providers.AuthGcloudADC,
+		Description: "Claude and Gemini models through your Google Cloud project.",
+		CheckAuth:   func() bool { return vertexauth.CheckStatus().Authenticated },
 		// `opencode models google-vertex` lists Google's whole catalogue, which
 		// is wider than what a project, or a gateway in front of Vertex, serves.
 		DiscoverModels: discoverVertexModels,
 	})
 	providers.RegisterBuiltin(providers.Builtin{
-		ID:        opencodeauth.Provider,
-		Label:     "GitHub Copilot",
-		AuthType:  providers.AuthOAuthDevice,
-		CheckAuth: func() bool { return opencodeauth.CheckStatus().Authenticated },
+		ID:          opencodeauth.Provider,
+		Label:       "GitHub Copilot",
+		AuthType:    providers.AuthOAuthDevice,
+		Description: "Claude, GPT and Gemini models through your GitHub Copilot subscription.",
+		CheckAuth:   func() bool { return opencodeauth.CheckStatus().Authenticated },
 	})
 
 	providers.SetCredentialChecker(opencodeauth.HasCredential)
@@ -1081,6 +1139,12 @@ func registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/git/commit", gitops.HandleCommit)
 	mux.HandleFunc("POST /api/git/clone", gitops.HandleClone)
 	mux.HandleFunc("GET /api/git/repos", gitops.HandleDiscoverRepos)
+
+	// The setup guide and what's new: what the user closed, hid or was told about.
+	mux.HandleFunc("GET /api/onboarding", onboarding.HandleGet)
+	mux.HandleFunc("POST /api/onboarding/guide", onboarding.HandleGuide)
+	mux.HandleFunc("POST /api/onboarding/whats-new/later", onboarding.HandleLater)
+	mux.HandleFunc("POST /api/onboarding/seen", onboarding.HandleSeen)
 
 	// Model providers. One registry endpoint replaces the per-provider
 	// status routes for discovery purposes: the Accounts modal, the model

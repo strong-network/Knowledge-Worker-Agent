@@ -110,6 +110,14 @@ func (h *Handlers) create(w http.ResponseWriter, r *http.Request) {
 	}
 	taskID := chat.NewUUID()
 	workdir := strings.TrimSpace(p.Workdir)
+	if workdir != "" {
+		abs, ok := layout.Reachable(workdir)
+		if !ok {
+			writeError(w, http.StatusBadRequest, layout.UnreachableMessage)
+			return
+		}
+		workdir = abs
+	}
 	if workdir == "" {
 		provisioned, err := provisionTaskWorkdir(label, taskID)
 		if err != nil {

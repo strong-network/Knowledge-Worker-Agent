@@ -36,6 +36,7 @@
     }
   },
   "kwa": {
+    "description": "Acme's own models, hosted in your region.",
     "auth": {
       // "managed": you provide the key. "user-key": each user adds their own.
       "type": "managed",

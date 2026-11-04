@@ -370,6 +370,41 @@ func TestHelpURLIsRestrictedToHTTPS(t *testing.T) {
 	}
 }
 
+// The setup guide and what's new explain each connector in one sentence: the
+// artifact's own, else the catalogue's for a built-in. Only the catalogue's
+// current servers count as built in; a retired one or one the user added
+// doesn't.
+func TestConnectorDescriptionsAndBuiltins(t *testing.T) {
+	withGlobalConfig(t, `{"mcp":{`+
+		`"mine":{"type":"remote","url":"https://mine.example.com/mcp"},`+
+		`"github":{"type":"remote","url":"https://api.githubcopilot.com/mcp"},`+
+		`"figma":{"type":"remote","url":"https://mcp.figma.com/mcp"}}}`)
+	withPlatformConfig(t, `{"mcp":{`+
+		`"acme":{"type":"remote","url":"https://mcp.acme.example.com/mcp"},`+
+		`"atlassian":{"type":"remote","url":"https://mcp.atlassian.com/v1/mcp/authv2"}}}`,
+		`{"servers":[{"name":"acme","auth":{"type":"oauth"},"description":"  Find Acme orders. "},`+
+			`{"name":"atlassian","auth":{"type":"oauth"}}]}`)
+
+	for _, tc := range []struct {
+		name, description string
+		builtin           bool
+	}{
+		{"acme", "Find Acme orders.", false},
+		{"atlassian", AtlassianDefault.Description, true},
+		{"github", GitHubDefault.Description, true},
+		{"figma", "", false},
+		{"mine", "", false},
+	} {
+		sv := findServer(t, tc.name)
+		if sv.Description != tc.description || sv.Builtin != tc.builtin {
+			t.Errorf("%s: description %q, builtin %v; want %q, %v", tc.name, sv.Description, sv.Builtin, tc.description, tc.builtin)
+		}
+	}
+	if AtlassianDefault.Description == "" || GitHubDefault.Description == "" {
+		t.Error("a built-in connector has no description")
+	}
+}
+
 // The platform owns what a server IS; the user owns whether it RUNS. opencode
 // merges the two files per key, and this mirrors it.
 func TestPlatformOwnsTheDefinitionAndTheGlobalOwnsTheSwitch(t *testing.T) {
@@ -446,4 +481,75 @@ func errorOf(t *testing.T, body []byte) string {
 		t.Fatalf("parse error body %q: %v", body, err)
 	}
 	return doc.Error
+}
+
+// An administrator who stops assigning a connector takes it away. The switch
+// left in the user's Global then defines nothing: it goes, and until it does
+// the list doesn't show it as a broken local server.
+func TestUnassignedServersLoseTheirSwitch(t *testing.T) {
+	path := withGlobalConfig(t, `{"mcp":{
+		"atlassian":{"enabled":true},
+		"Sentry":{"enabled":true},
+		"ramp-demo":{"enabled":false},
+		"mine":{"type":"remote","url":"https://mine.example.com/mcp","enabled":false},
+		"recall":{"type":"local","command":["kwa","mcp-recall"],"enabled":true}
+	}}`)
+	withPlatformConfig(t, `{"mcp":{"atlassian":{"type":"remote","url":"https://mcp.atlassian.com/v1/mcp/authv2"}}}`, "")
+
+	views, err := listServers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := map[string]bool{}
+	for _, v := range views {
+		listed[v.Name] = true
+	}
+	if listed["Sentry"] || listed["ramp-demo"] || !listed["atlassian"] || !listed["mine"] || !listed["recall"] {
+		t.Errorf("listed %v; want atlassian, mine and recall only", names(views))
+	}
+
+	var log strings.Builder
+	RemoveUnassignedStubs(&log)
+	block := readGlobal(t, path)
+	for _, gone := range []string{"Sentry", "ramp-demo"} {
+		if _, ok := block[gone]; ok {
+			t.Errorf("kept the switch of %q, which is no longer assigned", gone)
+		}
+	}
+	for _, keep := range []string{"atlassian", "mine", "recall"} {
+		if _, ok := block[keep]; !ok {
+			t.Errorf("removed %q", keep)
+		}
+	}
+	if on, _ := block["atlassian"].(map[string]any)["enabled"].(bool); !on {
+		t.Error("lost the user's choice for an assigned server")
+	}
+	if !strings.Contains(log.String(), "ramp-demo") || !strings.Contains(log.String(), "Sentry") {
+		t.Errorf("log doesn't name what it removed: %q", log.String())
+	}
+}
+
+// The administrator assigns no connector at all: every switch goes.
+func TestNothingAssignedRemovesEverySwitch(t *testing.T) {
+	path := withGlobalConfig(t, `{"mcp":{"sentry":{"enabled":true},"mine":{"type":"remote","url":"https://mine.example.com/mcp"}}}`)
+	withPlatformConfig(t, `{"agent":{}}`, "")
+	RemoveUnassignedStubs(io.Discard)
+	block := readGlobal(t, path)
+	if _, ok := block["sentry"]; ok {
+		t.Error("kept a switch with nothing assigned")
+	}
+	if _, ok := block["mine"]; !ok {
+		t.Error("removed the user's own server")
+	}
+}
+
+// Without a platform config nothing tells assigned from unassigned, so every
+// switch stays.
+func TestNoPlatformConfigRemovesNothing(t *testing.T) {
+	path := withGlobalConfig(t, `{"mcp":{"sentry":{"enabled":true}}}`)
+	withPlatformConfig(t, "", "")
+	RemoveUnassignedStubs(io.Discard)
+	if _, ok := readGlobal(t, path)["sentry"]; !ok {
+		t.Error("removed a switch without knowing what is assigned")
+	}
 }

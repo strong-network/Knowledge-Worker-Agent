@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package opencodeembed carries an optional, build-time-supplied copy of the
-// OpenCode release tarball so a workspace with no egress to github.com can
-// still get a working opencode binary.
+// pinned opencode 2.x package tarball, so a workspace with no egress to the npm
+// registry can still get a working opencode binary.
 //
 // The asset is deliberately NOT committed: `asset/` holds only a .gitkeep in
 // source control, and the release build drops the real tarball in before

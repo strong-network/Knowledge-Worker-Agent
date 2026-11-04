@@ -6,9 +6,7 @@ import { ref } from 'vue'
 import type { PermissionRequest } from '../../stores/chat'
 import type { PermissionResponse } from '../../api'
 
-// allowAlways is false for a guest of a shared chat: "always" is a standing
-// rule in the owner's workspace, which outlasts the share.
-withDefaults(defineProps<{ permission: PermissionRequest; allowAlways?: boolean }>(), { allowAlways: true })
+defineProps<{ permission: PermissionRequest }>()
 const emit = defineEmits<{ respond: [value: PermissionResponse] }>()
 const answered = ref(false)
 
@@ -31,7 +29,7 @@ function respond(value: PermissionResponse) {
     </ul>
     <div class="permission-actions">
       <button class="perm-btn allow" :disabled="answered" @click="respond('once')">Allow once</button>
-      <button v-if="allowAlways" class="perm-btn always" :disabled="answered" @click="respond('always')">Always allow</button>
+      <button class="perm-btn always" :disabled="answered" @click="respond('always')">Always allow</button>
       <button class="perm-btn reject" :disabled="answered" @click="respond('reject')">Deny</button>
     </div>
   </div>

@@ -4,6 +4,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -307,6 +308,93 @@ func TestPromptWithSessionPreambleIncludesPlanning(t *testing.T) {
 	}
 }
 
+func TestPromptWithSessionPreambleIncludesDisplay(t *testing.T) {
+	OwnerFullName = ""
+	OwnerEmail = ""
+
+	block := DisplayInstruction()
+	for _, want := range []string{"[System — chat display]", "```mermaid", "```svg", "relative to the folder", "one of your skills draws diagrams or charts", "quick sketch", "link it as [name](path)"} {
+		if !strings.Contains(block, want) {
+			t.Errorf("expected display block to mention %q, got %q", want, block)
+		}
+	}
+
+	// Owner and guest prompts both get it, ahead of the project instructions,
+	// which stay closest to the prompt.
+	cfg := SessionConfig{Workdir: "/home/developer/proj", ProjectInstructions: "always cite sources"}
+	for _, got := range []string{
+		PromptWithSessionPreamble("do the thing", cfg),
+		PromptWithSessionPreambleAs("do the thing", cfg, "Alex Example"),
+	} {
+		iDisplay := strings.Index(got, "[System — chat display]")
+		iProject := strings.Index(got, "[System — project instructions]")
+		if iDisplay < 0 || iProject < 0 || iDisplay > iProject {
+			t.Errorf("expected display block before project instructions, got %q", got)
+		}
+	}
+}
+
+// On 2.x the turn says how to get a file into Code Mode, at the port the server uses.
+func TestPromptWithSessionPreambleIncludesCodeModeOn2x(t *testing.T) {
+	prevMajor, prevPort := OpencodeMajor, Port
+	t.Cleanup(func() { OpencodeMajor, Port = prevMajor, prevPort })
+	cfg := SessionConfig{Workdir: "/home/developer/proj", ProjectInstructions: "always cite sources"}
+
+	OpencodeMajor = 1
+	if got := PromptWithSessionPreamble("do the thing", cfg); strings.Contains(got, "[System — Code Mode]") {
+		t.Errorf("1.x has no Code Mode, got %q", got)
+	}
+
+	OpencodeMajor, Port = 2, 9123
+	if block := CodeModeInstruction(); !strings.Contains(block, `fetch("http://127.0.0.1:9123/api/files/raw?path=" + encodeURIComponent(`) {
+		t.Errorf("expected a fetch from this server's raw file route, got %q", block)
+	}
+	for _, got := range []string{
+		PromptWithSessionPreamble("do the thing", cfg),
+		PromptWithSessionPreambleAs("do the thing", cfg, "Alex Example"),
+	} {
+		iDisplay := strings.Index(got, "[System — chat display]")
+		iCode := strings.Index(got, "[System — Code Mode]")
+		iProject := strings.Index(got, "[System — project instructions]")
+		if iCode < 0 || iCode < iDisplay || iCode > iProject {
+			t.Errorf("expected the Code Mode block between display and project instructions, got %q", got)
+		}
+	}
+}
+
+// On 2.x a chat is told how asking works and when to ask; a scheduled run, on
+// any version, that no one is there to answer.
+func TestQuestionsInstruction(t *testing.T) {
+	prev := OpencodeMajor
+	t.Cleanup(func() { OpencodeMajor = prev })
+	cfg := SessionConfig{Workdir: "/home/developer/proj", ProjectInstructions: "always cite sources"}
+	unattended := cfg
+	unattended.Unattended = true
+
+	OpencodeMajor = 1
+	if got := QuestionsInstruction(cfg); got != "" {
+		t.Errorf("1.x chat: %q", got)
+	}
+	if got := QuestionsInstruction(unattended); !strings.Contains(got, "[System — unattended run]") || !strings.Contains(got, "don't ask questions") {
+		t.Errorf("1.x scheduled run: %q", got)
+	}
+
+	OpencodeMajor = 2
+	for _, want := range []string{"[System — questions]", "question tool", "next message", "reports the question as cancelled", "say what you assumed"} {
+		if got := QuestionsInstruction(cfg); !strings.Contains(got, want) {
+			t.Errorf("2.x chat: no %q in %q", want, got)
+		}
+	}
+	if got := QuestionsInstruction(unattended); strings.Contains(got, "question tool") {
+		t.Errorf("2.x scheduled run is told to ask: %q", got)
+	}
+	got := PromptWithSessionPreamble("do the thing", cfg)
+	iCode, iAsk, iProject := strings.Index(got, "[System — Code Mode]"), strings.Index(got, "[System — questions]"), strings.Index(got, "[System — project instructions]")
+	if iAsk < 0 || iAsk < iCode || iAsk > iProject {
+		t.Errorf("expected the questions block between Code Mode and project instructions, got %q", got)
+	}
+}
+
 func TestForcedSkillInstruction(t *testing.T) {
 	got := ForcedSkillInstruction(ForcedSkill{
 		Name:     "ux-writing",
@@ -488,8 +576,11 @@ func TestInit_HostDefaultsToLoopback(t *testing.T) {
 
 	Init()
 
-	if Host != "127.0.0.1" {
-		t.Errorf("expected Host=127.0.0.1, got %q", Host)
+	if Host != "localhost" {
+		t.Errorf("expected Host=localhost, got %q", Host)
+	}
+	if got := strings.Join(ListenAddrs(), " "); got != fmt.Sprintf("127.0.0.1:%d [::1]:%d", Port, Port) {
+		t.Errorf("expected both loopback addresses, got %s", got)
 	}
 }
 
@@ -500,6 +591,9 @@ func TestInit_HostRespectsEnv(t *testing.T) {
 
 	if Host != "0.0.0.0" {
 		t.Errorf("expected Host=0.0.0.0, got %q", Host)
+	}
+	if got := strings.Join(ListenAddrs(), " "); got != fmt.Sprintf("0.0.0.0:%d", Port) {
+		t.Errorf("expected only the address set, got %s", got)
 	}
 }
 

@@ -108,6 +108,41 @@ func TestStream_WaitReturnsOnContextCancel(t *testing.T) {
 	}
 }
 
+// A turn that ended at the agent's questions still waits on the owner; one
+// that ended on a permission request no longer can be answered.
+func TestWaitingOnOwner(t *testing.T) {
+	const sid = "test-waiting"
+	defer Streams.Delete(sid)
+	frames := func(done bool, types ...string) {
+		s := newStream(sid)
+		for _, ty := range types {
+			s.Append(map[string]any{"type": ty})
+		}
+		if done {
+			s.Finish()
+		}
+		Streams.Store(sid, s)
+	}
+	for _, c := range []struct {
+		done  bool
+		types []string
+		want  bool
+	}{
+		{false, []string{"chunk", "question"}, true},
+		{true, []string{"chunk", "question", "usage", "title", "done"}, true},
+		{true, []string{"question", "chunk", "done"}, false},
+		{false, []string{"tool_call", "permission"}, true},
+		{true, []string{"permission", "usage", "done"}, false},
+		{false, []string{"permission", "permission_answered"}, false},
+		{true, []string{"chunk", "usage", "done"}, false},
+	} {
+		frames(c.done, c.types...)
+		if got := WaitingOnOwner(sid); got != c.want {
+			t.Errorf("done=%v %v: %v, want %v", c.done, c.types, got, c.want)
+		}
+	}
+}
+
 func TestIsStreamingAndGetStream(t *testing.T) {
 	const sid = "test-streaming-flag"
 	defer Streams.Delete(sid)

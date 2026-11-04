@@ -162,3 +162,19 @@ func TestCentralMCPLeavesProvisionedStubsAloneAndUnreported(t *testing.T) {
 		}
 	}
 }
+
+// A catalogue name whose Global entry is only a switch was assigned by an
+// administrator once. Retiring the catalogue leaves it to
+// RemoveUnassignedStubs, and doesn't report it as the user's edit.
+func TestCentralMCPDoesNotReportASwitchAsTheUsersEdit(t *testing.T) {
+	path := withGlobalConfig(t, `{"mcp":{"sentry":{"enabled":false},"microsoft-learn":{"enabled":true}}}`)
+	t.Setenv(config.EnvCentralConfig, "true")
+	var log strings.Builder
+	EnsureDefaults(&log)
+	if strings.Contains(log.String(), "sentry") || strings.Contains(log.String(), "microsoft-learn") {
+		t.Errorf("reported a leftover switch as a server the user enabled or edited:\n%s", log.String())
+	}
+	if len(readGlobal(t, path)) != 2 {
+		t.Error("the catalogue clean-up removed a switch; that is RemoveUnassignedStubs' job")
+	}
+}

@@ -6,8 +6,9 @@ package opencodeauth
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"strings"
+
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodev2"
 )
 
 // SignOut discards the stored GitHub Copilot credentials so another provider
@@ -17,7 +18,15 @@ func SignOut() error {
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	defer cancel()
 
-	out, err := exec.CommandContext(ctx, resolveBin(), "auth", "logout", Provider).CombinedOutput()
+	// 2.x's `auth logout` asks which account to sign out of; its API doesn't.
+	// auth.json goes too, which 1.x would read if the installation went back.
+	if opencodev2.Enabled() {
+		if err := opencodev2.RemoveCredentials(ctx, Provider); err != nil {
+			return err
+		}
+		return RemoveAPIKey(Provider)
+	}
+	out, err := opencodev2.Cmd(ctx, resolveBin(), "auth", "logout", Provider).CombinedOutput()
 	if err == nil {
 		return nil
 	}

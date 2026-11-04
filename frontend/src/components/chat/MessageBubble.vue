@@ -3,7 +3,8 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUpdated, nextTick } from 'vue'
-import { renderMarkdown, highlightCode } from '../../composables/useMarkdown'
+import { highlightCode } from '../../composables/useMarkdown'
+import { renderReply, hydrateReply, onReplyClick, forgetMissingFiles, type ChatFiles } from '../../utils/replyVisuals'
 import { formatRelativeTime, formatAbsoluteTime } from '../../utils/time'
 import { useNow } from '../../composables/useNow'
 import { toolActionLabel, toolSubject } from '../../utils/toolLabels'
@@ -53,6 +54,8 @@ const props = defineProps<{
   finished?: boolean
   // The user is writing the next prompt.
   typing?: boolean
+  // Where images in a reply are found: the chat's files.
+  files?: ChatFiles
 }>()
 
 // The running label has two phases, and the avatar follows them. Until the
@@ -264,8 +267,13 @@ function toggleBar(key: ToolBar['key']) {
 
 function getRendered(): string {
   if (props.role === 'user') return ''
-  return renderMarkdown(props.content)
+  return renderReply(props.content, props.files, !!props.streaming)
 }
+
+// Before the finished reply renders, so the files the turn wrote are found.
+watch(() => props.streaming, (now, was) => {
+  if (was && !now) forgetMissingFiles()
+})
 
 function toggleToolDetail(key: string) {
   if (expandedTools.value.has(key)) {
@@ -318,6 +326,7 @@ onUpdated(() => {
   nextTick(() => {
     if (bubbleEl.value && props.role === 'assistant') {
       highlightCode(bubbleEl.value)
+      hydrateReply(bubbleEl.value, props.files)
     }
   })
 })
@@ -325,6 +334,7 @@ onUpdated(() => {
 onMounted(() => {
   if (bubbleEl.value && props.role === 'assistant') {
     highlightCode(bubbleEl.value)
+    hydrateReply(bubbleEl.value, props.files)
   }
 })
 </script>
@@ -442,7 +452,7 @@ onMounted(() => {
       v-if="role === 'user' || content || streaming"
     >
       <template v-if="role === 'user'">{{ content }}</template>
-      <div v-else v-html="getRendered()"></div>
+      <div v-else v-html="getRendered()" @click="onReplyClick($event, files)"></div>
       <span v-if="streaming" class="typing-cursor">
         <span class="tspinner" aria-hidden="true"></span>
         <span class="tlabel">{{ busyLabel }}</span>
@@ -541,6 +551,47 @@ onMounted(() => {
 .msg-bubble :deep(a) { color: var(--blue); text-decoration: none; }
 .msg-bubble :deep(a:hover) { text-decoration: underline; }
 .msg-bubble :deep(hr) { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+
+/* Diagrams, SVG and images (utils/replyVisuals.ts). A diagram follows the
+   theme; SVG keeps a white card, since its colours were picked for one. */
+.msg-bubble :deep(.kwa-visual) { margin: 12px 0; }
+.msg-bubble :deep(.kwa-visual-view img) { display: block; max-width: 100%; height: auto; }
+.msg-bubble :deep(.kwa-visual[data-kind="svg"] .kwa-visual-view img) { background: #fff; border-radius: 8px; padding: 8px; }
+.msg-bubble :deep(.kwa-visual-note) { font-size: 13px; color: var(--text2); }
+.msg-bubble :deep(.kwa-visual-note:empty) { display: none; }
+.msg-bubble :deep(.kwa-visual-source) { margin: 6px 0 0; }
+.msg-bubble :deep(.kwa-visual-source code) { white-space: pre; }
+.msg-bubble :deep(.kwa-visual:is([data-state="new"], [data-state="pending"], [data-state="done"]) .kwa-visual-source) { display: none; }
+.msg-bubble :deep(.kwa-visual:not([data-state="done"]) .kwa-visual-view) { display: none; }
+.msg-bubble :deep(.kwa-visual[data-state="done"] .kwa-visual-note) { display: none; }
+.msg-bubble :deep(.kwa-visual[data-state="open"] .kwa-visual-bar) { display: none; }
+.msg-bubble :deep(.kwa-visual[data-state="failed"] [data-action="download"]) { display: none; }
+.msg-bubble :deep(.kwa-visual-bar) { display: flex; gap: 6px; margin-top: 6px; }
+.msg-bubble :deep(.kwa-visual-btn) {
+  font: inherit; font-size: 12px; line-height: 1; color: var(--text2);
+  background: transparent; border: 1px solid var(--border); border-radius: 6px;
+  padding: 5px 10px; cursor: pointer;
+}
+.msg-bubble :deep(.kwa-visual-btn:hover) { background: var(--hover); color: var(--text); }
+.msg-bubble :deep(.kwa-file-image) { display: inline-block; max-width: 100%; margin: 6px 0; vertical-align: top; }
+.msg-bubble :deep(img) { max-width: 100%; height: auto; }
+.msg-bubble :deep(.kwa-file-image > img) { display: block; border-radius: 6px; }
+.msg-bubble :deep(.kwa-web-image) {
+  font: inherit; font-size: 13px; color: var(--text2); background: var(--surface2);
+  border: 1px dashed var(--border); border-radius: 6px; padding: 8px 12px; cursor: pointer;
+}
+.msg-bubble :deep(.kwa-web-image:hover) { color: var(--text); border-color: var(--text3); }
+.msg-bubble :deep(.kwa-image-note) { font-size: 13px; color: var(--text2); font-style: italic; }
+/* A file in the chat's folder, opened beside the chat: a button that reads as
+   a link. Code naming one keeps its text colour, which the link blue would
+   make hard to read on the code's background, and is underlined instead. */
+.msg-bubble :deep(.kwa-file-link) {
+  font: inherit; color: var(--blue); background: none; border: 0; padding: 0;
+  cursor: pointer; text-align: inherit;
+}
+.msg-bubble :deep(.kwa-file-link:hover) { text-decoration: underline; }
+.msg-bubble :deep(.kwa-file-link code) { color: var(--text); text-decoration: underline var(--blue); text-underline-offset: 3px; }
+.msg-bubble :deep(.kwa-file-link:hover code) { border-color: var(--blue); }
 
 /* Shown while the turn is still running: one spinner and a short label. The
    tool list above reports the detail, so this only says which phase the turn

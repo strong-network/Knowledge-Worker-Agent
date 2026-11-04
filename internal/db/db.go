@@ -940,9 +940,8 @@ func ensureSessionsColumns() error {
 		"tidy_snooze_until": "ALTER TABLE sessions ADD COLUMN tidy_snooze_until TEXT NOT NULL DEFAULT ''",
 		// Chat sharing: NULL means not shared; the only source of truth for sharing.
 		"shared_at": "ALTER TABLE sessions ADD COLUMN shared_at DATETIME",
-		// What guests may do in a shared chat, off by default.
-		"share_allow_permissions": "ALTER TABLE sessions ADD COLUMN share_allow_permissions INTEGER NOT NULL DEFAULT 0",
-		"share_allow_files":       "ALTER TABLE sessions ADD COLUMN share_allow_files INTEGER NOT NULL DEFAULT 0",
+		// Whether guests may work with files in a shared chat, off by default.
+		"share_allow_files": "ALTER TABLE sessions ADD COLUMN share_allow_files INTEGER NOT NULL DEFAULT 0",
 		// Temporary chats: the last message from the user or the agent, or when the
 		// chat was made temporary. A temporary chat is deleted RetentionTemporary after it.
 		"activity_at": "ALTER TABLE sessions ADD COLUMN activity_at DATETIME",

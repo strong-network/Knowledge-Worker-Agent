@@ -932,9 +932,15 @@ export interface UploadResponse {
 }
 
 export async function browseFiles(path: string): Promise<FileEntry[]> {
+  return browseEntries(await browseFolder(path))
+}
+
+// browseFolder lists a folder. Its parent is "" at the top of what can be
+// opened, and a folder out of reach is refused with the reason.
+export async function browseFolder(path: string): Promise<BrowseResponse> {
   const res = await fetch(`${BASE}/api/browse?path=${encodeURIComponent(path)}`)
-  if (!res.ok) throw new Error(`Failed to browse: ${res.statusText}`)
-  return browseEntries(await res.json())
+  if (!res.ok) throw new Error((await res.text().catch(() => '')).trim() || `Failed to browse: ${res.statusText}`)
+  return res.json()
 }
 
 // browseEntries flattens a browse answer into one list, folders first.
@@ -1327,8 +1333,7 @@ export interface ShareState {
   participants: ShareParticipant[]
   // Why the link cannot be shown, when the chat is shared.
   problem?: string
-  // What people in the chat may do; both off by default.
-  allow_permissions: boolean
+  // Whether people in the chat may work with files; off by default.
   allow_files: boolean
   // The folder guests see with files on, or why files can't be turned on.
   files_folder?: string
@@ -1336,7 +1341,6 @@ export interface ShareState {
 }
 
 export interface ShareOptions {
-  allow_permissions?: boolean
   allow_files?: boolean
 }
 
@@ -1660,6 +1664,10 @@ export interface McpServer {
   // Connector API keys: whether an 'api-key' server has your key stored. The key itself is
   // never sent back.
   key_saved?: boolean
+  // One sentence on what the connector gives you, from the artifact or the catalogue.
+  description?: string
+  // From Knowledge Worker Agent's own catalogue (the starter set and GitHub).
+  builtin?: boolean
   [key: string]: any
 }
 
@@ -1721,6 +1729,8 @@ export interface McpProbeRequest {
   command?: string
   args?: string[]
   env?: Record<string, string>
+  /** The server being edited, whose saved values a check may use. */
+  name?: string
 }
 
 export interface McpProbeResult {
@@ -1935,6 +1945,8 @@ export interface ModelProvider {
   reachabilityNote?: string
   /** RFC 3339, absent when never probed. */
   reachabilityCheckedAt?: string
+  /** One sentence on what the provider gives you. */
+  description?: string
   /** Whether this workspace can discard the provider's credentials itself. */
   canSignOut?: boolean
   /** Regional endpoints the administrator offers for this provider. */
@@ -2844,4 +2856,45 @@ export async function snoozeTidyChats(ids: string[]): Promise<number> {
   if (!res.ok) throw new Error(`Failed to defer: ${res.statusText}`)
   const data = await res.json()
   return data.snoozed || 0
+}
+
+// ── Setup guide and what's new ──
+//
+// What the two modals remember between page loads. "Closed" and "later" are
+// for this start of Knowledge Worker Agent only.
+
+export interface OnboardingState {
+  guideHidden: boolean
+  guideClosed: boolean
+  whatsNewLater: boolean
+  seenConnectors: string[]
+  seenProviders: string[]
+}
+
+export async function fetchOnboarding(): Promise<OnboardingState> {
+  const res = await fetch(`${BASE}/api/onboarding`)
+  if (!res.ok) throw new Error(`Failed to load the setup state: ${res.statusText}`)
+  return res.json()
+}
+
+async function postOnboarding(path: string, body: unknown = {}): Promise<OnboardingState> {
+  const res = await fetch(`${BASE}/api/onboarding${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(`Failed to save the setup state: ${res.statusText}`)
+  return res.json()
+}
+
+export function closeSetupGuide(hide: boolean): Promise<OnboardingState> {
+  return postOnboarding('/guide', { hide })
+}
+
+export function remindWhatsNewLater(): Promise<OnboardingState> {
+  return postOnboarding('/whats-new/later')
+}
+
+export function markOnboardingSeen(connectors: string[], providers: string[]): Promise<OnboardingState> {
+  return postOnboarding('/seen', { connectors, providers })
 }

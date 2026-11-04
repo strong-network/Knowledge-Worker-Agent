@@ -149,8 +149,6 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /guest/api/sessions/{id}/history", s.history)
 	mux.HandleFunc("GET /guest/api/sessions/{id}/events", s.events)
 	mux.HandleFunc("POST /guest/api/chat", s.chat)
-	mux.HandleFunc("GET /guest/api/sessions/{id}/permission", s.pendingPermission)
-	mux.HandleFunc("POST /guest/api/sessions/{id}/permission", s.answerPermission)
 	mux.HandleFunc("GET /guest/api/sessions/{id}/files/browse", s.filesBrowse)
 	mux.HandleFunc("GET /guest/api/sessions/{id}/files/view", s.filesView)
 	mux.HandleFunc("GET /guest/api/sessions/{id}/files/raw", s.filesRaw)
@@ -262,11 +260,10 @@ func (s *server) meta(w http.ResponseWriter, r *http.Request) {
 	cfg, _ := db.GetSessionConfig(sid)
 	o := db.SessionShareOptions(sid)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"session_id":        sid,
-		"title":             cfg.Label,
-		"owner_name":        config.OwnerFullName,
-		"allow_permissions": o.AllowPermissions,
-		"allow_files":       o.AllowFiles,
+		"session_id":  sid,
+		"title":       cfg.Label,
+		"owner_name":  config.OwnerFullName,
+		"allow_files": o.AllowFiles,
 	})
 }
 
@@ -297,7 +294,7 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 	}
 	sessions.ServeEvents(w, r, sid, sessions.EventsOptions{
 		GuestID:      id.ID,
-		Filter:       frameFor(sid),
+		Filter:       Frame,
 		StillAllowed: func() bool { return db.IsSessionShared(sid) },
 		Options:      func() map[string]any { return optionsFrame(sid) },
 	})

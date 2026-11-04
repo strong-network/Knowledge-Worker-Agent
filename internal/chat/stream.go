@@ -291,8 +291,18 @@ func runDispatcher(sessionID string, cfg config.SessionConfig, events <-chan *Ev
 
 		case "question":
 			sawQuestion = true
+			if len(event.Questions) > 0 {
+				text := questionsMarkdown(event.Questions)
+				if !endsWithBlankLine(&fullResponse) {
+					text = "\n\n" + text
+				}
+				pendingSeparator = false
+				fullResponse.WriteString(text)
+				s.Append(map[string]any{"type": "chunk", "text": text})
+			}
 			s.Append(map[string]any{
 				"type": "question", "question": event.Question, "choices": event.Choices,
+				"questions": event.Questions,
 			})
 
 		case "permission":
@@ -417,8 +427,9 @@ func IsStreaming(sessionID string) bool {
 	return !done
 }
 
-// WaitingOnOwner reports whether the session's running turn has stopped on the
-// owner: its latest frame asks a question, a permission or a connector sign-in.
+// WaitingOnOwner reports whether the session's turn has stopped on the owner:
+// its latest frame asks a question, a permission or a connector sign-in. A turn
+// that ended at the agent's questions waits until the next turn starts.
 func WaitingOnOwner(sessionID string) bool {
 	val, ok := Streams.Load(sessionID)
 	if !ok {
@@ -427,12 +438,16 @@ func WaitingOnOwner(sessionID string) bool {
 	s := val.(*Stream)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.done || len(s.log) == 0 {
+	for i := len(s.log) - 1; i >= 0; i-- {
+		switch s.log[i]["type"] {
+		case "usage", "done", "title":
+			continue
+		case "question":
+			return true
+		case "permission", "mcp_auth_required":
+			return !s.done
+		}
 		return false
-	}
-	switch s.log[len(s.log)-1]["type"] {
-	case "question", "permission", "mcp_auth_required":
-		return true
 	}
 	return false
 }
