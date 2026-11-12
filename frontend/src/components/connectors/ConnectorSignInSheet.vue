@@ -44,6 +44,11 @@ let poll: number | undefined
 
 const url = computed(() => info.value?.verify_url || '')
 const done = computed(() => !!info.value?.done)
+// Knowledge Worker Agent signs in to Microsoft itself; opencode does the rest.
+const microsoft = computed(() => info.value?.method === 'entra')
+const signedInText = computed(() => info.value?.account
+  ? `Signed in to ${title.value} as ${info.value.account}`
+  : `Signed in to ${title.value}`)
 const succeeded = computed(() => done.value && !!info.value?.success && confirmed.value !== false)
 const failed = computed(() => !!startError.value || (done.value && !succeeded.value))
 
@@ -89,7 +94,7 @@ const liveStatus = computed(() => {
   if (confirming.value) return `Checking that ${title.value} is connected…`
   switch (phase.value) {
     case 'connected':
-      return `Signed in to ${title.value}. The assistant can use it now.`
+      return `${signedInText.value}. The assistant can use it now.`
     case 'working':
       return 'Sign-in page ready. Open it, sign in, then paste the address you land on.'
     default:
@@ -190,15 +195,16 @@ function problemWith(raw: string): string {
   const host = u.hostname.toLowerCase()
   const loopback = host === 'localhost' || host === '::1' || /^127\./.test(host)
   if (!loopback) {
-    return 'That is a different address. The one you need starts with http://127.0.0.1 — '
+    return `That is a different address. The one you need starts with ${callback.value?.origin || 'http://127.0.0.1'} — `
       + "it's in the address bar of the tab that failed to load."
   }
   const want = callback.value
   if (want ? u.port !== want.port || u.pathname !== want.pathname : !u.pathname.includes('/oauth/callback')) {
     return 'That looks like a different page. The address you need is the one your browser '
-      + 'landed on after you chose Allow.'
+      + (microsoft.value ? 'landed on after you signed in.' : 'landed on after you chose Allow.')
   }
-  if (!u.searchParams.get('code')) {
+  // Microsoft may send back its refusal instead of a code; the server words it.
+  if (!u.searchParams.get('code') && !(microsoft.value && u.searchParams.get('error'))) {
     return 'That address is missing the authorization code. Copy the whole thing, including '
       + 'everything after the question mark.'
   }
@@ -270,7 +276,9 @@ function close() {
 // Replaces "Show CLI output". The raw transcript is still there, but under a
 // heading that says who it is for and above a button that makes it sendable.
 const details = computed(() => [
-  ['Method', 'OAuth 2.1 with PKCE, driven by opencode'],
+  ['Method', microsoft.value
+    ? 'Microsoft Entra ID (OAuth 2.0 with PKCE), signed in by Knowledge Worker Agent'
+    : 'OAuth 2.1 with PKCE, driven by opencode'],
   ['Connector', name.value],
   ['Authorization URL', url.value || '—'],
   ['Callback delivered', delivered.value || 'not yet'],
@@ -318,12 +326,18 @@ onBeforeUnmount(stopPolling)
           <div class="si-url" :title="url">{{ url }}</div>
         </li>
         <li>
-          <div class="si-step-title">Sign in and choose <strong>Allow</strong></div>
+          <div v-if="microsoft" class="si-step-title">Sign in with your Microsoft work account</div>
+          <div v-else class="si-step-title">Sign in and choose <strong>Allow</strong></div>
           <p class="si-step-text">Use the account that has access to {{ title }}.</p>
         </li>
         <li>
           <div class="si-step-title">Copy the address you land on, and paste it here</div>
-          <p class="si-step-text">
+          <p v-if="microsoft" class="si-step-text">
+            Your browser will land on a page that <strong>won't load</strong>. That's expected —
+            nothing on your computer answers that address. Copy the whole address anyway and
+            paste it below.
+          </p>
+          <p v-else class="si-step-text">
             Your browser will land on a page that <strong>won't load</strong>. That's expected —
             the page it's looking for lives on this workspace, not on your computer. Copy the
             whole address anyway and paste it below.
@@ -350,7 +364,7 @@ onBeforeUnmount(stopPolling)
       <div v-else-if="phase === 'connected'" class="si-ok">
         <span class="si-tick" aria-hidden="true">✓</span>
         <div>
-          <div class="si-ok-title">Signed in to {{ title }}</div>
+          <div class="si-ok-title">{{ signedInText }}</div>
           <div class="si-ok-sub">The assistant can use it now.</div>
         </div>
       </div>

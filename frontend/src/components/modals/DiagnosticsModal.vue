@@ -12,7 +12,7 @@ import { providerOf, resolvePreset, shortModelName } from '../../utils/models'
 import {
   fetchDiagnostics, fetchDiagnosticsDisk, fetchDiagnosticsLog, diagnosticsLogDownloadUrl,
   fetchRefreshState, startConfigRefresh,
-  type DiagnosticsReport, type DiagnosticsDisk, type LogSource, type LogTail,
+  type DiagnosticsReport, type DiagnosticsCollector, type DiagnosticsDisk, type LogSource, type LogTail,
 } from '../../api'
 
 const ui = useUiStore()
@@ -113,6 +113,16 @@ function reachLabel(r: string, note?: string): string {
   if (r === 'unreachable') return note ? `unreachable: ${note}` : 'unreachable'
   return 'not checked yet'
 }
+
+// ── Usage reporting ──
+function collectorLine(c: DiagnosticsCollector): string {
+  const sent = ['usage', ...c.content].join(', ')
+  const last = c.last_success ? `last sent ${fmtTime(c.last_success)}` : 'nothing sent yet'
+  return `${c.endpoint} (${c.providers.join(', ')}): ${sent}. ${last}; ${c.queued} queued, ${c.dropped} dropped`
+}
+const collectorFailure = (c: DiagnosticsCollector) =>
+  c.last_error && c.last_attempt ? `Last attempt, ${fmtTime(c.last_attempt)}, failed: ${c.last_error}` : ''
+const hasTelemetry = (r: DiagnosticsReport) => r.telemetry.collectors.length > 0 || r.telemetry.problems.length > 0
 
 // What Default and Thinking resolve to, computed the way the composer does, so
 // this shows what a chat actually gets.
@@ -247,6 +257,14 @@ function reportText(r: DiagnosticsReport, problems: string[]): string {
   text(connectorsSummary(r.connectors))
   if (r.connectors.not_connected.length) text(`On but not connected: ${r.connectors.not_connected.join(', ')}`)
   if (!r.connectors.status_known) text(STATUS_UNCHECKED)
+  if (hasTelemetry(r)) {
+    section('Usage reporting')
+    for (const c of r.telemetry.collectors) {
+      bullet(collectorLine(c))
+      if (collectorFailure(c)) subBullet(collectorFailure(c))
+    }
+    for (const p of r.telemetry.problems) bullet(`${p.provider}: off, ${p.error}`)
+  }
   section('Disk')
   if (disk.value) {
     text(diskSummary(disk.value))
@@ -459,6 +477,19 @@ function refreshAll() {
             On but not connected: {{ report.connectors.not_connected.join(', ') }}
           </p>
           <p v-if="!report.connectors.status_known" class="diag-line diag-muted">{{ STATUS_UNCHECKED }}</p>
+        </section>
+
+        <section v-if="hasTelemetry(report)">
+          <h3>Usage reporting</h3>
+          <ul class="diag-list">
+            <li v-for="c in report.telemetry.collectors" :key="c.endpoint">
+              {{ collectorLine(c) }}
+              <div v-if="collectorFailure(c)" class="diag-bad">{{ collectorFailure(c) }}</div>
+            </li>
+            <li v-for="p in report.telemetry.problems" :key="p.provider" class="diag-warn">
+              {{ p.provider }}: off, {{ p.error }}
+            </li>
+          </ul>
         </section>
 
         <section>

@@ -348,12 +348,15 @@ function startResize(e: PointerEvent) {
 
 /* Slim rail */
 #sidebar-rail {
-  width: 52px; min-width: 52px;
+  /* At least as wide as the window buttons when the title bar is hidden, so
+     they never reach the chat. */
+  width: max(52px, var(--titlebar-left)); min-width: max(52px, var(--titlebar-left));
   background: var(--surface);
   border-right: 1px solid var(--border);
   display: flex; flex-direction: column; align-items: center;
-  /* 9px top matches the header's padding, so the toggle sits on the header row. */
-  gap: 8px; padding: 9px 0 12px;
+  /* 9px top matches the header's padding, so the toggle sits on the header row;
+     below the window buttons when the title bar is hidden. */
+  gap: 8px; padding: calc(9px + var(--titlebar-height)) 0 12px;
 }
 .rail-btn {
   width: 36px; height: 36px;
@@ -373,7 +376,7 @@ function startResize(e: PointerEvent) {
    with it. The old header was 14/12 padding around a 34px avatar, which is
    why it sat 6px proud of the chat header. */
 #sidebar-header {
-  padding: 9px 8px 9px 16px;
+  padding: 9px 8px 9px max(16px, var(--titlebar-left));
   min-height: 54px;
   border-bottom: 1px solid var(--border);
   display: flex;

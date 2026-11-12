@@ -51,6 +51,7 @@ import (
 
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/db"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodev2"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/telemetry"
 )
 
 const (
@@ -129,7 +130,11 @@ func Generate(ctx context.Context, bin, model string, msgs []db.RecallMessage) (
 		return "", fmt.Errorf("no content to summarise")
 	}
 
+	started := time.Now()
 	out, err := runNote(ctx, bin, model, instruction+"\n\n--- TRANSCRIPT ---\n"+transcript+"\n--- END TRANSCRIPT ---")
+	if opencodev2.Major(bin) >= 2 {
+		telemetry.RecordRun(telemetry.CallInfo{Model: model, QuerySource: "day_note", Started: started}, out)
+	}
 	if err != nil && len(out) == 0 {
 		return "", err
 	}

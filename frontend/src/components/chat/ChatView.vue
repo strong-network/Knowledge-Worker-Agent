@@ -106,6 +106,13 @@ const bannerCopy = computed(() => {
       action: '',
     }
   }
+  if (providers.authenticated.length > 0 && providers.usable.length === 0) {
+    return {
+      title: 'You\'re signed in, but Knowledge Worker Agent can\'t reach the model provider.',
+      detail: 'Test the provider connection or choose another provider in Accounts & connections.',
+      action: 'Check connection',
+    }
+  }
   return {
     title: "The assistant isn't connected.",
     detail: 'Sign in to use its models.',
@@ -492,6 +499,12 @@ onBeforeUnmount(() => {
 .right-widgets:empty {
   display: none;
 }
+/* The window buttons at the top right, when the title bar is hidden, are over
+   whichever column reaches the right edge. */
+.chat-col, .right-widgets { --header-inset-right: var(--titlebar-right); }
+@media (min-width: 901px) {
+  .chat-body:has(> .right-widgets:not(:empty)) > .chat-col { --header-inset-right: 0px; }
+}
 /* A drag already tracks the pointer exactly, so animating it on top only
    makes the panel edge lag behind the cursor. */
 body.rw-resizing .right-widgets { transition: none; }
@@ -544,7 +557,9 @@ body.rw-resizing .right-widgets { transition: none; }
     background: var(--bg, var(--surface));
     border-left: none;
     padding: 8px;
+    padding-top: calc(8px + var(--titlebar-height));
     overflow: auto;
+    --header-inset-right: 0px;
   }
   .right-widgets.mobile-open .mobile-files-bar {
     display: flex; align-items: center; justify-content: space-between;

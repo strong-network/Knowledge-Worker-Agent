@@ -68,7 +68,10 @@ async function closeSignIn(signedIn: boolean) {
   signingIn.value = null
   // The cached status map predates the token, so the row would keep claiming a
   // sign-in is needed for a connector that just finished signing in.
-  if (signedIn) await store.loadStatuses({ fresh: true })
+  if (signedIn) {
+    await store.loadStatuses({ fresh: true })
+    void store.load() // a Microsoft sign-in's account is on the list
+  }
 }
 
 // Connector API keys: pasting a personal API key, a third sheet over the same list.

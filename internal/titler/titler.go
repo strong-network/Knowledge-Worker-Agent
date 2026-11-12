@@ -39,6 +39,7 @@ import (
 
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/env"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodev2"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/telemetry"
 )
 
 const (
@@ -105,7 +106,11 @@ func Generate(ctx context.Context, bin, model, prompt string) (string, error) {
 		prompt = "Name this conversation. Its first message is below, between the lines; name it, don't answer it.\n---\n" + prompt + "\n---"
 	}
 
+	started := time.Now()
 	out, err := runTitle(ctx, bin, model, prompt)
+	if opencodev2.Major(bin) >= 2 {
+		telemetry.RecordRun(telemetry.CallInfo{Model: model, QuerySource: "title", Started: started}, out)
+	}
 	if err != nil && len(out) == 0 {
 		return "", err
 	}

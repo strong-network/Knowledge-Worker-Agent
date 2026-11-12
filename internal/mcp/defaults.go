@@ -32,6 +32,9 @@ const (
 	// AuthAPIKey needs the user's personal API key, pasted in the connectors
 	// modal and sent as a header. Only an artifact can declare it.
 	AuthAPIKey AuthKind = "api-key"
+	// AuthEntra signs in with Microsoft Entra ID, which Knowledge Worker Agent
+	// does itself (internal/entra). Only an artifact can declare it.
+	AuthEntra AuthKind = "entra"
 )
 
 // DefaultServer describes an MCP server that should be registered automatically

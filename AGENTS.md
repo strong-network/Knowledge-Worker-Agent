@@ -17,7 +17,7 @@ them to a Vue 3 single-page app over Server-Sent Events (SSE).
   `//go:embed`. No CGO, no shared libraries. The release image installs it as
   `/usr/bin/knowledge-worker-agent`.
 - **Go module:** `github.com/strong-network/Knowledge-Worker-Agent`, **Go 1.27** (`go.mod`), with a
-  toolchain floor of `go1.27.3`.
+  toolchain floor of `go1.27.4`.
 - **Direct Go dependencies:** `modernc.org/sqlite` (pure-Go SQLite), and for shared files
   `golang.org/x/net` (its HTML tokenizer, for the check) and `github.com/yuin/goldmark` (Markdown);
   everything else is the standard library. `NOTICE` lists what the binary contains.
@@ -53,6 +53,8 @@ whole product.
 | `internal/workdirs/` | The only gate for deleting chat folders: session delete, tidy-up and sweeps all go through it | **Security-relevant**: deletes files |
 | `internal/git/` | Git status/changes/pull/push/commit/clone over a client-supplied path | **Security-relevant**: exec `git` |
 | `internal/mcpauth/` | Drives opencode's MCP OAuth commands (`opencode mcp auth`, `logout`, `list`) | **Security-relevant**: external identity providers |
+| `internal/entra/` | Sign-in to connectors protected by Microsoft Entra ID, which opencode can't do (2.x rejects Entra's `{tenantid}` issuer; Entra has no dynamic client registration). `mcpauth` runs it instead of `opencode mcp auth` when a connector's protected-resource metadata names Entra: authorization code with PKCE at the tenant's own address, with the app in `KWA_ENTRA_CLIENT_ID` and `KWA_ENTRA_TENANT_ID`, or the one a connector artifact names (`kwa.auth.type: "entra"`, `clientId`, `tenant`; `mcp.EntraApp`). It asks for the scopes the metadata publishes, or for the entry's `oauth.scope` when it sets one (`mcp.OAuthScope`), with `offline_access`. The connector list carries the account and a refused refresh (`microsoft`). KWA keeps the refresh token in `.system/entra/`, refreshes before expiry (after a running turn, while it can), and hands opencode only the access token (`opencodev2.SetCredential`), which makes it reconnect the connector | **Security-relevant**: tokens, external identity providers |
+| `internal/skilltokens/` | Tokens skills ask for: declared in a SKILL.md's front matter (`metadata.kwa-token`), saved from Accounts (`/api/skill-tokens`, values never returned), kept in `.system/skill-tokens.json` and given to opencode's processes as environment variables. On 2.x a change restarts the server once no turn is running (`cmd/server/skilltokens.go`) | **Security-relevant**: credentials the agent uses as the user |
 | `internal/materializer/` | Central configuration: at startup and on a refresh from Diagnostics, clones or reads the configuration repository and writes the project's agents, skills, context, connectors, providers and vocabularies into a platform-owned opencode config folder, built beside the current one and swapped in | **Security-relevant**: exec `git`, writes config |
 | `internal/workspaceapps/` | Chat sharing: client for the workspace sidecar's Workspace App routes (`/var/strong-network/socks/sidecar-ipc`). Calls carry the owner's platform token, read per request from the `cloud_editor_user_token` header the platform proxy injects; `GET /api/share/platform` is a read-only probe of that path | **Security-relevant**: handles the owner's platform credential — never store, log or return it |
 | `internal/guest/` | Chat sharing: the guest surface — a **separate listener** (`127.0.0.1:8766`) with its own mux, reached by coworkers through the Workspace App. Only its own routes exist; every session route 404s unless the chat is shared; POSTs require `Origin` to equal the share URL's origin; turn frames pass an allow-list (`Frame`). With the owner's per-share toggle on, guests also reach the chat's folder through `os.Root` — no delete/rename/move, hidden paths refused, home folder never — and guest prompts have a per-chat budget | **Security-relevant**: exposed beyond the owner. Must never import `internal/workspaceapps` or read the owner token (a test enforces this) |
@@ -195,7 +197,9 @@ Owner ──────Workspace App──> preview listener (127.0.0.1:8769), 
     which 2.x layers over the global configuration: the folder's `opencode.json`, its skills
     folder named in `skills`, its agents written into `agent`, the user's connector switches
     (2.x ignores the global entries that hold only `enabled`), `experimental.todo` (the plan
-    display), `external_directory: ask` (as 1.x), and the hidden `kwa-text` agent day notes
+    display), `external_directory: ask` (as 1.x), `skill.use` deny policies for the built-in
+    `browser` (drives opencode's desktop app) and `report` (files an opencode issue) skills
+    unless the platform sets its own, and the hidden `kwa-text` agent day notes
     run as. KWA rewrites it at every server start and before `opencode reload`, which runs when
     a connector, agent or the central configuration changes (`chat.ReloadServerAgents`).
   - **Turns on 2.x:** `opencodev2.Command` puts a `run`'s message (the argument after `--`) on
@@ -313,6 +317,16 @@ patterns documented here rather than the documented patterns themselves.
 - **MCP header and environment values** (`internal/mcp/hidden.go`) are never in an API response:
   they show as `••••••••`. An edit or a check that sends that back keeps the saved value, but only
   for the same server at the same URL or command, so a saved credential never goes anywhere new.
+- **Tokens for skills** (`internal/skilltokens`): a skill declares a token in its SKILL.md front
+  matter (`metadata.kwa-token`, with `kwa-token-label`, `kwa-token-help` and an https
+  `kwa-token-url`), and the user saves it in Accounts. Kept in
+  `~/Knowledge_Worker_Agent/.system/skill-tokens.json` (dir 0700, file 0600, written atomically),
+  never in an API response or a log, and given to every opencode process as an environment
+  variable (`skilltokens.Add`), unless the workspace sets that variable itself. A name must end
+  in `_TOKEN`, `_KEY` or `_SECRET` and can't start with `KWA_`, `SDS_`, `OPENCODE_`, `COPILOT_`,
+  `GITHUB_` or `GH_`, so a token can't replace `PATH`, `LD_PRELOAD` or a setting of ours. Nothing
+  limits what the agent does with a token; Accounts says so. On 2.x a change restarts the server
+  once no turn is running.
 - **Randomness:** `crypto/rand` for UUIDs (`chat.NewUUID`) and other identifiers — no
   `math/rand` for security-sensitive values. (`math/rand` appears only for non-security
   random-name shuffling in `internal/files`.)
@@ -488,9 +502,10 @@ patterns documented here rather than the documented patterns themselves.
 
 The [Environment variables](https://docs.citrix.com/en-us/securspaces/knowledge-worker-agent/reference/environment-variables.html)
 reference lists every variable the server reads, with its default. When you add or change one,
-update that article too. Four are for local development only: `KWA_GUEST_ORIGIN` and
-`KWA_SIDECAR_SOCKET` (test chat sharing against a fake sidecar), and `KWA_VOICE_BIN` and
-`KWA_VOICE_MODEL` (point dictation at a local engine and model).
+update that article too. Five are for local development only: `KWA_GUEST_ORIGIN` and
+`KWA_SIDECAR_SOCKET` (test chat sharing against a fake sidecar), `KWA_VOICE_BIN` and
+`KWA_VOICE_MODEL` (point dictation at a local engine and model), and `KWA_ENTRA_AUTHORITY`
+(point Microsoft sign-in at a fake; only https, or http to this machine).
 
 Read a setting with `env.Get` (`internal/env`), under its `KWA_` name. A renamed setting lists
 its old names there; they're still read, and the log names them at startup. Names that belong to
@@ -517,9 +532,9 @@ names too.
   `go build ./cmd/server` requires running `make frontend` first to populate it.
 - **`make test` uses `go test ./... -v`** — `-v` makes output verbose; use `make test-short` for
   quiet runs.
-- **`go.mod` sets a toolchain floor** (`toolchain go1.27.3`), below which Go has known
+- **`go.mod` sets a toolchain floor** (`toolchain go1.27.4`), below which Go has known
   standard-library vulnerabilities. With the default `GOTOOLCHAIN=auto`, an older local Go
-  downloads and uses 1.27.3; `Dockerfile.release` sets `GOTOOLCHAIN=auto` because the `golang`
+  downloads and uses 1.27.4; `Dockerfile.release` sets `GOTOOLCHAIN=auto` because the `golang`
   images default to `local`. Keep `go 1.27.0` in `go.mod` unless intentionally bumping — `go mod
   tidy` writes the patch digit and will restore it — and raise
   the toolchain line when `govulncheck` reports a fixed Go release.

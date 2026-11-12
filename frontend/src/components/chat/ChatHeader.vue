@@ -433,7 +433,7 @@ const chatItems = computed<MenuEntry[]>(() => {
 
 <style scoped>
 #chat-header {
-  padding: 10px 16px;
+  padding: 10px calc(16px + var(--header-inset-right, 0px)) 10px calc(16px + var(--header-inset-left, 0px));
   border-bottom: 1px solid var(--border);
   background: var(--surface);
   display: flex;
@@ -662,7 +662,10 @@ const chatItems = computed<MenuEntry[]>(() => {
   background: var(--accent); border: 2px solid var(--surface);
 }
 @media (max-width: 768px) {
-  #chat-header { padding: 8px 10px; gap: 8px; min-height: 48px; }
+  #chat-header {
+    padding: 8px calc(10px + var(--header-inset-right, 0px)) 8px calc(10px + var(--header-inset-left, 0px));
+    gap: 8px; min-height: 48px;
+  }
   .hamburger-btn { display: inline-flex; }
   .chat-title { font-size: 14px; }
   .title-row { flex-wrap: wrap; gap: 6px; }

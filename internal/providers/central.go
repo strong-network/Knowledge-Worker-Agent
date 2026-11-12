@@ -52,6 +52,7 @@ type providerMetaEntry struct {
 	Presets     map[string]string `json:"presets"`
 	Endpoints   []Endpoint        `json:"endpoints"`
 	Description string            `json:"description"`
+	Telemetry   json.RawMessage   `json:"telemetry"`
 }
 
 type providerMetaDoc struct {
@@ -65,6 +66,9 @@ type providerMetaDoc struct {
 // case it falls back to the built-ins and says so.
 func Resolve() Registry {
 	reg := stampReach(resolveRegistry())
+	for i, p := range reg.Providers {
+		reg.Providers[i].Telemetry = telemetryFor(p.ID)
+	}
 	if cfg := endpointConfig(); len(cfg) > 0 {
 		for i, p := range reg.Providers {
 			reg.Providers[i] = withEndpoints(p, cfg)

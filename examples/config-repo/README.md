@@ -71,6 +71,26 @@ a `kwa` block that tells users how to connect (`sds`, its old name, still works)
 | `atlassian.json` | `oauth` | **Sign in**, to sign in in the browser. |
 | `acme-docs.json` | `api-key` | **Add key**, to add their own key. `header` and `scheme` send it as `X-API-Key: <key>`. |
 
+A connector protected by Microsoft Entra ID, such as Microsoft Work IQ, uses
+`entra`: Knowledge Worker Agent signs users in itself, with the app registration
+in `KWA_ENTRA_CLIENT_ID` and `KWA_ENTRA_TENANT_ID`. Its artifact can name its own
+app instead, with `clientId` and `tenant` beside `type`:
+
+```jsonc
+"kwa": { "auth": { "type": "entra", "label": "Work IQ",
+                   "clientId": "<application (client) ID>", "tenant": "<directory (tenant) ID>" } }
+```
+
+The sign-in asks Microsoft for the permission the connector publishes. Some
+connectors publish it by an address that Microsoft can't find in your tenant,
+and the sign-in fails with AADSTS500011. Name the permission yourself with
+opencode's `oauth.scope` in the connector's entry, by the application ID of the
+API the permission belongs to:
+
+```jsonc
+"oauth": { "scope": "<API application ID>/.default" }
+```
+
 An artifact never sets `enabled`. Assigned connectors start switched off, and
 each user turns on the ones they want.
 

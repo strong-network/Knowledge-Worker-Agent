@@ -185,7 +185,8 @@ func applyUserToggles(doc map[string]any) {
 // addKWASettings adds what KWA needs whatever the platform says: the plan
 // display reads opencode's todo tool, which 2.x offers only on request;
 // folders outside the chat are asked about, as 1.x does, so a turn without
-// Yolo refuses them; and an agent for KWA's one-off writing tasks.
+// Yolo refuses them; built-in skills that don't fit KWA are turned off; and an
+// agent for KWA's one-off writing tasks.
 func addKWASettings(doc map[string]any) {
 	exp := asMap(doc["experimental"])
 	exp["todo"] = true
@@ -200,6 +201,8 @@ func addKWASettings(doc map[string]any) {
 		doc["permission"] = map[string]any{"external_directory": "ask"}
 	}
 
+	denyBuiltinSkills(doc)
+
 	agents := asMap(doc["agent"])
 	agents[NoteAgent] = map[string]any{
 		"description": "Writes the text a message asks for. Used by Knowledge Worker Agent for notes.",
@@ -209,6 +212,32 @@ func addKWASettings(doc map[string]any) {
 		"permission":  map[string]any{"*": "deny"},
 	}
 	doc["agent"] = agents
+}
+
+// offSkills are 2.x's built-in skills that don't fit KWA: browser drives a
+// Chromium in opencode's desktop app, which KWA never attaches, and report
+// files an issue with opencode, which KWA's users don't see.
+var offSkills = []string{"browser", "report"}
+
+// denyBuiltinSkills turns offSkills off with policies, which take them out of
+// the skill list and out of what the model can load. A policy the platform
+// sets for one of them stays as it is.
+func denyBuiltinSkills(doc map[string]any) {
+	policies := asList(doc["policies"])
+	set := map[string]bool{}
+	for _, p := range policies {
+		if m, ok := p.(map[string]any); ok && m["action"] == "skill.use" {
+			if r, ok := m["resource"].(string); ok {
+				set[r] = true
+			}
+		}
+	}
+	for _, name := range offSkills {
+		if !set[name] {
+			policies = append(policies, map[string]any{"action": "skill.use", "resource": name, "effect": "deny"})
+		}
+	}
+	doc["policies"] = policies
 }
 
 // configEnv returns env with the platform folder handed to 2.x as the
@@ -238,9 +267,10 @@ func configEnv(env []string) []string {
 
 // Reload makes the running server read its configuration again, after KWA or
 // the user changed it. With no server running there is nothing to do: the
-// next one reads it when it starts. A server started before the platform
-// folder was known reads its document from elsewhere, and `opencode reload`
-// can't move it, so that one is restarted.
+// next one reads it when it starts. `opencode reload` rereads files, so a
+// server started with another document, or with another environment, is
+// restarted instead: the configuration reads values such as a provider's
+// region from the environment ({env:}).
 func Reload(ctx context.Context) error {
 	url, password, ok := Running()
 	if !ok {
@@ -251,18 +281,49 @@ func Reload(ctx context.Context) error {
 		return err
 	}
 	srv.mu.Lock()
-	startedWith := srv.overlay
+	startedWith, startedEnv := srv.overlay, srv.env
 	srv.mu.Unlock()
 	if startedWith != path {
 		log.Printf("[opencode-v2] the configuration moved to %s; restarting the server", path)
 		return Restart(ctx)
 	}
+	if changed := envChanges(startedEnv, configEnv(processEnv())); len(changed) > 0 {
+		log.Printf("[opencode-v2] %s changed; restarting the server", strings.Join(changed, ", "))
+		return Restart(ctx)
+	}
 	cmd := exec.CommandContext(ctx, config.OpencodeBin, "reload", "--server", url)
-	cmd.Env = append(childEnv(os.Environ()), "OPENCODE_PASSWORD="+password, "OPENCODE_DISABLE_AUTOUPDATE=1")
+	cmd.Env = append(processEnv(), "OPENCODE_PASSWORD="+password, "OPENCODE_DISABLE_AUTOUPDATE=1")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// envChanges returns the names of the variables that differ between two
+// environments, sorted. Only names: the values can be credentials.
+func envChanges(before, after []string) []string {
+	vars := func(env []string) map[string]string {
+		m := make(map[string]string, len(env))
+		for _, kv := range env {
+			k, v, _ := strings.Cut(kv, "=")
+			m[k] = v
+		}
+		return m
+	}
+	b, a := vars(before), vars(after)
+	var out []string
+	for k, v := range a {
+		if old, ok := b[k]; !ok || old != v {
+			out = append(out, k)
+		}
+	}
+	for k := range b {
+		if _, ok := a[k]; !ok {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func globalConfigPath() string {

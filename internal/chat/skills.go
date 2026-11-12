@@ -35,6 +35,9 @@ type Turn struct {
 	// the turn's user message, so that row, the reply and the live turn carry
 	// the same id. A turn without one gets a fresh id, and announces no prompt.
 	ID string
+	// Source names the background job a turn runs for, in usage reporting;
+	// empty is a user's turn.
+	Source string
 }
 
 // firstTurn collapses the variadic turn argument the chat entry points take.
@@ -84,7 +87,63 @@ var errSkillsUnavailable = errSkills("opencode server is not available")
 
 // fetchSkillsV2 asks KWA's opencode 2.x server. A skill's ID is the name its
 // tool loads it by.
+//
+// 2.x registers a folder's skills in the background the first time the folder
+// is used, and lists only those registered so far: none, then its built-in
+// ones, then the rest. Taking the first answer cached an empty or partial list
+// for a new chat, which its siblings then borrowed.
 func fetchSkillsV2(ctx context.Context, workdir string) ([]opencodeserver.Skill, error) {
+	return settleSkills(ctx, func(ctx context.Context) ([]opencodeserver.Skill, error) {
+		return getSkillsV2(ctx, workdir)
+	})
+}
+
+var (
+	skillPoll = 100 * time.Millisecond
+	// skillSettle is how long a list must stay the same to be final. 2.x adds
+	// each group of skills well within 100 ms of the last.
+	skillSettle = 500 * time.Millisecond
+	// skillEmptyGrace is how long an empty list must last to be final: 2.x has
+	// built-in skills, so an empty list usually means it hasn't started yet.
+	skillEmptyGrace = 3 * time.Second
+)
+
+// settleSkills asks until the list stops changing. A cancelled context is an
+// error, not a partial answer, so a partial list is never cached.
+func settleSkills(ctx context.Context, fetch func(context.Context) ([]opencodeserver.Skill, error)) ([]opencodeserver.Skill, error) {
+	start := time.Now()
+	var list []opencodeserver.Skill
+	var key string
+	var since time.Time
+	for {
+		next, err := fetch(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if k := skillNames(next); since.IsZero() || k != key {
+			list, key, since = next, k, time.Now()
+		}
+		if time.Since(since) >= skillSettle && (len(list) > 0 || time.Since(start) >= skillEmptyGrace) {
+			return list, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(skillPoll):
+		}
+	}
+}
+
+func skillNames(skills []opencodeserver.Skill) string {
+	names := make([]string, len(skills))
+	for i, s := range skills {
+		names[i] = s.Name
+	}
+	sort.Strings(names)
+	return strings.Join(names, "\n")
+}
+
+func getSkillsV2(ctx context.Context, workdir string) ([]opencodeserver.Skill, error) {
 	var resp struct {
 		Data []struct {
 			ID          string `json:"id"`
@@ -106,6 +165,12 @@ func fetchSkillsV2(ctx context.Context, workdir string) ([]opencodeserver.Skill,
 type errSkills string
 
 func (e errSkills) Error() string { return string(e) }
+
+// SkillFiles returns the skills opencode resolves for workdir, each with the
+// SKILL.md it was read from.
+func SkillFiles(ctx context.Context, workdir string) ([]opencodeserver.Skill, error) {
+	return listSkillsFn(ctx, canonicalSkillDir(workdir))
+}
 
 // ListSkills returns the skills opencode resolves for workdir, ready for the
 // composer's picker. Skills without a description are omitted, matching

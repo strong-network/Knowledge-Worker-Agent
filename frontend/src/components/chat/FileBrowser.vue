@@ -658,7 +658,8 @@ defineExpose({ refresh: fullRefresh, open: openAt })
 /* Beside the chat, the host sets --fp-header-h so this lines up with the
    chat's header. */
 .fp-header {
-  display: flex; align-items: center; gap: 6px; padding: 8px 10px 8px 14px;
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px calc(10px + var(--header-inset-right, 0px)) 8px 14px;
   min-height: var(--fp-header-h, auto);
   border-bottom: 1px solid var(--border); background: var(--surface); flex-shrink: 0;
 }

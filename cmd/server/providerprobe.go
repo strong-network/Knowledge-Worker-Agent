@@ -8,11 +8,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/config"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodeauth"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodev2"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/providers"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/telemetry"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/vertexauth"
 )
 
@@ -33,6 +35,13 @@ import (
 func probeProvider(ctx context.Context, providerID string) error {
 	model := cheapestModelFor(providerID)
 	if model == "" {
+		// The model list holds only providers that already passed this check,
+		// so a provider just signed in to has none there yet. Ask opencode for
+		// its models directly; otherwise it could never pass, and so never get
+		// models.
+		model = pickCheapestModel(providerID, probeModelDiscovery(providerID))
+	}
+	if model == "" {
 		// Nothing to probe with. Reported as an error rather than silently
 		// passing: a provider offering no models cannot serve a turn either.
 		return fmt.Errorf("no model is available to test this provider")
@@ -40,7 +49,11 @@ func probeProvider(ctx context.Context, providerID string) error {
 	cmd := opencodev2.Cmd(ctx, config.OpencodeBin,
 		"run", "--agent", "title", "--model", model, "--format", "json", "hi")
 	cmd.Dir = config.Workspace
+	started := time.Now()
 	out, err := cmd.CombinedOutput()
+	if opencodev2.Enabled() {
+		telemetry.RecordRun(telemetry.CallInfo{Model: model, QuerySource: "provider_check", Started: started}, out)
+	}
 	if msg := probeErrorFrom(out); msg != "" {
 		return fmt.Errorf("%s", msg)
 	}
@@ -64,10 +77,14 @@ func probeErrorFrom(out []byte) string {
 			continue
 		}
 		var evt struct {
-			Type  string `json:"type"`
+			Type string `json:"type"`
+			// 1.x: error.name and error.data.message. 2.x: error.type and
+			// error.message.
 			Error *struct {
-				Name string `json:"name"`
-				Data struct {
+				Name    string `json:"name"`
+				Type    string `json:"type"`
+				Message string `json:"message"`
+				Data    struct {
 					Message string `json:"message"`
 				} `json:"data"`
 			} `json:"error"`
@@ -79,8 +96,10 @@ func probeErrorFrom(out []byte) string {
 		if json.Unmarshal([]byte(line), &evt) != nil {
 			continue
 		}
-		if evt.Error != nil && (evt.Error.Data.Message != "" || evt.Error.Name != "") {
-			return firstNonEmpty(evt.Error.Data.Message, evt.Error.Name)
+		if evt.Error != nil {
+			if msg := firstNonEmpty(evt.Error.Data.Message, evt.Error.Message, evt.Error.Name, evt.Error.Type); msg != "" {
+				return msg
+			}
 		}
 		if evt.Name != "" && strings.Contains(strings.ToLower(evt.Name), "error") {
 			return firstNonEmpty(evt.Data.Message, evt.Name)
@@ -105,7 +124,24 @@ func cheapestModelFor(providerID string) string {
 	list := make([]string, len(opencodeModels))
 	copy(list, opencodeModels)
 	opencodeModelsMu.RUnlock()
+	return pickCheapestModel(providerID, list)
+}
 
+// probeModelDiscovery lists a provider's models straight from opencode, as
+// model discovery does. Indirected for tests.
+var probeModelDiscovery = func(providerID string) []string {
+	fetch := providers.ModelDiscovery(providerID)
+	if fetch == nil {
+		fetch = func() ([]string, error) { return opencodeauth.FetchModelsFor(providerID) }
+	}
+	list, err := fetch()
+	if err != nil {
+		return nil
+	}
+	return list
+}
+
+func pickCheapestModel(providerID string, list []string) string {
 	prefix := providerID + "/"
 	var owned []string
 	for _, m := range list {
@@ -115,6 +151,19 @@ func cheapestModelFor(providerID string) string {
 	}
 	if len(owned) == 0 {
 		return ""
+	}
+	// ChatGPT's subscription catalogue can list models that are not enabled
+	// for every plan. Prefer the small fast family that the web chat uses, so a
+	// single unavailable catalogue entry does not mark a working account as
+	// unreachable.
+	if providerID == opencodeauth.ChatGPTProvider {
+		for _, family := range []string{"gpt-6-luna-fast", "luna-fast", "fast", "luna"} {
+			for _, m := range owned {
+				if strings.Contains(strings.ToLower(m), family) {
+					return m
+				}
+			}
+		}
 	}
 	for _, cheap := range []string{"haiku", "mini", "flash", "small", "lite"} {
 		for _, m := range owned {
@@ -149,6 +198,7 @@ func installProviderProbes() {
 
 	providers.SetSignOut(vertexauth.Provider, vertexauth.SignOut)
 	providers.SetSignOut(opencodeauth.Provider, opencodeauth.SignOut)
+	providers.SetSignOut(opencodeauth.ChatGPTProvider, opencodeauth.SignOutChatGPT)
 
 	// A provider that has just become (un)reachable must stop or resume backing
 	// the presets, which only happens on a refresh.

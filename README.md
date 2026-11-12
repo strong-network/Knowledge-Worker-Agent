@@ -54,8 +54,11 @@ fill it in:
 | **Icon** | [`Assets/icon-512.png`](Assets/icon-512.png). Select **Upload**. `icon-192.png` and `icon.svg` are also in [`Assets`](Assets) |
 | **Command** | `/usr/bin/knowledge-worker-agent` |
 | **Open Port** | `8765`, or the value of `KWA_PORT` |
-| **Health Probe** | Leave empty |
-| **Health Timeout** | `0` |
+| **Health Probe** | `/usr/bin/knowledge-worker-agent health` |
+| **Health Timeout** | `15 seconds` |
+
+The health probe calls the server's `/healthz` on the configured port and exits 0 when it
+answers. It retries for up to 10 seconds while the server starts, so keep the timeout above that.
 
 Images built before the binary was renamed have it at `/usr/bin/chat`, which current images keep
 as a link. For the full steps, see
@@ -72,11 +75,11 @@ docker pull ghcr.io/strong-network/knowledge-worker-agent:latest
 docker pull strongnetwork/knowledge-worker-agent:latest
 
 # A specific version
-docker pull ghcr.io/strong-network/knowledge-worker-agent:2.0.2
-docker pull strongnetwork/knowledge-worker-agent:2.0.2
+docker pull ghcr.io/strong-network/knowledge-worker-agent:2.1.0
+docker pull strongnetwork/knowledge-worker-agent:2.1.0
 ```
 
-The latest version is **2.0.2**. Every published image is tagged with its version, taken from the
+The latest version is **2.1.0**. Every published image is tagged with its version, taken from the
 [`VERSION`](VERSION) file, and `latest` moves to the most recently published one. Pin the version
 tag for anything repeatable, and the digest where you need the exact image. Images are
 `linux/amd64`.

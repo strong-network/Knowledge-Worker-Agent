@@ -25,6 +25,8 @@ import (
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/env"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodeinstaller"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodev2"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/skilltokens"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/telemetry"
 )
 
 // ActiveProcess tracks a running chat backend process.
@@ -353,7 +355,7 @@ func RunStream(sessionID, prompt string, cfg config.SessionConfig, turn ...Turn)
 		events, proc := runOpencodeServerStream(sessionID, prompt, cfg, forced, author)
 		return prependEvents(events, forcedSkillEvents(forced)), proc
 	}
-	events, proc = runOpencodeStream(sessionID, prompt, cfg, forced, author)
+	events, proc = runOpencodeStream(sessionID, prompt, cfg, forced, author, firstTurn(turn).Source)
 	return prependEvents(events, forcedSkillEvents(forced)), proc
 }
 
@@ -391,7 +393,7 @@ func useServerBackend() bool {
 	}
 }
 
-func runOpencodeStream(sessionID, prompt string, cfg config.SessionConfig, forced []config.ForcedSkill, author Author) (<-chan *Event, *ActiveProcess) {
+func runOpencodeStream(sessionID, prompt string, cfg config.SessionConfig, forced []config.ForcedSkill, author Author, source string) (<-chan *Event, *ActiveProcess) {
 	ch := make(chan *Event, 64)
 	if err := ensureOpencodeAvailable(); err != nil {
 		ch <- &Event{Kind: "error", Text: fmt.Sprintf("opencode backend is not available: %v", err)}
@@ -400,6 +402,7 @@ func runOpencodeStream(sessionID, prompt string, cfg config.SessionConfig, force
 	}
 
 	opencodeSession, fork := resumeOrFork(sessionID, cfg)
+	typed := prompt
 	prompt = config.PromptWithSessionPreambleAs(prompt, cfg, author.guestName(), forced...)
 	v2 := opencodev2.Enabled()
 	var args []string
@@ -436,7 +439,7 @@ func runOpencodeStream(sessionID, prompt string, cfg config.SessionConfig, force
 		opencodev2.WarmFolder(context.Background(), cwd)
 	} else {
 		cmd = exec.Command(config.OpencodeBin, args...)
-		cmd.Env = os.Environ()
+		cmd.Env = skilltokens.Add(os.Environ())
 	}
 	cmd.Dir = cwd
 
@@ -500,6 +503,20 @@ func runOpencodeStream(sessionID, prompt string, cfg config.SessionConfig, force
 		}
 	}
 	Procs.Store(sessionID, proc)
+
+	// Usage reporting, when the model's provider asks for it. It reads 2.x's
+	// turn events; Start returns nil otherwise, and a nil recorder does nothing.
+	var rec *telemetry.Call
+	if v2 {
+		rec = telemetry.Start(telemetry.CallInfo{
+			Model:       config.ResolveModel(cfg.Model),
+			SessionID:   sessionID,
+			Prompt:      typed,
+			QuerySource: source,
+			Effort:      cfg.ReasoningEffort,
+			NewSession:  opencodeSession == "" && !fork,
+		})
+	}
 
 	go func() {
 		defer func() {
@@ -653,6 +670,7 @@ func runOpencodeStream(sessionID, prompt string, cfg config.SessionConfig, force
 					}
 				}
 				processOpencodeLine(raw)
+				rec.Line(raw)
 			}
 			if readErr != nil {
 				if readErr != io.EOF {
@@ -661,6 +679,7 @@ func runOpencodeStream(sessionID, prompt string, cfg config.SessionConfig, force
 				break
 			}
 		}
+		rec.Finish()
 		stderr := strings.TrimSpace(stderrBuf.String())
 		if lineNum == 0 {
 			select {

@@ -47,10 +47,12 @@ func platformConfigDir() string { return layout.PlatformConfig() }
 type mcpMetaEntry struct {
 	Name string `json:"name"`
 	Auth struct {
-		Type    string `json:"type"`
-		Label   string `json:"label"`
-		Help    string `json:"help"`
-		HelpURL string `json:"helpUrl"`
+		Type     string `json:"type"`
+		Label    string `json:"label"`
+		Help     string `json:"help"`
+		HelpURL  string `json:"helpUrl"`
+		ClientID string `json:"clientId"`
+		Tenant   string `json:"tenant"`
 	} `json:"auth"`
 	Description string `json:"description"`
 }
@@ -213,7 +215,7 @@ func applyProvisionedMeta(sv serverView, p provisionedServer) serverView {
 	}
 
 	switch declared {
-	case AuthNone, AuthOAuth, AuthSetup, AuthLocal:
+	case AuthNone, AuthOAuth, AuthSetup, AuthLocal, AuthEntra:
 		sv.Auth = declared
 	case AuthAPIKey:
 		sv.Auth = declared
@@ -252,6 +254,16 @@ func safeHelpURL(raw string) string {
 func IsProvisioned(name string) bool {
 	_, ok := provisionedServers()[strings.ToLower(strings.TrimSpace(name))]
 	return ok
+}
+
+// EntraApp returns the app registration an assigned "entra" server's artifact
+// names, either part empty when it names none.
+func EntraApp(name string) (clientID, tenant string) {
+	p, ok := provisionedServers()[strings.ToLower(strings.TrimSpace(name))]
+	if !ok || !strings.EqualFold(strings.TrimSpace(p.Meta.Auth.Type), string(AuthEntra)) {
+		return "", ""
+	}
+	return strings.TrimSpace(p.Meta.Auth.ClientID), strings.TrimSpace(p.Meta.Auth.Tenant)
 }
 
 // ShadowedServers returns the user's own servers that an assigned server of the

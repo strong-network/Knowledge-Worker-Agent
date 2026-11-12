@@ -13,6 +13,7 @@ import ConnectorsModal from '../connectors/ConnectorsModal.vue'
 import ToolboxModal from '../toolbox/ToolboxModal.vue'
 import SourceControlModal from './SourceControlModal.vue'
 import OpencodeLoginModal from './OpencodeLoginModal.vue'
+import ChatGPTLoginModal from './ChatGPTLoginModal.vue'
 import VertexLoginModal from './VertexLoginModal.vue'
 import AccountsModal from './AccountsModal.vue'
 import FolderPickerModal from './FolderPickerModal.vue'
@@ -74,6 +75,7 @@ function closeOnOverlay(e: MouseEvent) {
     <ToolboxModal v-if="ui.activeModal === 'toolbox'" />
     <SourceControlModal v-if="ui.activeModal === 'source-control'" />
     <OpencodeLoginModal v-if="ui.activeModal === 'opencode-login'" />
+    <ChatGPTLoginModal v-if="ui.activeModal === 'chatgpt-login'" />
     <VertexLoginModal v-if="ui.activeModal === 'vertex-login'" />
     <AccountsModal v-if="ui.activeModal === 'accounts'" />
     <FolderPickerModal v-if="ui.activeModal === 'folder-picker'" />

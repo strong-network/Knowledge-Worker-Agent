@@ -231,6 +231,23 @@ func TestTakeProviderMetaEndpoints(t *testing.T) {
 	}
 }
 
+func TestTakeProviderMetaTelemetry(t *testing.T) {
+	frag := map[string]any{
+		"provider": map[string]any{"gw": map[string]any{}},
+		"kwa": map[string]any{"telemetry": map[string]any{
+			"endpoint": "https://otel.example.com", "logUserPrompts": true}},
+	}
+	got := takeProviderMeta(frag)
+	if want := `{"endpoint":"https://otel.example.com","logUserPrompts":true}`; string(got[0].Telemetry) != want {
+		t.Errorf("telemetry = %s, want %s", got[0].Telemetry, want)
+	}
+
+	frag = map[string]any{"provider": map[string]any{"gw": map[string]any{}}, "kwa": map[string]any{"telemetry": "nope"}}
+	if got := takeProviderMeta(frag); got[0].Telemetry != nil {
+		t.Errorf("malformed block kept: %s", got[0].Telemetry)
+	}
+}
+
 // TestMaterializeAlwaysWritesTheSidecar: an empty array distinguishes
 // "materialized, nothing assigned" from "never materialized" — the registry
 // needs that to decide between central mode and the fall-back.

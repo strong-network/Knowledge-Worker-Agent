@@ -30,6 +30,10 @@ const s = computed(() => props.entry.server)
 const status = computed(() => props.entry.status)
 const name = computed(() => s.value.name)
 const title = computed(() => displayName(s.value))
+const desc = computed(() => {
+  const account = s.value.microsoft?.account
+  return status.value === 'on' && account ? `Signed in as ${account} · ${describeServer(s.value)}` : describeServer(s.value)
+})
 
 // A blocked connector explains itself when you try to turn it on, not before.
 // It sits in the OFF group with everything else the user hasn't asked for, and
@@ -111,7 +115,7 @@ function openAccounts() {
             title="Provided by your organization. You choose whether it's on; its address and settings are managed centrally and can't be edited here."
           >Provided by IT</span>
         </div>
-        <div class="conn-desc" :title="describeServer(s)">{{ describeServer(s) }}</div>
+        <div class="conn-desc" :title="desc">{{ desc }}</div>
       </div>
 
       <div class="conn-actions">
@@ -164,7 +168,7 @@ function openAccounts() {
 
     <div v-else-if="bar === 'signin'" class="conn-bar warn">
       <span class="conn-bar-text">
-        One more step — sign in with your {{ title }} account so the assistant can use it.
+        {{ s.microsoft?.failed || `One more step — sign in with your ${title} account so the assistant can use it.` }}
       </span>
       <button class="conn-btn" @click="signIn">Sign in</button>
       <button class="conn-btn-ghost" @click="store.dismissed[name] = true">Later</button>

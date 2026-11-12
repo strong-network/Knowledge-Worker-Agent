@@ -17,6 +17,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/skilltokens"
 )
 
 // startTimeout bounds how long we wait for a freshly-started `opencode serve`
@@ -202,7 +204,7 @@ func (s *Supervisor) start(ctx context.Context, dir string) (*instance, error) {
 	cmd.Dir = dir
 	env := s.env
 	if env == nil {
-		env = os.Environ()
+		env = skilltokens.Add(os.Environ())
 	}
 	cmd.Env = append(append([]string{}, env...),
 		"OPENCODE_SERVER_PASSWORD="+s.password,

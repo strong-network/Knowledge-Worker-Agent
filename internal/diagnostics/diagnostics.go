@@ -25,6 +25,7 @@ import (
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/mcp"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodeinstaller"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/providers"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/telemetry"
 )
 
 // Sources are the facts only the server's main package holds.
@@ -55,6 +56,7 @@ type Report struct {
 	Config      Config      `json:"config"`
 	Providers   Providers   `json:"providers"`
 	Connectors  Connectors  `json:"connectors"`
+	Telemetry   Telemetry   `json:"telemetry"`
 	Settings    []Setting   `json:"settings"`
 	OldSettings []string    `json:"old_settings"`
 	Paths       []PathEntry `json:"paths"`
@@ -157,6 +159,30 @@ type Connectors struct {
 	StatusKnown  bool     `json:"status_known"`
 }
 
+// Telemetry is usage reporting: the collectors in use, and the providers
+// whose kwa.telemetry block is turned off.
+type Telemetry struct {
+	Collectors []Collector        `json:"collectors"`
+	Problems   []TelemetryProblem `json:"problems"`
+}
+
+type Collector struct {
+	Endpoint    string     `json:"endpoint"`
+	Providers   []string   `json:"providers"`
+	Content     []string   `json:"content"`
+	LastAttempt *time.Time `json:"last_attempt"`
+	LastSuccess *time.Time `json:"last_success"`
+	// LastError is the last attempt's error; empty when it succeeded.
+	LastError string `json:"last_error,omitempty"`
+	Queued    int    `json:"queued"`
+	Dropped   int    `json:"dropped"`
+}
+
+type TelemetryProblem struct {
+	Provider string `json:"provider"`
+	Error    string `json:"error"`
+}
+
 type Setting struct {
 	Name  string `json:"name"`
 	Value string `json:"value"`
@@ -180,6 +206,7 @@ func Collect() Report {
 		Config:      collectConfig(),
 		Providers:   collectProviders(),
 		Connectors:  collectConnectors(),
+		Telemetry:   collectTelemetry(),
 		Settings:    collectSettings(),
 		OldSettings: env.OldInUse(),
 	}
@@ -388,6 +415,34 @@ func collectProviders() Providers {
 		})
 	}
 	return p
+}
+
+func collectTelemetry() Telemetry {
+	t := Telemetry{Collectors: []Collector{}, Problems: []TelemetryProblem{}}
+	states := providers.TelemetryStates()
+	for _, s := range telemetry.Statuses() {
+		c := Collector{Endpoint: s.Endpoint, Providers: s.Providers, LastError: Redact(s.LastError),
+			Queued: s.Queued, Dropped: s.Dropped, Content: []string{},
+			LastAttempt: timeOrNil(s.LastAttempt), LastSuccess: timeOrNil(s.LastSuccess)}
+		if len(s.Providers) > 0 {
+			c.Content = append(c.Content, states[s.Providers[0]].Content...)
+		}
+		t.Collectors = append(t.Collectors, c)
+	}
+	for id, s := range states {
+		if s.Error != "" {
+			t.Problems = append(t.Problems, TelemetryProblem{Provider: id, Error: s.Error})
+		}
+	}
+	sort.Slice(t.Problems, func(i, j int) bool { return t.Problems[i].Provider < t.Problems[j].Provider })
+	return t
+}
+
+func timeOrNil(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
 }
 
 func collectConnectors() Connectors {

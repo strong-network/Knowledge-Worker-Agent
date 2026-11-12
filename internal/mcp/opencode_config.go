@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/entra"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/env"
 )
 
@@ -106,6 +107,26 @@ type serverView struct {
 	// Builtin marks a connector from the built-in catalogue (see IsBuiltin),
 	// which the setup guide offers alongside central ones.
 	Builtin bool `json:"builtin,omitempty"`
+	// Microsoft is the Microsoft sign-in Knowledge Worker Agent keeps for the
+	// server, when it keeps one.
+	Microsoft *MicrosoftSignIn `json:"microsoft,omitempty"`
+
+	// oauthScope is the entry's oauth.scope: the permission to sign in for.
+	oauthScope string
+}
+
+// MicrosoftSignIn is the account a Microsoft sign-in is for, and why its last
+// refresh was refused, if it was.
+type MicrosoftSignIn struct {
+	Account string `json:"account,omitempty"`
+	Failed  string `json:"failed,omitempty"`
+}
+
+func (sv serverView) withMicrosoft() serverView {
+	if account, failed, ok := entra.Status(sv.Name); ok {
+		sv.Microsoft = &MicrosoftSignIn{Account: account, Failed: failed}
+	}
+	return sv
 }
 
 // readConfig loads the full opencode.json as a generic map (so unknown keys are
@@ -190,6 +211,9 @@ func entryToView(name string, v any) serverView {
 	}
 	if t, ok := obj["timeout"].(float64); ok {
 		sv.Timeout = int(t)
+	}
+	if o, ok := obj["oauth"].(map[string]any); ok {
+		sv.oauthScope, _ = o["scope"].(string)
 	}
 	sv.Auth = AuthKindFor(sv.Name, sv.Transport)
 	// Catalogue-supplied UI text, for built-ins. A provisioned artifact
@@ -434,6 +458,36 @@ func IsEnabled(name string) (enabled, found bool, err error) {
 		}
 	}
 	return false, false, nil
+}
+
+// OAuthScope returns the oauth.scope set for the server called name, matched
+// case-insensitively, from its central entry or the user's.
+func OAuthScope(name string) string {
+	views, err := listServers()
+	if err != nil {
+		return ""
+	}
+	for _, v := range views {
+		if strings.EqualFold(v.Name, name) {
+			return strings.TrimSpace(v.oauthScope)
+		}
+	}
+	return ""
+}
+
+// RemoteURL returns the address of the remote server called name, matched
+// case-insensitively; ok is false for a local server or an unknown name.
+func RemoteURL(name string) (string, bool) {
+	views, err := listServers()
+	if err != nil {
+		return "", false
+	}
+	for _, v := range views {
+		if strings.EqualFold(v.Name, name) && v.Type == "remote" && v.URL != "" {
+			return v.URL, true
+		}
+	}
+	return "", false
 }
 
 // removeServer deletes a server entry by name. Missing entries are a no-op.

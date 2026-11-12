@@ -166,7 +166,7 @@ function more(hit: ChatSearchHit): string {
 #search-view { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
 .sv-header {
   display: flex; align-items: center; gap: 10px;
-  padding: 20px 24px 16px; border-bottom: 1px solid var(--border);
+  padding: 20px calc(24px + var(--titlebar-right)) 16px calc(24px + var(--header-inset-left, 0px)); border-bottom: 1px solid var(--border);
 }
 .sv-header h1 { font-size: 20px; font-weight: 700; color: var(--text); margin: 0; }
 
@@ -254,7 +254,7 @@ function more(hit: ChatSearchHit): string {
 
 @media (max-width: 768px) {
   .hamburger-btn { display: inline-flex; }
-  .sv-header { padding: 10px 12px; }
+  .sv-header { padding: 10px calc(12px + var(--titlebar-right)) 10px calc(12px + var(--header-inset-left, 0px)); }
   .sv-body { padding: 14px 12px 24px; }
   .sv-controls { flex-direction: column; }
 }
