@@ -5,6 +5,17 @@
 
 :root { --mono: "SF Mono","Cascadia Code",Consolas,"Liberation Mono",monospace; }
 
+/* Installed app with its title bar hidden (Chrome's window controls overlay): the
+   page starts at the window's top edge, and the window buttons cover the two ends
+   of a band that high. Outside that mode the env() values are unset and all three
+   are 0. Top-row headers keep their controls clear of the ends, and the rows are
+   where the window is dragged from (the block at the end of this file). */
+:root {
+  --titlebar-left: env(titlebar-area-x, 0px);
+  --titlebar-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
+  --titlebar-height: env(titlebar-area-height, 0px);
+}
+
 /* ── Theme variables ──
    --text2/--text3 are tuned to clear WCAG AA (4.5:1) against every surface they
    land on, including --hover. Their previous values did not: --text2 measured
@@ -118,7 +129,7 @@ body {
 
 /* ── Toast ── */
 #toast {
-  position:fixed; top:20px; right:20px;
+  position:fixed; top:calc(20px + var(--titlebar-height)); right:20px;
   background:var(--surface2);
   border:1px solid var(--border);
   color:var(--text);
@@ -159,6 +170,7 @@ body {
 /* ── Modal shared ── */
 .modal-overlay {
   position:fixed; inset:0;
+  padding-top:var(--titlebar-height);
   background:rgba(0,0,0,.7);
   z-index:200;
   display:flex;
@@ -308,3 +320,22 @@ pre:has(> .pre-header) > code.hljs {
 }
 .copy-btn:hover { background: #2b3140; color: #fff; border-color: #3a4152; }
 .copy-btn:active { transform: translateY(1px); }
+
+/* ── Hidden title bar ──
+   With no title bar, the window moves only by the parts of the page marked as
+   its drag region: the top rows. What's in them that takes a click, or text
+   someone may select or scroll, stays out of it. */
+@media (display-mode: window-controls-overlay) {
+  #sidebar-header, #sidebar-rail, #chat-header, .right-widgets .fp-header,
+  .pv-head, .sv-header, .av-header, .migration-banner, .disk-banner, .dw-bar {
+    -webkit-app-region: drag;
+    app-region: drag;
+  }
+  :is(#sidebar-header, #sidebar-rail, #chat-header, .right-widgets .fp-header,
+      .pv-head, .sv-header, .av-header, .migration-banner, .disk-banner, .dw-bar)
+    :is(button, a, input, select, textarea, label, summary, pre, [tabindex], [contenteditable],
+        [role="button"], [role="status"], [role="dialog"], [role="menu"], [role="listbox"]) {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+  }
+}

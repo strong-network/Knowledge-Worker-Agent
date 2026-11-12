@@ -9,6 +9,7 @@ import GuestApp from './GuestApp.vue'
 import './style.css'
 import 'highlight.js/styles/github-dark.css'
 import { registerServiceWorker } from './pwa'
+import { matchTitleBarColor } from './utils/titleBar'
 
 // `?doc=<path>` boots the pop-out document window instead of the chat app.
 // A query parameter rather than a path like /viewer because the Go
@@ -28,3 +29,4 @@ app.mount('#app')
 // and reloading a window that may hold unsaved edits just to pick up a new
 // bundle is a bad trade. The guest listener does not serve the worker at all.
 if (!docPath && !isGuest) registerServiceWorker()
+if (!isGuest) matchTitleBarColor()

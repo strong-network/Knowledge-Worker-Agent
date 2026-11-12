@@ -5,7 +5,6 @@ package opencodev2
 
 import (
 	"context"
-	"os"
 	"os/exec"
 	"strings"
 )
@@ -28,7 +27,7 @@ func Cmd(ctx context.Context, bin string, args ...string) *exec.Cmd {
 // counts the arguments after "--" twice. A caller that sets Stdin itself
 // replaces the message.
 func Command(ctx context.Context, bin string, args ...string) *exec.Cmd {
-	env := append(childEnv(os.Environ()), "OPENCODE_DISABLE_AUTOUPDATE=1")
+	env := append(processEnv(), "OPENCODE_DISABLE_AUTOUPDATE=1")
 	flags := []string{"--standalone"}
 	if url, password, err := Ensure(ctx); err == nil {
 		flags = []string{"--server", url}

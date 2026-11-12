@@ -14,6 +14,7 @@ import (
 	neturl "net/url"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/config"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/skilltokens"
 )
 
 const (
@@ -47,6 +49,8 @@ type server struct {
 	stopped bool
 	// overlay is the configuration document the server was started with.
 	overlay string
+	// env is the environment the server was started with, without its password.
+	env []string
 }
 
 var srv server
@@ -137,7 +141,9 @@ func (s *server) startLocked(ctx context.Context) error {
 	}
 	cmd := exec.Command(bin, "serve", "--hostname", "127.0.0.1", "--port", fmt.Sprint(port))
 	cmd.Dir = workDir()
-	cmd.Env = append(configEnv(childEnv(os.Environ())), "OPENCODE_PASSWORD="+password, "OPENCODE_DISABLE_AUTOUPDATE=1")
+	env := configEnv(processEnv())
+	cmd.Env = append(slices.Clone(env), "OPENCODE_PASSWORD="+password, "OPENCODE_DISABLE_AUTOUPDATE=1")
+	s.env = env
 	s.overlay = ""
 	for _, kv := range cmd.Env {
 		if v, ok := strings.CutPrefix(kv, "OPENCODE_CONFIG="); ok {
@@ -345,6 +351,10 @@ func randomPassword() (string, error) {
 	}
 	return hex.EncodeToString(b), nil
 }
+
+// processEnv is the environment of every opencode 2.x process: KWA's, with
+// the tokens the user saved for skills.
+func processEnv() []string { return skilltokens.Add(childEnv(os.Environ())) }
 
 // childEnv is KWA's environment for an opencode 2.x process, less what must
 // not pass through: an opencode password, which the caller sets, and PWD.

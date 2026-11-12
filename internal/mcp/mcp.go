@@ -27,7 +27,7 @@ func HandleList(w http.ResponseWriter, r *http.Request) {
 		servers = []serverView{}
 	}
 	for i := range servers {
-		servers[i] = servers[i].withHiddenValues()
+		servers[i] = servers[i].withHiddenValues().withMicrosoft()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"servers": servers})
 }
@@ -48,7 +48,7 @@ func HandleGet(w http.ResponseWriter, r *http.Request) {
 		writeJSONErr(w, http.StatusNotFound, "server not found: "+name)
 		return
 	}
-	writeJSON(w, http.StatusOK, sv.withHiddenValues())
+	writeJSON(w, http.StatusOK, sv.withHiddenValues().withMicrosoft())
 }
 
 // provisionedRefusal is the message returned when the client tries to edit or

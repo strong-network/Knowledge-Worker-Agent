@@ -54,6 +54,10 @@ type MCPAuthMeta struct {
 	// "Authorization: Bearer <key>". An explicitly empty scheme sends the bare key.
 	Header string  `json:"header,omitempty"`
 	Scheme *string `json:"scheme,omitempty"`
+	// ClientID and Tenant are an "entra" server's app registration, over
+	// KWA_ENTRA_CLIENT_ID and KWA_ENTRA_TENANT_ID.
+	ClientID string `json:"clientId,omitempty"`
+	Tenant   string `json:"tenant,omitempty"`
 }
 
 // mcpKeyFile returns the file an "api-key" server's key is read from, created
@@ -163,6 +167,8 @@ func parseMCPMetaBlock(raw any) MCPAuthMeta {
 		if s, ok := a["scheme"].(string); ok {
 			auth.Scheme = &s
 		}
+		auth.ClientID, _ = a["clientId"].(string)
+		auth.Tenant, _ = a["tenant"].(string)
 	}
 	return auth
 }

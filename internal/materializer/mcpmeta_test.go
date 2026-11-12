@@ -292,3 +292,15 @@ func TestMaterializeRealArtifactsCarryEnoughToConnect(t *testing.T) {
 		t.Errorf("atlassian carries an enabled key: %v", atlassian)
 	}
 }
+
+// A Microsoft connector's artifact carries the app it signs in with.
+func TestTakeMCPMetaKeepsTheEntraApp(t *testing.T) {
+	frag := map[string]any{
+		"mcp": map[string]any{"workiq": map[string]any{"type": "remote", "url": "https://workiq.example.com/mcp"}},
+		"kwa": map[string]any{"auth": map[string]any{"type": "entra", "clientId": "client-9", "tenant": "contoso.example.com"}},
+	}
+	got, _ := takeMCPMeta("mcp.workiq.v1", frag)
+	if len(got) != 1 || got[0].Auth.Type != "entra" || got[0].Auth.ClientID != "client-9" || got[0].Auth.Tenant != "contoso.example.com" {
+		t.Errorf("meta = %+v", got)
+	}
+}

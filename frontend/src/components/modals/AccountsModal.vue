@@ -9,6 +9,10 @@ import {
   fetchGitHubPatStatus,
   setGitHubPat,
   clearGitHubPat,
+  fetchSkillTokens,
+  saveSkillToken,
+  removeSkillToken,
+  type SkillToken,
   setProviderKey,
   removeProviderKey,
   signOutProvider,
@@ -27,6 +31,7 @@ const providers = useProvidersStore()
 // its own row, so it needs no entry here.
 const BUILTIN_LOGIN_MODALS: Record<string, string> = {
   'github-copilot': 'opencode-login',
+  openai: 'chatgpt-login',
   'google-vertex': 'vertex-login',
 }
 
@@ -35,6 +40,7 @@ const BUILTIN_LOGIN_MODALS: Record<string, string> = {
 // change, so it cannot require a new icon to look right.
 const BUILTIN_ICONS: Record<string, { glyph: string; cls: string }> = {
   'github-copilot': { glyph: '⌥', cls: 'opencode' },
+  openai: { glyph: '✳', cls: 'generic' },
   'google-vertex': { glyph: '☁', cls: 'vertex' },
 }
 
@@ -106,6 +112,17 @@ function latencyText(e: ProviderEndpoint): string {
 function autoOptionText(p: ModelProvider): string {
   const active = p.endpoints?.find(e => e.id === p.endpoint)
   return p.endpointAuto && active ? `Automatic — ${active.label}` : 'Automatic (fastest)'
+}
+
+// ── Usage reporting ──
+function telemetryText(p: ModelProvider): string {
+  const t = p.telemetry
+  if (!t?.endpoint || t.error) return ''
+  const items = ['usage', ...(t.content ?? [])]
+  const list = items.length > 1 ? `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}` : items[0]
+  let host = t.endpoint
+  try { host = new URL(t.endpoint).host } catch { /* keep the address as given */ }
+  return `Your ${list} ${items.length > 1 ? 'are' : 'is'} sent to your organization's telemetry service at ${host}.`
 }
 
 async function chooseRegion(p: ModelProvider, event: Event) {
@@ -231,7 +248,93 @@ async function refreshGitHub() {
 onMounted(() => {
   providers.refresh()
   refreshGitHub()
+  refreshSkillTokens()
 })
+
+// ── Tokens for skills ──
+//
+// Declared by the skills themselves, so a skill that needs a token adds its
+// row here with no source change.
+const skillTokens = ref<SkillToken[]>([])
+const tokenEditing = ref('')
+const tokenValue = ref('')
+const tokenBusy = ref(false)
+const tokenError = ref('')
+const tokenSaved = ref('')
+
+async function refreshSkillTokens() {
+  try {
+    skillTokens.value = (await fetchSkillTokens()).tokens
+  } catch {
+    // Accounts works without this section; it comes back on the next open.
+  }
+}
+
+function tokenStatus(t: SkillToken): { dot: string; text: string } {
+  if (t.source === 'environment') return { dot: 'ok', text: 'Set by your workspace' }
+  if (t.source === 'saved') return { dot: 'ok', text: 'Saved' }
+  return { dot: 'off', text: 'No token saved' }
+}
+
+function tokenUsers(t: SkillToken): string {
+  const s = t.skills
+  if (!s.length) return 'No skill uses this token now. You can remove it.'
+  const list = s.length > 1 ? `${s.slice(0, -1).join(', ')} and ${s[s.length - 1]}` : s[0]
+  return `Used by the ${list} skill${s.length > 1 ? 's' : ''}.`
+}
+
+function startTokenEdit(t: SkillToken) {
+  tokenEditing.value = t.name
+  tokenValue.value = ''
+  tokenError.value = ''
+  tokenSaved.value = ''
+}
+
+function cancelTokenEdit() {
+  tokenEditing.value = ''
+  tokenValue.value = ''
+  tokenError.value = ''
+}
+
+async function saveToken(t: SkillToken) {
+  const v = tokenValue.value.trim()
+  if (!v || tokenBusy.value) return
+  tokenBusy.value = true
+  tokenError.value = ''
+  try {
+    const res = await saveSkillToken(t.name, v)
+    if (res.error) {
+      tokenError.value = res.error
+      return
+    }
+    cancelTokenEdit()
+    tokenSaved.value = t.name
+    await refreshSkillTokens()
+  } catch (e: any) {
+    tokenError.value = e?.message || String(e)
+  } finally {
+    tokenBusy.value = false
+  }
+}
+
+async function removeToken(t: SkillToken) {
+  if (tokenBusy.value) return
+  tokenBusy.value = true
+  tokenError.value = ''
+  tokenSaved.value = ''
+  try {
+    const res = await removeSkillToken(t.name)
+    if (res.error) {
+      tokenError.value = res.error
+      return
+    }
+    await refreshSkillTokens()
+  } catch (e: any) {
+    tokenError.value = e?.message || String(e)
+  } finally {
+    tokenBusy.value = false
+  }
+}
 
 function startGitHubEdit() {
   ghToken.value = ''
@@ -351,6 +454,7 @@ async function removeGitHubPat() {
             </select>
             <span v-if="choosingRegion === p.id" class="acc-region-busy">Measuring…</span>
           </div>
+          <div v-if="telemetryText(p)" class="acc-help">{{ telemetryText(p) }}</div>
         </div>
         <div class="acc-action">
           <!-- Built-ins keep their own sign-in flows and their own routes. -->
@@ -501,6 +605,75 @@ async function removeGitHubPat() {
       </div>
       <div v-if="ghError" class="gh-error">{{ ghError }}</div>
     </div>
+
+    <!-- Tokens the skills declare in their SKILL.md. -->
+    <section v-if="skillTokens.length" class="skill-tokens" aria-labelledby="skill-tokens-title">
+      <h3 id="skill-tokens-title" class="acc-section-title">Tokens for skills</h3>
+      <p class="acc-section-sub">Some skills reach another service with a token of yours.</p>
+
+      <template v-for="t in skillTokens" :key="t.name">
+        <div class="account-row" :data-token="t.name">
+          <div class="acc-icon generic"><span aria-hidden="true">◈</span></div>
+          <div class="acc-info">
+            <div class="acc-title">{{ t.label }}</div>
+            <div class="acc-sub">
+              <span class="dot" :class="tokenStatus(t).dot" /> {{ tokenStatus(t).text }}
+            </div>
+            <div class="acc-help">{{ tokenUsers(t) }}</div>
+            <div v-if="tokenSaved === t.name" class="acc-help token-saved" role="status">
+              The assistant can use it from your next message.
+            </div>
+          </div>
+          <div v-if="t.source !== 'environment' && tokenEditing !== t.name" class="acc-action">
+            <button class="btn-secondary" @click="startTokenEdit(t)">
+              {{ t.source === 'saved' ? 'Replace token' : 'Add token' }}
+            </button>
+            <button
+              v-if="t.source === 'saved'"
+              class="btn-link"
+              :disabled="tokenBusy"
+              @click="removeToken(t)"
+            >
+              Remove
+            </button>
+          </div>
+        </div>
+
+        <div v-if="tokenEditing === t.name" class="gh-form">
+          <label class="gh-label" :for="`skill-token-${t.name}`">Token for {{ t.label }}</label>
+          <p v-if="t.help || t.url" class="gh-help">
+            {{ t.help }}
+            <a v-if="t.url" :href="t.url" target="_blank" rel="noopener noreferrer">Get a token ↗</a>
+          </p>
+          <div class="token-warning" role="note">
+            <strong>The assistant uses this token as you.</strong>
+            Knowledge Worker Agent adds no safeguards of its own: whatever the token allows,
+            such as sending messages or changing data, the assistant can do too, and
+            Knowledge Worker Agent won't block it. Save a token only with the access you're
+            comfortable giving the assistant.
+          </div>
+          <div class="gh-input-row">
+            <input
+              :id="`skill-token-${t.name}`"
+              v-model="tokenValue"
+              class="gh-input"
+              type="password"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="Paste your token"
+              :disabled="tokenBusy"
+              @keydown.enter.prevent="saveToken(t)"
+            />
+            <button class="btn-primary" :disabled="tokenBusy || !tokenValue.trim()" @click="saveToken(t)">
+              {{ tokenBusy ? 'Saving…' : 'Save' }}
+            </button>
+            <button class="btn-link" :disabled="tokenBusy" @click="cancelTokenEdit">Cancel</button>
+          </div>
+          <div v-if="tokenError" class="gh-error">{{ tokenError }}</div>
+        </div>
+        <div v-else-if="tokenError && !tokenEditing" class="acc-error">{{ tokenError }}</div>
+      </template>
+    </section>
 
     <p class="footnote">
       Signing in connects the assistant so it can load and use its models.
@@ -709,6 +882,33 @@ async function removeGitHubPat() {
   background: rgba(207,34,46,.10); border: 1px solid rgba(207,34,46,.35);
   color: #cf222e; border-radius: 6px; font-size: 12px;
 }
+
+.skill-tokens { margin-top: 22px; }
+.acc-section-title {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.acc-section-sub {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--text2);
+  line-height: 1.5;
+}
+.token-warning {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid #f59e0b;
+  border-radius: 6px;
+  background: var(--surface);
+  font-size: 12px;
+  color: var(--text2);
+  line-height: 1.5;
+}
+.token-warning strong { color: var(--text); }
+.token-saved { color: var(--text); }
 
 .acc-info { flex: 1; min-width: 0; }
 .acc-title {

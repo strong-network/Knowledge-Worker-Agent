@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/config"
 	"strings"
 	"testing"
 )
@@ -20,6 +21,11 @@ func TestProbeErrorFromExtractsProviderMessage(t *testing.T) {
 			out: `{"type":"start"}
 {"type":"error","error":{"name":"UnknownError","data":{"message":"Unexpected server error."}}}`,
 			want: "Unexpected server error.",
+		},
+		{
+			name: "opencode 2.x error event",
+			out:  `{"type":"error","error":{"type":"provider.invalid-request","message":"Provider request failed with HTTP 404: No matching route found.","status":404}}`,
+			want: "Provider request failed with HTTP 404: No matching route found.",
 		},
 		{
 			// The message is the actionable half; a bare name is better than nothing.
@@ -57,6 +63,9 @@ func TestCheapestModelForPrefersSmallFamilies(t *testing.T) {
 		"github-copilot/claude-opus-5",
 		"github-copilot/claude-haiku-4.5",
 		"google-vertex/claude-opus-5@default",
+		"openai/gpt-5.6-cyber",
+		"openai/gpt-6-luna-fast",
+		"openai/gpt-6-luna",
 	}
 	opencodeModelsMu.Unlock()
 	t.Cleanup(func() {
@@ -71,6 +80,9 @@ func TestCheapestModelForPrefersSmallFamilies(t *testing.T) {
 	// No small family available: any model of that provider still beats none.
 	if got := cheapestModelFor("google-vertex"); got != "google-vertex/claude-opus-5@default" {
 		t.Fatalf("expected the only vertex model, got %q", got)
+	}
+	if got := cheapestModelFor("openai"); got != "openai/gpt-6-luna-fast" {
+		t.Fatalf("expected the tested ChatGPT fast model, got %q", got)
 	}
 	if got := cheapestModelFor("nobody"); got != "" {
 		t.Fatalf("expected no model for an unknown provider, got %q", got)
@@ -89,9 +101,45 @@ func TestProbeProviderFailsWithNoModels(t *testing.T) {
 		opencodeModels = prev
 		opencodeModelsMu.Unlock()
 	})
+	stubProbeDiscovery(t, nil)
 
 	err := probeProvider(context.Background(), "some-provider")
 	if err == nil || !strings.Contains(err.Error(), "no model") {
 		t.Fatalf("expected a no-model error, got %v", err)
+	}
+}
+
+func stubProbeDiscovery(t *testing.T, list []string) *string {
+	t.Helper()
+	asked := new(string)
+	prev := probeModelDiscovery
+	probeModelDiscovery = func(id string) []string { *asked = id; return list }
+	t.Cleanup(func() { probeModelDiscovery = prev })
+	return asked
+}
+
+// A provider just signed in to has no models in the list yet, because only
+// providers that passed this check get them. The check must find its models
+// itself, or it could never pass.
+func TestProbeProviderDiscoversModelsForNewProvider(t *testing.T) {
+	opencodeModelsMu.Lock()
+	prev := opencodeModels
+	opencodeModels = []string{"github-copilot/claude-opus-5"}
+	opencodeModelsMu.Unlock()
+	prevBin, prevWorkspace := config.OpencodeBin, config.Workspace
+	config.OpencodeBin, config.Workspace = "/bin/true", t.TempDir()
+	t.Cleanup(func() {
+		opencodeModelsMu.Lock()
+		opencodeModels = prev
+		opencodeModelsMu.Unlock()
+		config.OpencodeBin, config.Workspace = prevBin, prevWorkspace
+	})
+	asked := stubProbeDiscovery(t, []string{"openai/gpt-6", "openai/gpt-6-mini"})
+
+	if err := probeProvider(context.Background(), "openai"); err != nil {
+		t.Fatalf("probe failed: %v", err)
+	}
+	if *asked != "openai" {
+		t.Fatalf("discovery asked for %q, want openai", *asked)
 	}
 }

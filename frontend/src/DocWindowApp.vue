@@ -122,10 +122,16 @@ function reload() { docView.value?.reopen() }
    to place, especially once a few of them are open. */
 .dw-bar {
   display: flex; align-items: center; gap: 10px;
-  padding: 6px 10px; flex-shrink: 0;
+  padding: 6px calc(10px + var(--titlebar-right)) 6px calc(10px + var(--titlebar-left));
+  min-height: var(--titlebar-height);
+  flex-shrink: 0;
   border-bottom: 1px solid var(--border);
   background: var(--surface2);
   font-size: 12px;
+}
+/* The window buttons take the --surface colour when the title bar is hidden. */
+@media (display-mode: window-controls-overlay) {
+  .dw-bar { background: var(--surface); }
 }
 .dw-app { font-weight: 700; color: var(--text2); white-space: nowrap; }
 .dw-dir {

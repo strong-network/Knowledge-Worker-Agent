@@ -12,6 +12,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/config"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/skilltokens"
 )
 
 func writeFile(t *testing.T, path, content string) {
@@ -137,6 +140,51 @@ func TestOverlayWithoutAPlatformFolder(t *testing.T) {
 	}
 }
 
+// skillPolicies maps each skill.use policy's resource to its effect.
+func skillPolicies(t *testing.T, doc map[string]any) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for _, p := range doc["policies"].([]any) {
+		m := p.(map[string]any)
+		if m["action"] == "skill.use" {
+			out[m["resource"].(string)] = m["effect"].(string)
+		}
+	}
+	return out
+}
+
+func TestOverlayTurnsOffBuiltinSkills(t *testing.T) {
+	t.Setenv("KWA_HOME", t.TempDir())
+	path, err := writeOverlay("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := skillPolicies(t, readOverlay(t, path))
+	if got["browser"] != "deny" || got["report"] != "deny" || got["opencode"] != "" {
+		t.Fatalf("skill policies = %v, want browser and report denied, opencode left alone", got)
+	}
+}
+
+func TestOverlayKeepsThePlatformsPolicies(t *testing.T) {
+	platform := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	writeFile(t, filepath.Join(platform, "opencode.json"), `{"policies": [
+  {"action": "skill.use", "resource": "browser", "effect": "allow"},
+  {"action": "provider.use", "resource": "openai", "effect": "deny"}
+]}`)
+	path, err := writeOverlay(platform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := readOverlay(t, path)
+	if got := skillPolicies(t, doc); got["browser"] != "allow" || got["report"] != "deny" {
+		t.Errorf("skill policies = %v, want the platform's browser rule kept and report denied", got)
+	}
+	if n := len(doc["policies"].([]any)); n != 3 {
+		t.Errorf("%d policies, want the platform's 2 and report's", n)
+	}
+}
+
 func TestConfigEnvHandsTheFolderOverAsADocument(t *testing.T) {
 	platform := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
@@ -201,5 +249,99 @@ func TestReloadRestartsWhenThePlatformFolderAppears(t *testing.T) {
 	srv.mu.Unlock()
 	if overlay != filepath.Join(platform, overlayName) {
 		t.Errorf("the new server reads %s", overlay)
+	}
+}
+
+// A provider's region reaches opencode through the environment, which
+// `opencode reload` doesn't reread: a server started before the region was
+// chosen sent every request to a bare path ("Invalid URL").
+func TestReloadRestartsWhenTheEnvironmentChanged(t *testing.T) {
+	useFake(t, "ok")
+	t.Setenv("KWA_ENDPOINT_GOOGLE_VERTEX", "")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	before, _, err := Ensure(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KWA_ENDPOINT_GOOGLE_VERTEX", "https://eu.example.com")
+	if err := Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+	after, _, ok := Running()
+	if !ok || after == before {
+		t.Fatalf("server %q after the reload, %q before; want a new one", after, before)
+	}
+	srv.mu.Lock()
+	env := srv.env
+	srv.mu.Unlock()
+	if !slices.Contains(env, "KWA_ENDPOINT_GOOGLE_VERTEX=https://eu.example.com") {
+		t.Error("the new server doesn't have the new region")
+	}
+
+	// Nothing changed since: the server is asked to reload, not replaced.
+	if err := Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if again, _, _ := Running(); again != after {
+		t.Errorf("an unchanged environment restarted the server: %q, then %q", after, again)
+	}
+}
+
+// A skill's script reads its token from the environment, which the server
+// keeps from when it started.
+func TestASavedSkillTokenRestartsTheServerWithIt(t *testing.T) {
+	useFake(t, "ok")
+	t.Setenv("EXAMPLE_API_TOKEN", "")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	before, _, err := Ensure(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := skilltokens.Save("EXAMPLE_API_TOKEN", "secret-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+	after, _, ok := Running()
+	if !ok || after == before {
+		t.Fatalf("server %q after the reload, %q before; want a new one", after, before)
+	}
+	srv.mu.Lock()
+	env := srv.env
+	srv.mu.Unlock()
+	if !slices.Contains(env, "EXAMPLE_API_TOKEN=secret-1") {
+		t.Error("the new server doesn't have the token")
+	}
+	if cmd := Command(ctx, config.OpencodeBin, "models"); !slices.Contains(cmd.Env, "EXAMPLE_API_TOKEN=secret-1") {
+		t.Error("a command doesn't have the token")
+	}
+
+	if err := skilltokens.Remove("EXAMPLE_API_TOKEN"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+	srv.mu.Lock()
+	env = srv.env
+	srv.mu.Unlock()
+	if slices.Contains(env, "EXAMPLE_API_TOKEN=secret-1") {
+		t.Error("the server still has the token after it was removed")
+	}
+}
+
+func TestEnvChangesNamesOnly(t *testing.T) {
+	got := envChanges(
+		[]string{"A=1", "B=2", "SECRET=old", "GONE=x"},
+		[]string{"A=1", "B=3", "SECRET=new", "NEW=y=z"})
+	want := []string{"B", "GONE", "NEW", "SECRET"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if envChanges([]string{"A=1"}, []string{"A=1"}) != nil {
+		t.Error("equal environments reported a change")
 	}
 }

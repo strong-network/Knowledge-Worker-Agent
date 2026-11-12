@@ -251,6 +251,12 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
+/* With no sidebar beside it, a top row starts under the window buttons on the
+   left when the title bar is hidden. */
+@media (max-width: 768px) {
+  #main { --header-inset-left: var(--titlebar-left); }
+}
+
 #sidebar-overlay {
   display: none;
   position: fixed;

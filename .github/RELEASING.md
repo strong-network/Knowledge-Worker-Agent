@@ -31,7 +31,7 @@ ghcr.io/strong-network/knowledge-worker-agent
 Triggers:
 
 - **Publish a GitHub release:** its tag must match `VERSION`, with an optional
-  `v` prefix. A release tagged `v2.0.2` with `VERSION` at `2.0.2` is accepted.
+  `v` prefix. A release tagged `v2.1.0` with `VERSION` at `2.1.0` is accepted.
 - **Manual Run workflow on the default branch.**
 
 **Both produce the same tags: the version from `VERSION`, and `latest`.** What you

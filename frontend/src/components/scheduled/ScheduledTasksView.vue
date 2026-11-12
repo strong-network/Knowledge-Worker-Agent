@@ -253,7 +253,7 @@ function targetLabel(t: ScheduledTask): string {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  padding: 20px 24px 16px;
+  padding: 20px calc(24px + var(--titlebar-right)) 16px calc(24px + var(--header-inset-left, 0px));
   border-bottom: 1px solid var(--border);
 }
 .sv-heading h1 { font-size: 20px; font-weight: 700; color: var(--text); margin: 0; }

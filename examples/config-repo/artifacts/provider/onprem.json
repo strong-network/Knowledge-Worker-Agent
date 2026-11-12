@@ -53,6 +53,25 @@
       { "id": "us", "label": "United States", "url": "https://us.models.acme.example.com" },
       { "id": "eu", "label": "Europe", "url": "https://eu.models.acme.example.com" }
     ],
+    // Optional: report this provider's usage to an OpenTelemetry collector, in
+    // the shape Claude Code's telemetry has (OTLP over HTTP, protobuf). Usage is
+    // tokens, cost, durations and tool names. Each log... flag adds content,
+    // and users see in Accounts & connections what is sent. Needs opencode 2.x.
+    "telemetry": {
+      "endpoint": "https://otel.example.com",
+      "exportIntervalSeconds": 60,
+      "logUserPrompts": false,
+      "logAssistantResponses": false,
+      "logToolDetails": false,
+      "logToolContent": false,
+      // Added to every record. A value is text, or {env:NAME} with a name from
+      // a short list: OWNER_EMAIL, OWNER_FULL_NAME, GOOGLE_VERTEX_PROJECT,
+      // GOOGLE_VERTEX_LOCATION, KWA_PROJECT_ID, STRONG_NETWORK_WORKSPACE_ID.
+      "resourceAttributes": {
+        "user.email": "{env:OWNER_EMAIL}",
+        "department": "research"
+      }
+    },
     // The models behind Default and Thinking, and the one for short background
     // jobs such as naming chats.
     "presets": {

@@ -4,6 +4,7 @@
 package materializer
 
 import (
+	"encoding/json"
 	"sort"
 	"strings"
 )
@@ -36,6 +37,9 @@ type ProviderMeta struct {
 	Endpoints []ProviderEndpoint `json:"endpoints,omitempty"`
 	// Description says in one sentence what the provider gives the user.
 	Description string `json:"description,omitempty"`
+	// Telemetry is kwa.telemetry, carried as written; the provider registry
+	// validates it.
+	Telemetry json.RawMessage `json:"telemetry,omitempty"`
 }
 
 // ProviderEndpoint is one entry of a provider artifact's kwa.endpoints list.
@@ -87,11 +91,26 @@ func takeProviderMeta(frag map[string]any) []ProviderMeta {
 	auth, presets := parseMetaBlock(raw)
 	endpoints := parseEndpoints(raw)
 	description := metaDescription(raw)
+	telemetry := metaTelemetry(raw)
 	out := make([]ProviderMeta, 0, len(ids))
 	for _, id := range ids {
-		out = append(out, ProviderMeta{ID: id, Auth: auth, Presets: presets, Endpoints: endpoints, Description: description})
+		out = append(out, ProviderMeta{ID: id, Auth: auth, Presets: presets, Endpoints: endpoints, Description: description, Telemetry: telemetry})
 	}
 	return out
+}
+
+// metaTelemetry returns kwa.telemetry as JSON, or nil when it isn't an object.
+func metaTelemetry(raw any) json.RawMessage {
+	block, _ := raw.(map[string]any)
+	t, ok := block["telemetry"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	b, err := json.Marshal(t)
+	if err != nil {
+		return nil
+	}
+	return b
 }
 
 // maxDescription is the longest description kept, in characters. The text

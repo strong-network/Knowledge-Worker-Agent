@@ -871,7 +871,8 @@ defineExpose({ reload, reopen, save })
 .dv { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 
 .fp-header {
-  display: flex; align-items: center; gap: 6px; padding: 8px 10px;
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px calc(10px + var(--header-inset-right, 0px)) 8px 10px;
   min-height: var(--fp-header-h, auto);
   border-bottom: 1px solid var(--border); background: var(--surface); flex-shrink: 0;
 }

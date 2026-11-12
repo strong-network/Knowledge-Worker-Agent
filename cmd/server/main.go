@@ -29,6 +29,7 @@ import (
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/db"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/defaults"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/diagnostics"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/entra"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/env"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/files"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/fileshare"
@@ -53,6 +54,8 @@ import (
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/scheduledtasks"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/sessions"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/sharing"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/skilltokens"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/telemetry"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/tidyup"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/versions"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/vertexauth"
@@ -175,6 +178,7 @@ func main() {
 
 	config.Init()
 	exportURL()
+	setupSkillTokens()
 	setStatus("starting")
 	migrateMode := migrationAtStartup()
 	if migrateMode == migration.On || migrateMode == migration.Undo {
@@ -310,6 +314,8 @@ func main() {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("graceful shutdown error: %v", err)
 	}
+	// Send what usage reporting still holds; each collector gets a few seconds.
+	telemetry.Shutdown()
 	cancel()
 
 	// Terminate any managed `opencode serve` child processes. db.Close runs via
@@ -462,12 +468,24 @@ func bootstrap() {
 	mcp.SetConfigChangeHook(chat.ReloadServerAgents)
 	matRes, matErr := runMaterializer()
 
+	// A provider with regional endpoints needs one chosen before any opencode
+	// process reads its address, and the registry's first sign-in check below
+	// already starts opencode 2.x's server.
+	providers.SetEndpointStore(db.GetAppMeta, db.SetAppMeta)
+	providers.SetEndpointChangeHook(chat.ReloadServerAgents)
+	providers.ApplyEndpoints(context.Background())
+
+	// Usage reporting, for providers whose artifact asks for it. It reads
+	// opencode 2.x's turn events.
+	telemetry.Version = version
+	if !opencodev2.Enabled() {
+		providers.SetTelemetryUnavailable("usage reporting needs opencode 2.x")
+	}
+	providers.ApplyTelemetry()
+
 	// Model providers: the provider registry reads what the materializer just wrote, so
 	// it is initialised here — after materialization, before model discovery.
 	initProviderRegistry()
-	// A provider with regional endpoints needs one chosen before any opencode
-	// process reads its address.
-	providers.ApplyEndpoints(context.Background())
 
 	// Discover models, start a periodic refresh, and refresh again after each
 	// successful opencode login.
@@ -570,6 +588,7 @@ func bootstrap() {
 				fmt.Printf("  ✓ Imported %d connector sign-ins of opencode 1.x\n", n)
 				go mcpauth.RefreshAllStatuses()
 			}
+			entra.StartRefresher(chat.HasActiveTasks)
 		}
 		cancel()
 	}
@@ -673,6 +692,7 @@ func refreshCentralConfig(step func(string)) error {
 	chat.InvalidateSkillCache()
 	step("Updating model providers and models")
 	providers.ApplyEndpoints(context.Background())
+	providers.ApplyTelemetry()
 	refreshOpencodeModels()
 	providers.ProbeAllInBackground()
 	step("Updating connectors")
@@ -911,6 +931,17 @@ func initProviderRegistry() {
 		// is wider than what a project, or a gateway in front of Vertex, serves.
 		DiscoverModels: discoverVertexModels,
 	})
+	// ChatGPT sign-in uses opencode 2.x's integration API, so it is offered only
+	// there. On 1.x a ChatGPT row would show a Connect that can only fail.
+	if config.OpencodeMajor >= 2 {
+		providers.RegisterBuiltin(providers.Builtin{
+			ID:          opencodeauth.ChatGPTProvider,
+			Label:       "OpenAI / ChatGPT",
+			AuthType:    providers.AuthChatGPTOAuth,
+			Description: "GPT models through your ChatGPT account, using OpenCode's native OAuth sign-in.",
+			CheckAuth:   opencodeauth.ChatGPTAuthenticated,
+		})
+	}
 	providers.RegisterBuiltin(providers.Builtin{
 		ID:          opencodeauth.Provider,
 		Label:       "GitHub Copilot",
@@ -928,10 +959,11 @@ func initProviderRegistry() {
 	// A newly-stored key makes that provider's models runnable immediately;
 	// without this the picker stays empty until the next refresh tick.
 	providers.SetKeyChangeHook(refreshOpencodeModels)
-	providers.SetEndpointStore(db.GetAppMeta, db.SetAppMeta)
-	// A running `opencode serve` keeps the address it started with.
-	providers.SetEndpointChangeHook(chat.ReloadServerAgents)
 	installProviderProbes()
+	opencodeauth.SetOnChatGPTLoginSuccess(func() {
+		providers.Forget(opencodeauth.ChatGPTProvider)
+		go providers.Probe(context.Background(), opencodeauth.ChatGPTProvider)
+	})
 
 	if reg := providers.Resolve(); reg.Mode == providers.ModeFallback {
 		// Central management is on but nothing usable resolved — the flag was
@@ -1159,9 +1191,13 @@ func registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/providers/{id}/key", providers.HandleSetKey)
 	mux.HandleFunc("DELETE /api/providers/{id}/key", providers.HandleRemoveKey)
 
-	// OpenCode (github-copilot provider) sign-in — drives `opencode auth
-	// login --provider github-copilot` over a PTY (device flow). This is the
-	// only sign-in flow; it authenticates opencode's github-copilot provider.
+	// OpenCode provider sign-in. ChatGPT uses OpenCode 2.x's native device-code
+	// OAuth API; GitHub Copilot keeps its existing device flow and TUI fallback.
+	mux.HandleFunc("POST /api/openai/auth/login/start", opencodeauth.HandleChatGPTLoginStart)
+	mux.HandleFunc("GET /api/openai/auth/login/{attemptID}", opencodeauth.HandleChatGPTLoginStatus)
+	mux.HandleFunc("POST /api/openai/auth/login/{attemptID}/cancel", opencodeauth.HandleChatGPTLoginCancel)
+	mux.HandleFunc("POST /api/openai/auth/login/{attemptID}/callback", opencodeauth.HandleChatGPTLoginCallback)
+
 	mux.HandleFunc("GET /api/opencode/auth/status", opencodeauth.HandleStatus)
 	mux.HandleFunc("POST /api/opencode/auth/login/start", opencodeauth.HandleLoginStart)
 	mux.HandleFunc("GET /api/opencode/auth/login/info", opencodeauth.HandleLoginInfo)
@@ -1173,6 +1209,12 @@ func registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/github/pat/status", opencodeauth.HandleGitHubPATStatus)
 	mux.HandleFunc("POST /api/github/pat", opencodeauth.HandleSetGitHubPAT)
 	mux.HandleFunc("DELETE /api/github/pat", opencodeauth.HandleClearGitHubPAT)
+
+	// Tokens the agent's skills declare, which opencode gets as environment
+	// variables. Values are never sent back.
+	mux.HandleFunc("GET /api/skill-tokens", skilltokens.HandleList)
+	mux.HandleFunc("PUT /api/skill-tokens/{name}", skilltokens.HandleSave)
+	mux.HandleFunc("DELETE /api/skill-tokens/{name}", skilltokens.HandleRemove)
 
 	// Vertex AI (google-vertex provider) sign-in — "Sign in with Google Cloud".
 	// Drives `gcloud auth application-default login --no-launch-browser` over
@@ -1386,7 +1428,7 @@ func runAgentAssist(ctx context.Context, prompt string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, agentAssistTimeout)
 	defer cancel()
 
-	ch, proc := chat.RunStream(chat.NewUUID(), prompt, cfg)
+	ch, proc := chat.RunStream(chat.NewUUID(), prompt, cfg, chat.Turn{Source: "agent_builder"})
 	defer func() {
 		if proc != nil {
 			proc.Kill()

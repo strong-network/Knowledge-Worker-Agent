@@ -187,7 +187,7 @@ async function tryIt() {
 <style scoped>
 /* Laid out like the Scheduled tasks view. */
 #artifacts-view { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
-.av-header { padding: 20px 24px 16px; border-bottom: 1px solid var(--border); }
+.av-header { padding: 20px calc(24px + var(--titlebar-right)) 16px calc(24px + var(--header-inset-left, 0px)); border-bottom: 1px solid var(--border); }
 .av-header h1 { font-size: 20px; font-weight: 700; color: var(--text); margin: 0; }
 .av-sub { font-size: 13px; color: var(--text2); margin: 4px 0 0; max-width: 860px; line-height: 1.4; }
 

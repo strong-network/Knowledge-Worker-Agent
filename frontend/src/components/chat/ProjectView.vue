@@ -278,7 +278,7 @@ function openSummarize() {
 
 <style scoped>
 .project-view { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
-.pv-head { padding: 18px 24px 14px; border-bottom: 1px solid var(--border); }
+.pv-head { padding: 18px calc(24px + var(--titlebar-right)) 14px calc(24px + var(--header-inset-left, 0px)); border-bottom: 1px solid var(--border); }
 .pv-back {
   display: inline-flex; align-items: center; gap: 5px; background: none; border: none;
   color: var(--text2); font-size: 13px; cursor: pointer; padding: 0; margin-bottom: 12px; font-family: inherit;

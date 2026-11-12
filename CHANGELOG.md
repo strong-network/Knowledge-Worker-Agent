@@ -8,6 +8,89 @@ the project's history, starting after 1.1.2.
 
 - First public release.
 
+## 2.1.0 (2026-11-12)
+
+### Security
+
+- The Go toolchain floor is 1.27.4, which fixes a standard-library vulnerability in 1.27.3
+  (GO-2026-6859: a race in `net/http`'s `MaxBytesReader` could crash an HTTP/1 server).
+
+### Added
+
+- **Sign in with ChatGPT.** On opencode 2.x, **Accounts & connections** offers ChatGPT: the
+  user approves in ChatGPT, in this browser or another one (the sign-in link can be copied),
+  then pastes back the address the browser lands on. opencode keeps the credential.
+- **Tokens for skills.** A skill can ask for a personal token, such as an API token for a
+  service its script calls, with `kwa-token` in the metadata of its SKILL.md front matter.
+  **Accounts & connections** lists it under **Tokens for skills**, where the user saves it, and
+  the agent gets it as an environment variable. Accounts warns that the agent can do whatever
+  the token allows: Knowledge Worker Agent adds no safeguards of its own.
+
+### Fixed
+
+- **The installed app with its title bar hidden.** Chrome lets an installed app hide its title
+  bar (the arrow next to the window buttons), and the page then runs under the window buttons:
+  they covered the sidebar button, the chat's name and the Files panel's buttons, and the
+  window couldn't be moved. The top rows now leave room for the buttons, the window moves by
+  them, and the buttons take the top row's colour.
+
+## 2.0.4 (2026-11-09)
+
+### Added
+
+- A connector that signs in with Microsoft can name the permission to ask for, with opencode's
+  `oauth.scope` in its entry, in place of the one it publishes. Microsoft's Agent 365 servers
+  publish theirs as an address, which Microsoft may not find in a tenant; naming the API by its
+  application ID avoids that.
+
+### Fixed
+
+- An OpenTelemetry collector that accepted a connection but never answered could hold up usage
+  reporting for minutes, and stopping Knowledge Worker Agent or refreshing the configuration
+  waited for it. A send now ends within the export interval, at most 30 seconds, and stopping
+  cancels a send in progress, whose records go out with the final send. **Diagnostics** shows
+  the last successful send apart from a failed attempt, and counts dropped metrics as well as
+  dropped events and spans.
+
+## 2.0.3 (2026-11-05)
+
+### Added
+
+- **Usage reporting to OpenTelemetry.** A provider artifact can name an OpenTelemetry collector
+  in `kwa.telemetry`, and Knowledge Worker Agent then reports that provider's use to it, with
+  the metrics, events and traces Claude Code sends, so the dashboards built for Claude Code
+  show Knowledge Worker Agent too. It sends tokens, cost, durations and tool names. Flags add
+  prompts, replies, tool inputs and tool output, and resource attributes can name the user or
+  the project. **Accounts & connections** tells users what is sent and where, and
+  **Diagnostics** shows each collector's last export. Needs opencode 2.x.
+- **Microsoft sign-in for connectors.** A connector protected by Microsoft Entra ID, such as
+  Microsoft Work IQ, can be signed in to from **Connectors**: Knowledge Worker Agent signs in
+  itself, with the app registration that `KWA_ENTRA_CLIENT_ID` and `KWA_ENTRA_TENANT_ID` name,
+  and renews the sign-in before it expires. opencode couldn't sign in to these connectors.
+  The sign-in sheet words it for Microsoft and shows the account; **Connectors** shows who each
+  connector is signed in as, and why a sign-in stopped working. A connector artifact can declare
+  `kwa.auth.type: "entra"`, with its own `clientId` and `tenant`.
+
+### Changed
+
+- With opencode 2.x, two of opencode's built-in skills are turned off, so the **Toolbox** doesn't
+  show them and the assistant can't load them: `browser`, which drives a browser in opencode's
+  desktop app, and `report`, which files an issue with opencode. The assistant can still use a
+  browser installed in the workspace, through the shell. A platform configuration that sets its
+  own `skill.use` policy for either keeps it.
+
+### Fixed
+
+- With opencode 2.x, every request to a provider with regional endpoints, such as an AI
+  gateway, failed with "Invalid URL" when the workspace also offered GitHub Copilot. Checking
+  the Copilot sign-in started opencode's server before a region was chosen, so the server never
+  had the region's address. The region is now chosen first, and choosing another one in
+  **Accounts & connections** restarts the server, which `opencode reload` alone didn't update.
+- With opencode 2.x, the **Toolbox** showed no skills, or only opencode's built-in ones, for a
+  new chat, and kept showing that for up to 30 minutes. 2.x loads a folder's skills in the
+  background and lists only those loaded so far, so Knowledge Worker Agent now waits until the
+  list stops changing.
+
 ## 2.0.2 (2026-11-04)
 
 ### Added

@@ -188,6 +188,19 @@ func ConnectorSignedIn(ctx context.Context, name string) (bool, error) {
 	return HasCredential(ctx, c.IntegrationID)
 }
 
+// ConnectorIntegration returns the integration a credential for the connector
+// called name belongs to.
+func ConnectorIntegration(ctx context.Context, name string) (string, error) {
+	c, err := findConnector(ctx, name)
+	if err != nil {
+		return "", err
+	}
+	if c.IntegrationID == "" {
+		return "", fmt.Errorf("%s keeps no sign-in", name)
+	}
+	return c.IntegrationID, nil
+}
+
 func findConnector(ctx context.Context, name string) (connector, error) {
 	all, err := listConnectors(ctx)
 	if err != nil {

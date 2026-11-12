@@ -857,9 +857,24 @@ export interface DiagnosticsReport {
     assigned: number
     status_known: boolean
   }
+  telemetry: {
+    collectors: DiagnosticsCollector[]
+    problems: { provider: string; error: string }[]
+  }
   settings: { name: string; value: string; from?: string }[]
   old_settings: string[]
   paths: { label: string; path: string }[]
+}
+
+export interface DiagnosticsCollector {
+  endpoint: string
+  providers: string[]
+  content: string[]
+  last_attempt: string | null
+  last_success: string | null
+  last_error?: string
+  queued: number
+  dropped: number
 }
 
 export interface DiagnosticsDisk {
@@ -1645,9 +1660,10 @@ export interface McpServer {
   enabled?: boolean
   // How the server authenticates, classified server-side (internal/mcp
   // AuthKind): 'none' (anonymous), 'local' (runs on this machine), 'oauth',
-  // 'copilot', 'setup', or absent when unknown. Descriptive only — it never
-  // affects whether a server is enabled.
-  auth?: 'none' | 'local' | 'oauth' | 'copilot' | 'setup' | 'api-key' | string
+  // 'copilot', 'setup', 'entra' (Microsoft, signed in by Knowledge Worker
+  // Agent), or absent when unknown. Descriptive only — it never affects
+  // whether a server is enabled.
+  auth?: 'none' | 'local' | 'oauth' | 'copilot' | 'setup' | 'api-key' | 'entra' | string
   // Central connectors: true when the server comes from an artifact your organization
   // assigned, rather than from your own config. Provisioned servers can be
   // turned on and off (that choice lives in your Global and survives a
@@ -1668,6 +1684,9 @@ export interface McpServer {
   description?: string
   // From Knowledge Worker Agent's own catalogue (the starter set and GitHub).
   builtin?: boolean
+  // The Microsoft sign-in Knowledge Worker Agent keeps for the server: its
+  // account, and why its last refresh was refused, if it was.
+  microsoft?: { account?: string; failed?: string }
   [key: string]: any
 }
 
@@ -1814,6 +1833,10 @@ export interface McpAuthInfo {
   output?: string
   error?: string
   started_at?: string
+  // 'entra' when Knowledge Worker Agent signs in to Microsoft itself.
+  method?: string
+  // Who a Microsoft sign-in signed in as.
+  account?: string
 }
 
 // Reads one server's authenticated state. `fresh` forces a live check rather
@@ -1917,7 +1940,7 @@ export interface LoginInfo {
 // How a provider is authenticated. Determines which Accounts row is rendered:
 // the two built-ins keep their own login flows, `user-key` gets a key field,
 // and `managed` is read-only status because the platform supplies the key.
-export type ProviderAuthType = 'oauth-device' | 'gcloud-adc' | 'user-key' | 'managed'
+export type ProviderAuthType = 'oauth-device' | 'chatgpt-oauth' | 'gcloud-adc' | 'user-key' | 'managed'
 
 // Why a provider is not authenticated. `secret-not-provisioned` is the one that
 // matters: telling a user to sign in to a managed provider is advice they
@@ -1954,6 +1977,17 @@ export interface ModelProvider {
   /** The endpoint in use, and whether the workspace chose it rather than the user. */
   endpoint?: string
   endpointAuto?: boolean
+  /** Where the provider's usage is reported, when the configuration asks for it. */
+  telemetry?: ProviderTelemetry
+}
+
+export interface ProviderTelemetry {
+  endpoint?: string
+  /** What besides usage is sent: "prompts", "replies", "tool details", "tool content". */
+  content?: string[]
+  /** Set when the configuration is invalid; nothing is sent. */
+  error?: string
+  warnings?: string[]
 }
 
 export interface ProviderEndpoint {
@@ -2069,6 +2103,49 @@ export async function cancelOpencodeLogin(): Promise<LoginInfo> {
   return res.json()
 }
 
+// ── ChatGPT subscription sign-in ──
+// opencode owns the OAuth attempt and credential storage. The server exposes only
+// the authorization URL, a token-free attempt status, and a route to deliver
+// the callback address the user pastes back (opencode's listener is on the
+// workspace's loopback address, which the user's browser can't reach).
+
+export interface ChatGPTLoginInfo {
+  attempt_id: string
+  verify_url: string
+  error?: string
+}
+
+export interface ChatGPTLoginStatus {
+  status: 'pending' | 'complete' | 'failed' | 'expired'
+  error?: string
+}
+
+export async function startChatGPTLogin(): Promise<ChatGPTLoginInfo> {
+  const res = await fetch(`${BASE}/api/openai/auth/login/start`, { method: 'POST' })
+  return res.json()
+}
+
+export async function fetchChatGPTLoginStatus(attemptID: string): Promise<ChatGPTLoginStatus> {
+  const res = await fetch(`${BASE}/api/openai/auth/login/${encodeURIComponent(attemptID)}`)
+  return res.json()
+}
+
+export async function cancelChatGPTLogin(attemptID: string): Promise<{ ok?: boolean; error?: string }> {
+  const res = await fetch(`${BASE}/api/openai/auth/login/${encodeURIComponent(attemptID)}/cancel`, {
+    method: 'POST',
+  })
+  return res.json()
+}
+
+export async function sendChatGPTCallback(attemptID: string, url: string): Promise<{ ok?: boolean; error?: string }> {
+  const res = await fetch(`${BASE}/api/openai/auth/login/${encodeURIComponent(attemptID)}/callback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
+  })
+  return res.json()
+}
+
 // ── Sign-in with Google Cloud (Vertex AI / gcloud ADC) ──
 //
 // The backend drives `gcloud auth application-default login` over stdin/stdout
@@ -2139,6 +2216,41 @@ export async function setGitHubPat(token: string): Promise<{ ok?: boolean; error
 
 export async function clearGitHubPat(): Promise<{ ok?: boolean; error?: string; source?: GitHubTokenSource }> {
   const res = await fetch(`${BASE}/api/github/pat`, { method: 'DELETE' })
+  return res.json()
+}
+
+// ── Tokens for skills ──
+//
+// A skill can declare a token it needs, such as a personal API token for a
+// service its script calls. The agent gets the saved token as an environment
+// variable. Values are never sent back.
+
+export interface SkillToken {
+  name: string
+  label: string
+  help?: string
+  url?: string
+  skills: string[]
+  source: 'saved' | 'environment' | 'none'
+}
+
+export async function fetchSkillTokens(): Promise<{ tokens: SkillToken[]; skillsChecked: boolean }> {
+  const res = await fetch(`${BASE}/api/skill-tokens`, { cache: 'no-store' })
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`)
+  return res.json()
+}
+
+export async function saveSkillToken(name: string, value: string): Promise<{ ok?: boolean; error?: string }> {
+  const res = await fetch(`${BASE}/api/skill-tokens/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ value }),
+  })
+  return res.json()
+}
+
+export async function removeSkillToken(name: string): Promise<{ ok?: boolean; error?: string }> {
+  const res = await fetch(`${BASE}/api/skill-tokens/${encodeURIComponent(name)}`, { method: 'DELETE' })
   return res.json()
 }
 

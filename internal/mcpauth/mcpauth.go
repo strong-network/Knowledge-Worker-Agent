@@ -33,6 +33,7 @@ import (
 
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/config"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/db"
+	"github.com/strong-network/Knowledge-Worker-Agent/internal/entra"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/env"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/mcp"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodev2"
@@ -77,6 +78,11 @@ type AuthInfo struct {
 	Output    string `json:"output,omitempty"`
 	Error     string `json:"error,omitempty"`
 	StartedAt string `json:"started_at,omitempty"`
+	// Method is "entra" for Knowledge Worker Agent's own Microsoft sign-in, and
+	// empty for opencode's.
+	Method string `json:"method,omitempty"`
+	// Account is who a Microsoft sign-in signed in as.
+	Account string `json:"account,omitempty"`
 }
 
 // authState tracks the single in-flight MCP auth flow. Single-flight: only one
@@ -94,6 +100,10 @@ type authState struct {
 	success   bool
 	err       string
 	startedAt time.Time
+	// entra is Knowledge Worker Agent's own Microsoft sign-in, when it runs
+	// instead of opencode's.
+	entra   *entra.Pending
+	account string
 }
 
 var auth = &authState{}
@@ -142,6 +152,8 @@ func (a *authState) resetLocked(server string) {
 	a.success = false
 	a.err = ""
 	a.startedAt = time.Time{}
+	a.entra = nil
+	a.account = ""
 }
 
 // startAuth spawns `opencode mcp auth <name>` over a PTY and begins scraping its
@@ -155,6 +167,9 @@ func startAuth(server string) error {
 	// will fail with a better message than we could invent here.
 	if enabled, found, err := mcp.IsEnabled(server); err == nil && found && !enabled {
 		return ErrNotEnabled{Server: server}
+	}
+	if handled, err := startEntra(server); handled {
+		return err
 	}
 	auth.mu.Lock()
 	defer auth.mu.Unlock()
@@ -371,6 +386,10 @@ func snapshotLocked() AuthInfo {
 	if !auth.startedAt.IsZero() {
 		started = auth.startedAt.UTC().Format(time.RFC3339)
 	}
+	method := ""
+	if auth.entra != nil {
+		method = "entra"
+	}
 	return AuthInfo{
 		Server:    auth.server,
 		Running:   (auth.running || auth.cmd != nil) && !auth.done,
@@ -380,6 +399,8 @@ func snapshotLocked() AuthInfo {
 		Output:    auth.output.String(),
 		Error:     auth.err,
 		StartedAt: started,
+		Method:    method,
+		Account:   auth.account,
 	}
 }
 
@@ -529,6 +550,11 @@ func parseServerConnected(raw, server string) bool {
 func Logout(server string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	defer cancel()
+	if entra.Has(server) {
+		if err := entra.Forget(server); err != nil {
+			log.Printf("[ERROR] mcpauth: forget the Microsoft sign-in of %q: %v", server, err)
+		}
+	}
 	var clean string
 	var err error
 	if opencodev2.Enabled() {
@@ -797,6 +823,10 @@ func HandleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	r.Body.Close()
 
+	if p := pendingEntra(); p != nil {
+		completeEntra(w, p, body.URL)
+		return
+	}
 	code, _, err := DeliverCallback(body.URL)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})

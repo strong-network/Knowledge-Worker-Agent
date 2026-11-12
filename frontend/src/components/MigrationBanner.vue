@@ -89,7 +89,7 @@ onBeforeUnmount(() => window.clearInterval(timer))
 <style scoped>
 .migration-banner {
   display: flex; align-items: flex-start; gap: 12px; flex-shrink: 0;
-  padding: 10px 16px;
+  padding: 10px calc(16px + var(--titlebar-right)) 10px calc(16px + var(--header-inset-left, 0px));
   background: rgba(3, 169, 241, 0.10);
   border-bottom: 1px solid rgba(3, 169, 241, 0.35);
   color: var(--text);
