@@ -16,7 +16,7 @@
 // Which world the workspace is in is decided by config.CentralConfigEnabled:
 //
 // Off (the default, and every workspace that exists today): the built-in
-// providers — GitHub Copilot and Google Vertex AI — exactly as before. A
+// providers — ChatGPT/OpenAI, GitHub Copilot and Google Vertex AI. A
 // provider artifact assigned by the config repo is still materialized into
 // opencode.json, but Knowledge Worker Agent does not surface it.
 //
@@ -41,6 +41,8 @@ type AuthType string
 const (
 	// AuthOAuthDevice is the GitHub Copilot device flow (built-in).
 	AuthOAuthDevice AuthType = "oauth-device"
+	// AuthChatGPTOAuth is OpenCode's native ChatGPT subscription OAuth flow.
+	AuthChatGPTOAuth AuthType = "chatgpt-oauth"
 	// AuthGcloudADC is Google Vertex Application Default Credentials (built-in).
 	AuthGcloudADC AuthType = "gcloud-adc"
 	// AuthUserKey means the user pastes their own API key, which is stored in

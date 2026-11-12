@@ -57,6 +57,9 @@ func TestCheapestModelForPrefersSmallFamilies(t *testing.T) {
 		"github-copilot/claude-opus-5",
 		"github-copilot/claude-haiku-4.5",
 		"google-vertex/claude-opus-5@default",
+		"openai/gpt-5.6-cyber",
+		"openai/gpt-6-luna-fast",
+		"openai/gpt-6-luna",
 	}
 	opencodeModelsMu.Unlock()
 	t.Cleanup(func() {
@@ -71,6 +74,9 @@ func TestCheapestModelForPrefersSmallFamilies(t *testing.T) {
 	// No small family available: any model of that provider still beats none.
 	if got := cheapestModelFor("google-vertex"); got != "google-vertex/claude-opus-5@default" {
 		t.Fatalf("expected the only vertex model, got %q", got)
+	}
+	if got := cheapestModelFor("openai"); got != "openai/gpt-6-luna-fast" {
+		t.Fatalf("expected the tested ChatGPT fast model, got %q", got)
 	}
 	if got := cheapestModelFor("nobody"); got != "" {
 		t.Fatalf("expected no model for an unknown provider, got %q", got)

@@ -27,6 +27,7 @@ const providers = useProvidersStore()
 // its own row, so it needs no entry here.
 const BUILTIN_LOGIN_MODALS: Record<string, string> = {
   'github-copilot': 'opencode-login',
+  openai: 'chatgpt-login',
   'google-vertex': 'vertex-login',
 }
 
@@ -35,6 +36,7 @@ const BUILTIN_LOGIN_MODALS: Record<string, string> = {
 // change, so it cannot require a new icon to look right.
 const BUILTIN_ICONS: Record<string, { glyph: string; cls: string }> = {
   'github-copilot': { glyph: '⌥', cls: 'opencode' },
+  openai: { glyph: '✳', cls: 'generic' },
   'google-vertex': { glyph: '☁', cls: 'vertex' },
 }
 

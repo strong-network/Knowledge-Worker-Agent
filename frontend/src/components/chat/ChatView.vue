@@ -106,6 +106,13 @@ const bannerCopy = computed(() => {
       action: '',
     }
   }
+  if (providers.authenticated.length > 0 && providers.usable.length === 0) {
+    return {
+      title: 'Your account is signed in, but KWA cannot reach its model provider.',
+      detail: 'Test the provider connection or choose another provider in Accounts & connections.',
+      action: 'Check connection',
+    }
+  }
   return {
     title: "The assistant isn't connected.",
     detail: 'Sign in to use its models.',

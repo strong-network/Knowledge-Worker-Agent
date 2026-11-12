@@ -1917,7 +1917,7 @@ export interface LoginInfo {
 // How a provider is authenticated. Determines which Accounts row is rendered:
 // the two built-ins keep their own login flows, `user-key` gets a key field,
 // and `managed` is read-only status because the platform supplies the key.
-export type ProviderAuthType = 'oauth-device' | 'gcloud-adc' | 'user-key' | 'managed'
+export type ProviderAuthType = 'oauth-device' | 'chatgpt-oauth' | 'gcloud-adc' | 'user-key' | 'managed'
 
 // Why a provider is not authenticated. `secret-not-provisioned` is the one that
 // matters: telling a user to sign in to a managed provider is advice they
@@ -2066,6 +2066,39 @@ export async function fetchOpencodeLoginInfo(): Promise<LoginInfo> {
 
 export async function cancelOpencodeLogin(): Promise<LoginInfo> {
   const res = await fetch(`${BASE}/api/opencode/auth/login/cancel`, { method: 'POST' })
+  return res.json()
+}
+
+// ── ChatGPT subscription sign-in ──
+// OpenCode owns the OAuth attempt and credential storage. KWA exposes only the
+// device verification URL/code and a token-free attempt status to this UI.
+
+export interface ChatGPTLoginInfo {
+  attempt_id: string
+  verify_url: string
+  user_code: string
+  error?: string
+}
+
+export interface ChatGPTLoginStatus {
+  status: 'pending' | 'complete' | 'failed' | 'expired'
+  error?: string
+}
+
+export async function startChatGPTLogin(): Promise<ChatGPTLoginInfo> {
+  const res = await fetch(`${BASE}/api/openai/auth/login/start`, { method: 'POST' })
+  return res.json()
+}
+
+export async function fetchChatGPTLoginStatus(attemptID: string): Promise<ChatGPTLoginStatus> {
+  const res = await fetch(`${BASE}/api/openai/auth/login/${encodeURIComponent(attemptID)}`)
+  return res.json()
+}
+
+export async function cancelChatGPTLogin(attemptID: string): Promise<{ ok?: boolean; error?: string }> {
+  const res = await fetch(`${BASE}/api/openai/auth/login/${encodeURIComponent(attemptID)}/cancel`, {
+    method: 'POST',
+  })
   return res.json()
 }
 

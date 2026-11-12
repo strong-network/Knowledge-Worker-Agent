@@ -128,14 +128,18 @@ func main() {
 			// Cross-session retrieval: serve the retrieval MCP server on stdio. opencode spawns
 			// this; it must not start the HTTP server or write to stdout.
 			os.Exit(runMCPRecall(os.Args[2:]))
+		case "mcp-pkbrain":
+			// Imported-history retrieval is a separate, on-demand MCP server.
+			os.Exit(runMCPPkBrain(os.Args[2:]))
 		case "migrate":
 			os.Exit(runMigrate(os.Args[2:]))
 		case "-h", "--help", "help":
-			fmt.Println("Usage: knowledge-worker-agent [serve|health|version|mcp-recall|migrate dry-run|on|undo]")
+			fmt.Println("Usage: knowledge-worker-agent [serve|health|version|mcp-recall|mcp-pkbrain|migrate dry-run|on|undo]")
 			fmt.Println("  serve       (default) start the HTTP server")
 			fmt.Println("  health      hit /healthz on the configured host/port and exit 0/1")
 			fmt.Println("  version     print the build commit and exit")
 			fmt.Println("  mcp-recall  serve the cross-session retrieval MCP server on stdio")
+			fmt.Println("  mcp-pkbrain serve the PKBrain imported-history MCP server on stdio")
 			fmt.Println("  migrate dry-run  report what the one-folder migration, or once it has run")
 			fmt.Println("                   its undo, would do, and exit")
 			fmt.Println("  migrate on       carry the migration out, with the server stopped; at startup")
@@ -523,6 +527,7 @@ func bootstrap() {
 	}
 
 	ensureRecallMCP()
+	ensurePKBrainMCP()
 	mcp.WarnMissingCommands(os.Stderr)
 
 	// On opencode 2.x, model discovery has started the server by now, before
@@ -912,6 +917,13 @@ func initProviderRegistry() {
 		DiscoverModels: discoverVertexModels,
 	})
 	providers.RegisterBuiltin(providers.Builtin{
+		ID:          opencodeauth.ChatGPTProvider,
+		Label:       "OpenAI / ChatGPT",
+		AuthType:    providers.AuthChatGPTOAuth,
+		Description: "GPT models through your ChatGPT account, using OpenCode's native OAuth sign-in.",
+		CheckAuth:   opencodeauth.ChatGPTAuthenticated,
+	})
+	providers.RegisterBuiltin(providers.Builtin{
 		ID:          opencodeauth.Provider,
 		Label:       "GitHub Copilot",
 		AuthType:    providers.AuthOAuthDevice,
@@ -932,6 +944,10 @@ func initProviderRegistry() {
 	// A running `opencode serve` keeps the address it started with.
 	providers.SetEndpointChangeHook(chat.ReloadServerAgents)
 	installProviderProbes()
+	opencodeauth.SetOnChatGPTLoginSuccess(func() {
+		providers.Forget(opencodeauth.ChatGPTProvider)
+		go providers.Probe(context.Background(), opencodeauth.ChatGPTProvider)
+	})
 
 	if reg := providers.Resolve(); reg.Mode == providers.ModeFallback {
 		// Central management is on but nothing usable resolved — the flag was
@@ -1159,9 +1175,12 @@ func registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/providers/{id}/key", providers.HandleSetKey)
 	mux.HandleFunc("DELETE /api/providers/{id}/key", providers.HandleRemoveKey)
 
-	// OpenCode (github-copilot provider) sign-in — drives `opencode auth
-	// login --provider github-copilot` over a PTY (device flow). This is the
-	// only sign-in flow; it authenticates opencode's github-copilot provider.
+	// OpenCode provider sign-in. ChatGPT uses OpenCode 2.x's native device-code
+	// OAuth API; GitHub Copilot keeps its existing device flow and TUI fallback.
+	mux.HandleFunc("POST /api/openai/auth/login/start", opencodeauth.HandleChatGPTLoginStart)
+	mux.HandleFunc("GET /api/openai/auth/login/{attemptID}", opencodeauth.HandleChatGPTLoginStatus)
+	mux.HandleFunc("POST /api/openai/auth/login/{attemptID}/cancel", opencodeauth.HandleChatGPTLoginCancel)
+
 	mux.HandleFunc("GET /api/opencode/auth/status", opencodeauth.HandleStatus)
 	mux.HandleFunc("POST /api/opencode/auth/login/start", opencodeauth.HandleLoginStart)
 	mux.HandleFunc("GET /api/opencode/auth/login/info", opencodeauth.HandleLoginInfo)

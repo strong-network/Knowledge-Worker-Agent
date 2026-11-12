@@ -116,6 +116,19 @@ func cheapestModelFor(providerID string) string {
 	if len(owned) == 0 {
 		return ""
 	}
+	// ChatGPT's subscription catalogue can list models that are not enabled
+	// for every plan. Prefer the small fast family that the web chat uses, so a
+	// single unavailable catalogue entry does not mark a working account as
+	// unreachable.
+	if providerID == opencodeauth.ChatGPTProvider {
+		for _, family := range []string{"gpt-6-luna-fast", "luna-fast", "fast", "luna"} {
+			for _, m := range owned {
+				if strings.Contains(strings.ToLower(m), family) {
+					return m
+				}
+			}
+		}
+	}
 	for _, cheap := range []string{"haiku", "mini", "flash", "small", "lite"} {
 		for _, m := range owned {
 			if strings.Contains(strings.ToLower(m), cheap) {
@@ -149,6 +162,7 @@ func installProviderProbes() {
 
 	providers.SetSignOut(vertexauth.Provider, vertexauth.SignOut)
 	providers.SetSignOut(opencodeauth.Provider, opencodeauth.SignOut)
+	providers.SetSignOut(opencodeauth.ChatGPTProvider, opencodeauth.SignOutChatGPT)
 
 	// A provider that has just become (un)reachable must stop or resume backing
 	// the presets, which only happens on a refresh.
