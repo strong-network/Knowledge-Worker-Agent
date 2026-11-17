@@ -24,6 +24,8 @@ const (
 	EnvProjectID = "KWA_PROJECT_ID"
 	// EnvConfigRepo is the config repo source: a git URL or a local dir path.
 	EnvConfigRepo = "KWA_CONFIG_REPO_URL"
+	// EnvConfigSubdir is the config repo's folder holding the configuration; unset for its root.
+	EnvConfigSubdir = "KWA_CONFIG_REPO_SUBDIR"
 	// EnvCacheDir overrides where the config repo is cloned/cached.
 	EnvCacheDir = "SDS_CONFIG_CACHE_DIR"
 	// EnvConfigDir overrides the platform-owned OpenCode config dir target.
@@ -35,6 +37,7 @@ const (
 type Options struct {
 	ProjectID     string    // workspace project id
 	RepoSource    string    // git URL or local path to the config repo
+	RepoSubdir    string    // folder of the repo holding the configuration; "" for its root
 	CacheDir      string    // where the repo is cloned/cached
 	ConfigDir     string    // platform-owned OPENCODE_CONFIG_DIR target
 	UserGlobalDir string    // user's ~/.config/opencode (never written; wipe guard)
@@ -108,6 +111,9 @@ func (o Options) FromEnv(userGlobalDir string) Options {
 	if o.RepoSource == "" {
 		o.RepoSource = strings.TrimSpace(env.Get(EnvConfigRepo))
 	}
+	if o.RepoSubdir == "" {
+		o.RepoSubdir = strings.TrimSpace(env.Get(EnvConfigSubdir))
+	}
 	if o.CacheDir == "" {
 		o.CacheDir = strings.TrimSpace(os.Getenv(EnvCacheDir))
 	}
@@ -168,7 +174,7 @@ func Run(opts Options) (res Result, err error) {
 		return res, fmt.Errorf("materializer: no config dir (%s) resolved", EnvConfigDir)
 	}
 
-	repoDir, stale, err := syncRepo(opts.Log, opts.RepoSource, opts.CacheDir)
+	repoRoot, repoDir, stale, err := syncRepo(opts.Log, opts.RepoSource, opts.RepoSubdir, opts.CacheDir)
 	if err != nil {
 		return res, fmt.Errorf("materializer: %w", err)
 	}
@@ -176,7 +182,7 @@ func Run(opts Options) (res Result, err error) {
 	if stale != nil {
 		res.Stale, res.StaleReason = true, stale.Error()
 	}
-	res.Commit = RepoCommit(repoDir)
+	res.Commit = RepoCommit(repoRoot)
 
 	data, err := os.ReadFile(filepath.Join(repoDir, "assignment.jsonc"))
 	if err != nil {

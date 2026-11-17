@@ -25,8 +25,6 @@ func setPATEnv(t *testing.T) string {
 	for _, k := range githubTokenEnvVars {
 		t.Setenv(k, "")
 	}
-	// Isolate the login token too: point auth.json at an empty dir.
-	t.Setenv("XDG_DATA_HOME", dir)
 	return path
 }
 

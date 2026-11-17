@@ -4,6 +4,7 @@
 package mcpauth
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -59,45 +60,8 @@ func isolateMCPConfig(t *testing.T, enabled bool, servers ...string) {
 	t.Setenv("OPENCODE_CONFIG_DIR", t.TempDir())
 }
 
-func TestParseServerConnected(t *testing.T) {
-	// Realistic `opencode mcp list` output: one needs-auth, one connected.
-	out := "" +
-		"┌  MCP Servers\n" +
-		"●  ⚠ atlassian needs authentication\n" +
-		"      https://mcp.atlassian.com/v1/mcp/authv2\n" +
-		"●  ✓ obsidian connected\n" +
-		"└  2 server(s)\n"
-
-	if parseServerConnected(out, "atlassian") {
-		t.Error("atlassian should be reported NOT connected (needs authentication)")
-	}
-	if !parseServerConnected(out, "obsidian") {
-		t.Error("obsidian should be reported connected")
-	}
-	// Whole-word matching: a differently-named server must not match.
-	if parseServerConnected(out, "atlas") {
-		t.Error("'atlas' should not match 'atlassian'")
-	}
-	if parseServerConnected(out, "missing") {
-		t.Error("absent server should be NOT connected")
-	}
-}
-
 func TestServerAuthenticatedAndHandler(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell-script stub not supported on windows")
-	}
-	bin := writeFakeOpencode(t, `#!/bin/sh
-if [ "$1" = "mcp" ] && [ "$2" = "list" ]; then
-  printf '%s\n' 'atlassian connected'
-  printf '%s\n' 'obsidian connected'
-  exit 0
-fi
-exit 1
-`)
-	old := OpencodeBin
-	OpencodeBin = bin
-	defer func() { OpencodeBin = old }()
+	stubStatuses(t, fixedStatuses(map[string]bool{"atlassian": true, "obsidian": true}))
 
 	if !ServerAuthenticated("atlassian") {
 		t.Error("expected atlassian authenticated")
@@ -121,20 +85,8 @@ exit 1
 }
 
 func TestLogout(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell-script stub not supported on windows")
-	}
 	isolateMCPConfig(t, true, "atlassian")
-	bin := writeFakeOpencode(t, `#!/bin/sh
-if [ "$1" = "mcp" ] && [ "$2" = "logout" ]; then
-  printf '%s\n' "removed credentials for $3"
-  exit 0
-fi
-exit 1
-`)
-	old := OpencodeBin
-	OpencodeBin = bin
-	defer func() { OpencodeBin = old }()
+	signedOut := stubSignOut(t, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/mcp/servers/atlassian/logout", nil)
@@ -144,35 +96,47 @@ exit 1
 		t.Fatalf("logout handler code %d", rec.Code)
 	}
 	var got struct {
-		OK     bool   `json:"ok"`
-		Output string `json:"output"`
+		OK bool `json:"ok"`
 	}
 	json.Unmarshal(rec.Body.Bytes(), &got)
 	if !got.OK {
 		t.Errorf("expected ok=true, got %+v", got)
 	}
+	if *signedOut != "atlassian" {
+		t.Errorf("signed out %q", *signedOut)
+	}
+}
+
+// stubSignOut stands in for opencode's sign-out, which fails with err. It
+// returns where the signed-out server's name lands.
+func stubSignOut(t *testing.T, err error) *string {
+	t.Helper()
+	var server string
+	old := signOutConnector
+	signOutConnector = func(_ context.Context, s string) error { server = s; return err }
+	t.Cleanup(func() { signOutConnector = old })
+	return &server
 }
 
 // TestAuthFlow_CompletesSuccessfully drives startAuth against a fake opencode
-// that prints an authorization URL then exits; `mcp list` reports the server
-// connected, so the flow must finish Done+Success and expose the URL.
+// that prints an authorization URL then exits; the server then holds the
+// credential, so the flow must finish Done+Success and expose the URL.
 func TestAuthFlow_CompletesSuccessfully(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell-script stub not supported on windows")
 	}
-	// mcp auth: print a URL, then exit 0. mcp list: server is connected.
+	// mcp auth: print a URL, then exit 0.
 	bin := writeFakeOpencode(t, `#!/bin/sh
 if [ "$1" = "mcp" ] && [ "$2" = "auth" ]; then
   printf 'Authorize in your browser:\n'
   printf 'https://auth.example.com/authorize?client_id=abc&state=xyz\n'
   exit 0
 fi
-if [ "$1" = "mcp" ] && [ "$2" = "list" ]; then
-  printf '%s\n' 'atlassian connected'
-  exit 0
-fi
 exit 1
 `)
+	oldSignedIn := connectorSignedIn
+	connectorSignedIn = func(_ context.Context, s string) (bool, error) { return s == "atlassian", nil }
+	defer func() { connectorSignedIn = oldSignedIn }()
 	old := OpencodeBin
 	OpencodeBin = bin
 	defer func() { OpencodeBin = old }()
@@ -213,10 +177,10 @@ exit 1
 
 // A terminal with no size is zero columns wide, and opencode's prompts wrap
 // after every character, so the sign-in's terminal is given a width.
-// On opencode 2.x the sign-in keeps the environment the 2.x command builder
-// gave it (here the server can't start, so 2.x's own configuration, and no
-// inherited PWD), and adds the terminal settings.
-func TestAuthFlow_V2KeepsTheCommandsEnvironment(t *testing.T) {
+// The sign-in keeps the environment the command builder gave it (here the
+// server can't start, so opencode's own configuration, and no inherited PWD),
+// and adds the terminal settings.
+func TestAuthFlow_KeepsTheCommandsEnvironment(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("the PTY is Linux-only")
 	}
@@ -251,7 +215,7 @@ exit 1
 		time.Sleep(50 * time.Millisecond)
 	}
 	if !strings.Contains(final.Output, "config=/") || !strings.Contains(final.Output, "term=xterm-256color 0") {
-		t.Errorf("the sign-in ran with %q; want 2.x's configuration, the terminal settings and no PWD", final.Output)
+		t.Errorf("the sign-in ran with %q; want opencode's configuration, the terminal settings and no PWD", final.Output)
 	}
 }
 
@@ -306,15 +270,12 @@ if [ "$1" = "mcp" ] && [ "$2" = "auth" ]; then
   printf 'https://auth.example.com/authorize?client_id=abc&state=xyz\n'
   exit 0
 fi
-if [ "$1" = "mcp" ] && [ "$2" = "list" ]; then
-  printf '%s\n' '●  ✓ figma connected (OAuth)'
-  exit 0
-fi
 exit 1
 `)
-	old := OpencodeBin
+	old, oldSignedIn := OpencodeBin, connectorSignedIn
 	OpencodeBin = bin
-	defer func() { OpencodeBin = old }()
+	connectorSignedIn = func(context.Context, string) (bool, error) { return true, nil }
+	defer func() { OpencodeBin, connectorSignedIn = old, oldSignedIn }()
 
 	isolateMCPConfig(t, true, "figma")
 	auth.mu.Lock()
@@ -519,54 +480,6 @@ func TestHandleAuthCallback_RejectsBadURL(t *testing.T) {
 	}
 }
 
-func TestParseAllServers(t *testing.T) {
-	// Realistic `opencode mcp list` output (ANSI already implied stripped by
-	// the parser via ansiRe; include the box glyphs opencode uses).
-	raw := "" +
-		"\n┌  MCP Servers\n│\n" +
-		"●  ✓ atlassian connected\n" +
-		"│      https://mcp.atlassian.com/v1/mcp/authv2\n│\n" +
-		"●  ✗ github needs authentication\n" +
-		"│      https://api.githubcopilot.com/mcp\n│\n" +
-		"●  ✓ obsidian connected\n" +
-		"│      /home/developer/.local/bin/obsidian-mcp\n" +
-		"└  3 server(s)\n"
-
-	got := parseAllServers(raw)
-	if got["atlassian"] != true {
-		t.Errorf("atlassian should be connected, got %v", got["atlassian"])
-	}
-	if got["obsidian"] != true {
-		t.Errorf("obsidian should be connected, got %v", got["obsidian"])
-	}
-	if got["github"] != false {
-		t.Errorf("github should be needs-auth (false), got %v", got["github"])
-	}
-	// Header/footer lines must not produce entries.
-	if _, ok := got["servers"]; ok {
-		t.Error("header line leaked into results")
-	}
-	if len(got) != 3 {
-		t.Errorf("expected exactly 3 servers, got %d: %v", len(got), got)
-	}
-}
-
-func TestServerNameFromLine(t *testing.T) {
-	cases := map[string]string{
-		"●  ✓ atlassian connected":           "atlassian",
-		"●  ✗ github needs authentication":   "github",
-		"●  ✓ obsidian connected":            "obsidian",
-		"┌  MCP Servers":                     "", // no status word
-		"│      https://mcp.atlassian.com/…": "", // detail line, no status word
-		"└  2 server(s)":                     "", // footer
-	}
-	for line, want := range cases {
-		if got, _, _ := serverRow(line); got != want {
-			t.Errorf("serverRow(%q) name = %q, want %q", line, got, want)
-		}
-	}
-}
-
 // A user who clicks "Sign in" without switching the server on first would
 // complete the whole OAuth flow and still find the agent unable to use it,
 // because opencode never connects a disabled server. Refuse up front.
@@ -623,34 +536,4 @@ func TestStartAuth_RefusesDisabledServer(t *testing.T) {
 	}
 	HandleAuthCancel(httptest.NewRecorder(), httptest.NewRequest(
 		http.MethodPost, "/api/mcp/servers/sentry/auth/cancel", nil))
-}
-
-// opencode prints one of four statuses. Only "connected" is working; a failed
-// server must stop reading as connected, and a disabled one says nothing about
-// its credentials, so it leaves the cache alone.
-func TestParseAllServersReadsEveryStatus(t *testing.T) {
-	raw := "" +
-		"┌  MCP Servers\n│\n" +
-		"●  ✓ recall connected\n" +
-		"│      /usr/bin/chat mcp-recall\n│\n" +
-		"●  ✗ kfp failed\n" +
-		"│      http://127.0.0.1:8977/mcp\n│\n" +
-		"●  ○ github disabled\n" +
-		"●  ⚠ atlassian needs authentication\n" +
-		"●  ✓ connected-docs connected\n" +
-		"●  ✓ figma connected (OAuth)\n" +
-		"└  6 server(s)\n"
-	got := parseAllServers(raw)
-	want := map[string]bool{"recall": true, "kfp": false, "atlassian": false, "connected-docs": true, "figma": true}
-	for name, w := range want {
-		if v, ok := got[name]; !ok || v != w {
-			t.Errorf("%s = %v (present %v), want %v", name, v, ok, w)
-		}
-	}
-	if _, ok := got["github"]; ok || len(got) != len(want) {
-		t.Errorf("got %v: a disabled server must be left out", got)
-	}
-	if parseServerConnected(raw, "kfp") || !parseServerConnected(raw, "recall") || parseServerConnected(raw, "connected") {
-		t.Error("parseServerConnected disagrees with parseAllServers")
-	}
 }

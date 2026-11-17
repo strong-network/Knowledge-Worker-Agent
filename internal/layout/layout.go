@@ -180,6 +180,17 @@ func Database() string { return databaseSpec().resolve() }
 
 func movedDatabase() string { return filepath.Join(System(), "knowledge-worker-agent.db") }
 
+// OldDatabases returns the places the database had before the one-folder
+// layout: its setting, if any, and the old defaults.
+func OldDatabases() []string {
+	s := databaseSpec()
+	var out []string
+	if v := s.setting(); v != "" {
+		out = append(out, v)
+	}
+	return append(append(out, s.today), s.also...)
+}
+
 // Backups returns the folder holding snapshots of the database at db. A
 // database at a custom path keeps its snapshots next to it.
 func Backups(db string) string {

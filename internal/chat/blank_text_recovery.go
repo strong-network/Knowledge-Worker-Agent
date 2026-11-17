@@ -12,9 +12,9 @@ import (
 
 // A whitespace-only text block in a chat's OpenCode history makes the provider
 // reject every later turn, since each turn replays the history.
-// plugin/blank-text-guard.js leaves such blocks out of each request; this is the
-// fallback when the error comes through anyway, for example if the plugin didn't
-// load: the chat moves to a fresh OpenCode session instead of staying stuck.
+// opencode leaves such blocks out of each request; this is the fallback when
+// the error comes through anyway: the chat moves to a fresh OpenCode session
+// instead of staying stuck.
 
 const blankTextMarker = "text content blocks must contain non-whitespace text"
 

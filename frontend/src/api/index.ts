@@ -217,20 +217,11 @@ export interface ModelStats {
 const BASE = ''
 export const BACKEND_UNAVAILABLE_EVENT = 'kwa-backend-unavailable'
 
-// The one-folder migration's state, when it has something to say; sizes come
-// formatted for people.
+// A database an older version left at the old place since the files moved
+// into one folder.
 export interface MigrationInfo {
-  state: 'running' | 'planned' | 'blocked' | 'failed' | 'stray' | string
-  phase?: string
-  done?: number
-  total?: number
-  minutes?: number
-  need?: string
-  free?: string
-  short?: string
-  reasons?: string[]
+  state: 'stray' | string
   path?: string
-  undo?: boolean
 }
 
 // Present while less than 5% of the workspace's disk is free.
@@ -243,7 +234,7 @@ export interface LowDiskInfo {
 }
 
 export interface BackendStatus {
-  status: 'starting' | 'ready' | 'degraded' | 'migrating' | string
+  status: 'starting' | 'ready' | 'degraded' | 'blocked' | string
   opencode_ready: boolean
   migration?: MigrationInfo
   disk?: LowDiskInfo
@@ -311,8 +302,8 @@ export async function fetchBackendStatus(): Promise<BackendStatus> {
 
 export async function checkBackendReady(): Promise<BackendStatus> {
   const status = await fetchBackendStatus()
-  if (status.status === 'migrating') {
-    // Every page is the migration's status page meanwhile.
+  if (status.status === 'blocked') {
+    // Every page then says why the server can't start.
     window.location.reload()
   }
   if (status.status !== 'ready' || !status.opencode_ready) {
@@ -625,29 +616,6 @@ export async function exportSession(sessionId: string): Promise<any> {
   return res.json()
 }
 
-// PermissionResponse is the user's decision on an interactive permission
-// request raised by the backend.
-export type PermissionResponse = 'once' | 'always' | 'reject'
-
-// respondPermission answers a pending permission request for a session's
-// in-flight turn. Returns false if the backend reports no active turn (404).
-export async function respondPermission(
-  sessionId: string,
-  permissionId: string,
-  response: PermissionResponse,
-): Promise<boolean> {
-  const res = await fetch(`${BASE}/api/sessions/${sessionId}/permission`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ permission_id: permissionId, response }),
-  })
-  if (!res.ok) {
-    if (res.status === 404) return false
-    throw new Error(`Failed to respond to permission: ${res.statusText}`)
-  }
-  return true
-}
-
 export async function fetchModels(): Promise<string[]> {
   const res = await fetch(`${BASE}/api/models`)
   if (!res.ok) throw new Error(`Failed to fetch models: ${res.statusText}`)
@@ -811,7 +779,6 @@ export interface DiagnosticsReport {
     uptime_seconds: number
     status: string
     opencode_ready: boolean
-    backend: 'run' | 'serve'
   }
   opencode: {
     version: string
@@ -1908,7 +1875,7 @@ export async function submitMcpAuthCallback(
   return res.json()
 }
 
-export async function logoutMcpServer(name: string): Promise<{ ok: boolean; output?: string; error?: string }> {
+export async function logoutMcpServer(name: string): Promise<{ ok: boolean; error?: string }> {
   const res = await fetch(`${BASE}/api/mcp/servers/${encodeURIComponent(name)}/logout`, { method: 'POST' })
   return res.json()
 }
@@ -1970,6 +1937,10 @@ export interface ModelProvider {
   reachabilityCheckedAt?: string
   /** One sentence on what the provider gives you. */
   description?: string
+  /** A built-in with its own sign-in that also takes an API key. */
+  acceptsKey?: boolean
+  /** How such a provider is signed in: its own sign-in, or an API key. */
+  authMethod?: 'oauth' | 'key'
   /** Whether this workspace can discard the provider's credentials itself. */
   canSignOut?: boolean
   /** Regional endpoints the administrator offers for this provider. */

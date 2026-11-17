@@ -16,22 +16,21 @@ import (
 )
 
 // The skills picker reads through this cache so that opening it is a local
-// map lookup rather than a bet on process lifecycle. Without it, every open
-// calls Supervisor.Ensure, which starts an `opencode serve` for the workdir and
-// blocks on its health check — bounded at skillListTimeout, i.e. up to a minute
-// on a cold chat. That was tolerable while skills were buried behind the "+"
-// menu; it is not once the composer offers them directly.
+// map lookup. Without it, every open waits for opencode to list the folder's
+// skills — bounded at skillListTimeout, i.e. up to a minute for a folder it
+// hasn't set up yet. That was tolerable while skills were buried behind the
+// "+" menu; it is not once the composer offers them directly.
 //
 // What is cached is opencode's own answer, never a reconstruction of it.
-// opencode unions several config tiers to produce the list (see
-// opencodeserver.ListSkills), and a Go-side scanner that tried to reproduce
-// that union would be free to drift from it. Caching keeps the enumeration
-// authoritative and only decouples *when* it is paid for.
+// opencode unions several config tiers to produce the list, and a Go-side
+// scanner that tried to reproduce that union would be free to drift from it.
+// Caching keeps the enumeration authoritative and only decouples *when* it is
+// paid for.
 //
-// Summaries are cached, not raw opencodeserver.Skill values: those carry the
-// whole SKILL.md body in Content, which runs to tens of kilobytes per skill and
-// has no business sitting in a process-global map keyed by every chat folder
-// the workspace has ever opened.
+// Summaries are cached, not raw Skill values: those carry the whole SKILL.md
+// body in Content, which runs to tens of kilobytes per skill and has no
+// business sitting in a process-global map keyed by every chat folder the
+// workspace has ever opened.
 //
 // The send path deliberately does not read this cache — see resolveForcedSkill,
 // which needs Content and Location and must resolve them at send time.
@@ -50,19 +49,17 @@ type skillCacheEntry struct {
 var (
 	skillCacheMu sync.Mutex
 	skillCache   = map[string]skillCacheEntry{}
-	// skillRevalidating single-flights background refreshes. Each one may start
-	// an opencode process, so a user clicking the picker repeatedly on a cold
-	// workspace must not queue up a process per click.
+	// skillRevalidating single-flights background refreshes. Each one asks
+	// opencode, so a user clicking the picker repeatedly on a cold workspace
+	// must not queue up a request per click.
 	skillRevalidating = map[string]bool{}
 )
 
-// canonicalSkillDir normalizes a workdir into a cache key.
-//
-// It has to mirror opencodeserver.canonicalDir, which is unexported and applied
-// below this layer: fetchSkills only learns the canonical directory as Ensure's
-// second return value, i.e. after the expensive call this cache exists to
-// avoid. Diverging here is silent — two spellings of one directory become two
-// entries that each miss, and the cache quietly degrades to no cache at all.
+// canonicalSkillDir normalizes a workdir into a cache key, and the folder
+// opencode is asked about: a missing workdir falls back to the workspace, and
+// the path is made absolute. Without it, two spellings of one directory become
+// two entries that each miss, and the cache quietly degrades to no cache at
+// all.
 func canonicalSkillDir(workdir string) string {
 	d := workdir
 	if info, err := os.Stat(d); err != nil || !info.IsDir() {

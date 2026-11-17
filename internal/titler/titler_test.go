@@ -105,8 +105,8 @@ func TestGenerate_CapsPromptLength(t *testing.T) {
 	if _, err := Generate(context.Background(), "opencode", "m", strings.Repeat("x", 50000)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(rec.Prompt) != maxPromptChars {
-		t.Fatalf("prompt should be capped to %d, got %d", maxPromptChars, len(rec.Prompt))
+	if n := strings.Count(rec.Prompt, "x"); n != maxPromptChars {
+		t.Fatalf("the message should be capped to %d, got %d", maxPromptChars, n)
 	}
 }
 

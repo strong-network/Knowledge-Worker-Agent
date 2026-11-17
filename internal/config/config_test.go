@@ -76,35 +76,6 @@ func TestIsLegacyCopilotBackend(t *testing.T) {
 	}
 }
 
-func TestBuildOpencodeArgs(t *testing.T) {
-	cfg := SessionConfig{
-		Yolo:            true,
-		Workdir:         "/work",
-		Model:           "anthropic/claude-sonnet-4-5",
-		Agent:           "builder",
-		ReasoningEffort: "high",
-	}
-	args := BuildOpencodeArgs("-starts-with-dash", "opencode-session-1", cfg)
-
-	assertContains(t, args, "run")
-	assertContains(t, args, "--format")
-	assertContains(t, args, "json")
-	assertContains(t, args, "--dangerously-skip-permissions")
-	assertContains(t, args, "--model")
-	assertContains(t, args, "anthropic/claude-sonnet-4-5")
-	assertContains(t, args, "--agent")
-	assertContains(t, args, "builder")
-	assertContains(t, args, "--variant")
-	assertContains(t, args, "high")
-	assertContains(t, args, "--dir")
-	assertContains(t, args, "/work")
-	assertContains(t, args, "--session")
-	assertContains(t, args, "opencode-session-1")
-	if args[len(args)-2] != "--" || args[len(args)-1] != "-starts-with-dash" {
-		t.Fatalf("expected prompt to be protected by -- at the end, got %v", args)
-	}
-}
-
 func TestBuildOpencodeArgs_PlanModeMapsToPlanAgent(t *testing.T) {
 	cfg := SessionConfig{Mode: "plan", Model: "github-copilot/claude-sonnet-4.6"}
 	args := BuildOpencodeArgs("hi", "", cfg)
@@ -334,18 +305,13 @@ func TestPromptWithSessionPreambleIncludesDisplay(t *testing.T) {
 	}
 }
 
-// On 2.x the turn says how to get a file into Code Mode, at the port the server uses.
-func TestPromptWithSessionPreambleIncludesCodeModeOn2x(t *testing.T) {
-	prevMajor, prevPort := OpencodeMajor, Port
-	t.Cleanup(func() { OpencodeMajor, Port = prevMajor, prevPort })
+// The turn says how to get a file into Code Mode, at the port the server uses.
+func TestPromptWithSessionPreambleIncludesCodeMode(t *testing.T) {
+	prevPort := Port
+	t.Cleanup(func() { Port = prevPort })
 	cfg := SessionConfig{Workdir: "/home/developer/proj", ProjectInstructions: "always cite sources"}
 
-	OpencodeMajor = 1
-	if got := PromptWithSessionPreamble("do the thing", cfg); strings.Contains(got, "[System — Code Mode]") {
-		t.Errorf("1.x has no Code Mode, got %q", got)
-	}
-
-	OpencodeMajor, Port = 2, 9123
+	Port = 9123
 	if block := CodeModeInstruction(); !strings.Contains(block, `fetch("http://127.0.0.1:9123/api/files/raw?path=" + encodeURIComponent(`) {
 		t.Errorf("expected a fetch from this server's raw file route, got %q", block)
 	}
@@ -362,31 +328,23 @@ func TestPromptWithSessionPreambleIncludesCodeModeOn2x(t *testing.T) {
 	}
 }
 
-// On 2.x a chat is told how asking works and when to ask; a scheduled run, on
-// any version, that no one is there to answer.
+// A chat is told how asking works and when to ask; a scheduled run that no one
+// is there to answer.
 func TestQuestionsInstruction(t *testing.T) {
-	prev := OpencodeMajor
-	t.Cleanup(func() { OpencodeMajor = prev })
 	cfg := SessionConfig{Workdir: "/home/developer/proj", ProjectInstructions: "always cite sources"}
 	unattended := cfg
 	unattended.Unattended = true
 
-	OpencodeMajor = 1
-	if got := QuestionsInstruction(cfg); got != "" {
-		t.Errorf("1.x chat: %q", got)
-	}
 	if got := QuestionsInstruction(unattended); !strings.Contains(got, "[System — unattended run]") || !strings.Contains(got, "don't ask questions") {
-		t.Errorf("1.x scheduled run: %q", got)
+		t.Errorf("scheduled run: %q", got)
 	}
-
-	OpencodeMajor = 2
 	for _, want := range []string{"[System — questions]", "question tool", "next message", "reports the question as cancelled", "say what you assumed"} {
 		if got := QuestionsInstruction(cfg); !strings.Contains(got, want) {
-			t.Errorf("2.x chat: no %q in %q", want, got)
+			t.Errorf("chat: no %q in %q", want, got)
 		}
 	}
 	if got := QuestionsInstruction(unattended); strings.Contains(got, "question tool") {
-		t.Errorf("2.x scheduled run is told to ask: %q", got)
+		t.Errorf("scheduled run is told to ask: %q", got)
 	}
 	got := PromptWithSessionPreamble("do the thing", cfg)
 	iCode, iAsk, iProject := strings.Index(got, "[System — Code Mode]"), strings.Index(got, "[System — questions]"), strings.Index(got, "[System — project instructions]")
@@ -661,17 +619,17 @@ func TestBuildOpencodeArgs_DefaultsToRunFormatJSON(t *testing.T) {
 	}
 }
 
-func TestBuildOpencodeArgs_YoloAddsSkipPermissions(t *testing.T) {
+func TestBuildOpencodeArgs_YoloAddsAuto(t *testing.T) {
 	args := BuildOpencodeArgs("hi", "", SessionConfig{Yolo: true})
-	if !containsArg(args, "--dangerously-skip-permissions") {
-		t.Errorf("expected --dangerously-skip-permissions for yolo, got %v", args)
+	if !containsArg(args, "--auto") {
+		t.Errorf("expected --auto for yolo, got %v", args)
 	}
 }
 
-func TestBuildOpencodeArgs_NoYoloOmitsSkipPermissions(t *testing.T) {
+func TestBuildOpencodeArgs_NoYoloOmitsAuto(t *testing.T) {
 	args := BuildOpencodeArgs("hi", "", SessionConfig{Yolo: false})
-	if containsArg(args, "--dangerously-skip-permissions") {
-		t.Errorf("did not expect --dangerously-skip-permissions when yolo=false, got %v", args)
+	if containsArg(args, "--auto") {
+		t.Errorf("did not expect --auto when yolo=false, got %v", args)
 	}
 }
 
@@ -682,7 +640,9 @@ func TestBuildOpencodeArgs_ResumeSession(t *testing.T) {
 	}
 }
 
-func TestBuildOpencodeArgs_ForwardsModelAgentVariantDir(t *testing.T) {
+// The folder is the run's working directory, not a flag, and the reasoning
+// level is part of the model reference.
+func TestBuildOpencodeArgs_ForwardsModelVariantAndAgent(t *testing.T) {
 	cfg := SessionConfig{
 		Model:           "anthropic/claude-sonnet-4",
 		Agent:           "general",
@@ -690,17 +650,14 @@ func TestBuildOpencodeArgs_ForwardsModelAgentVariantDir(t *testing.T) {
 		Workdir:         "/some/dir",
 	}
 	args := BuildOpencodeArgs("hi", "", cfg)
-	if !containsArgPair(args, "--model", "anthropic/claude-sonnet-4") {
-		t.Errorf("expected --model anthropic/claude-sonnet-4, got %v", args)
+	if !containsArgPair(args, "--model", "anthropic/claude-sonnet-4#high") {
+		t.Errorf("expected --model anthropic/claude-sonnet-4#high, got %v", args)
 	}
 	if !containsArgPair(args, "--agent", "general") {
 		t.Errorf("expected --agent general, got %v", args)
 	}
-	if !containsArgPair(args, "--variant", "high") {
-		t.Errorf("expected --variant high, got %v", args)
-	}
-	if !containsArgPair(args, "--dir", "/some/dir") {
-		t.Errorf("expected --dir /some/dir, got %v", args)
+	if containsArg(args, "--dir") || containsArg(args, "--variant") {
+		t.Errorf("expected neither --dir nor --variant, got %v", args)
 	}
 }
 
@@ -876,6 +833,40 @@ func TestPickDefaultModel(t *testing.T) {
 				"google-vertex/claude-opus-5@default",
 			},
 			want: "google-vertex/claude-opus-5@default",
+		},
+		{
+			name: "anthropic api ids take the sonnet pin",
+			models: []string{
+				"anthropic/claude-haiku-5-5",
+				"anthropic/claude-opus-5",
+				"anthropic/claude-sonnet-5",
+				"anthropic/claude-sonnet-5-5",
+			},
+			want: "anthropic/claude-sonnet-5",
+		},
+		{
+			name: "openai alone takes the gpt pin, not a variant or the first entry",
+			models: []string{
+				"openai/chat-latest",
+				"openai/gpt-6-astra",
+				"openai/gpt-6-sol",
+				"openai/gpt-6.1-sol",
+				"openai/gpt-6.1-sol-fast",
+			},
+			want: "openai/gpt-6.1-sol",
+		},
+		{
+			name:   "gpt falls back to the next pin",
+			models: []string{"openai/gpt-6-luna", "openai/gpt-6-sol"},
+			want:   "openai/gpt-6-sol",
+		},
+		{
+			name: "a claude sonnet still wins over the gpt pin",
+			models: []string{
+				"github-copilot/claude-sonnet-5",
+				"openai/gpt-6.1-sol",
+			},
+			want: "github-copilot/claude-sonnet-5",
 		},
 		{
 			name:   "first entry when nothing matches",

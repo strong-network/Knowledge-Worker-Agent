@@ -4,10 +4,10 @@
 import { defineStore } from 'pinia'
 import { ref, computed, reactive, nextTick, toRaw } from 'vue'
 import {
-  streamChat, attachChat, respondPermission,
+  streamChat, attachChat,
   fetchSessionQueue, addToSessionQueue, removeFromSessionQueue, clearSessionQueue,
   isBackendUnavailableError, stopChat, fetchHistory, followEvents, ChatGoneError, TEMPORARY_MS,
-  type ServerQueuedPrompt, type PermissionResponse, type UsageInfo, type Message,
+  type ServerQueuedPrompt, type UsageInfo, type Message,
 } from '../api'
 import { useSessionsStore } from './sessions'
 import { useUiStore } from './ui'
@@ -58,15 +58,6 @@ export interface AgentQuestion {
   multiple?: boolean
 }
 
-// PermissionRequest is an interactive tool-permission prompt raised by the
-// backend. The user allows once, allows always, or rejects.
-export interface PermissionRequest {
-  permissionId: string
-  permission: string
-  patterns?: string[]
-  callId?: string
-}
-
 // UsageInfo is defined alongside the API types (it is a server payload) and
 // re-exported here for the components that already import it from the store.
 export type { UsageInfo }
@@ -76,7 +67,6 @@ export interface SessionChatState {
   streamingContent: string
   toolCalls: ToolCall[]
   currentQuestion: QuestionEvent | null
-  currentPermission: PermissionRequest | null
   abortController: AbortController | null
   errorMessage: string | null
   queuedMessages: ServerQueuedPrompt[]
@@ -98,7 +88,6 @@ function newState(): SessionChatState {
     streamingContent: '',
     toolCalls: [],
     currentQuestion: null,
-    currentPermission: null,
     abortController: null,
     errorMessage: null,
     queuedMessages: [],
@@ -146,10 +135,6 @@ export const useChatStore = defineStore('chat', () => {
     const id = currentId()
     return id ? states.value.get(id)?.currentQuestion || null : null
   })
-  const currentPermission = computed<PermissionRequest | null>(() => {
-    const id = currentId()
-    return id ? states.value.get(id)?.currentPermission || null : null
-  })
   const errorMessage = computed(() => {
     const id = currentId()
     return id ? states.value.get(id)?.errorMessage || null : null
@@ -194,7 +179,6 @@ export const useChatStore = defineStore('chat', () => {
     s.streamingContent = ''
     s.toolCalls = []
     s.currentQuestion = null
-    s.currentPermission = null
     s.errorMessage = null
     s.notifiedQuestionKey = null
     s.stepCount = 0
@@ -246,7 +230,7 @@ export const useChatStore = defineStore('chat', () => {
     if (currentId() !== sessionId) return
     const msgs = document.getElementById('messages')
     if (!msgs) return
-    // Tool calls, questions, permissions and step updates all grow the
+    // Tool calls, questions and step updates all grow the
     // transcript mid-turn, and each used to force the view to the end. Follow
     // only a reader who is already there: someone who scrolled up to re-read
     // should stay put, with the jump button to bring them back.
@@ -643,7 +627,6 @@ export const useChatStore = defineStore('chat', () => {
     s.streaming = false
     s.turnId = null
     s.currentQuestion = null
-    s.currentPermission = null
     if (s.toolCalls.length > 0) sessionsStore.setLastAssistantToolCalls(sessionId, [...s.toolCalls])
   }
 
@@ -852,31 +835,6 @@ export const useChatStore = defineStore('chat', () => {
         scrollToBottomIfActive(sessionId)
         break
 
-      case 'permission':
-        // Interactive tool-permission request from the backend. Surface an
-        // allow/deny card; the user's decision is sent via respondPermission
-        // (POST /api/sessions/{id}/permission).
-        s.currentPermission = {
-          permissionId: data.permission_id || '',
-          permission: data.permission || '',
-          patterns: Array.isArray(data.patterns) ? data.patterns : undefined,
-          callId: data.call_id || undefined,
-        }
-        notifyQuestion(sessionId, {
-          question: `Permission requested: ${s.currentPermission.permission || 'tool'}`,
-        })
-        scrollToBottomIfActive(sessionId)
-        break
-
-      case 'permission_answered':
-        // Someone answered it, a guest of a shared chat perhaps:
-        // the choice is made, so stop offering it.
-        if (s.currentPermission?.permissionId === data.permission_id) {
-          s.currentPermission = null
-          s.notifiedQuestionKey = null
-        }
-        break
-
       case 'usage':
         // Attached to the message this turn produced rather than held per
         // session, so each response keeps its own figures instead of the
@@ -1002,27 +960,6 @@ export const useChatStore = defineStore('chat', () => {
     else await sendMessage(answer, sessionId)
   }
 
-  // respondToPermission sends the user's decision (once/always/reject) on an
-  // interactive tool-permission request to the backend.
-  async function respondToPermission(response: PermissionResponse, targetSessionId?: string) {
-    const sessionsStore = useSessionsStore()
-    const sessionId = targetSessionId || sessionsStore.currentSessionId
-    if (!sessionId) return
-    const s = getState(sessionId)
-    const perm = s.currentPermission
-    if (!perm) return
-    // Optimistically clear the card so the UI doesn't double-submit.
-    s.currentPermission = null
-    s.notifiedQuestionKey = null
-    try {
-      await respondPermission(sessionId, perm.permissionId, response)
-    } catch (e) {
-      // Restore the card so the user can retry on failure.
-      s.currentPermission = perm
-      throw e
-    }
-  }
-
   /** Drop per-session state when a session is deleted. */
   function dropSession(sessionId: string) {
     if (follow?.sid === sessionId) unfollow()
@@ -1075,13 +1012,12 @@ export const useChatStore = defineStore('chat', () => {
 
   return {
     // reactive proxies for the active session
-    streaming, streamingContent, toolCalls, currentQuestion, currentPermission, errorMessage, queuedMessage, queuedMessages,
+    streaming, streamingContent, toolCalls, currentQuestion, errorMessage, queuedMessage, queuedMessages,
     stepCount, completedTurns, streamingFollowed,
     // global helpers
     anyStreaming, isStreamingSession, getState,
     // actions
     sendMessage, abortAndSend, queueMessage, clearQueue, removeQueuedMessage, refreshQueue, stopStreaming, answerQuestion,
-    respondToPermission,
     handleEvent, finalize, dropSession, attachStream,
     followSession, reloadHistory,
   }

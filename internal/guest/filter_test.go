@@ -21,20 +21,18 @@ const secret = "SECRET-7f3a"
 
 func frames() map[string]map[string]any {
 	return map[string]map[string]any{
-		"session_id":          {"type": "session_id", "session_id": "s1"},
-		"title":               {"type": "title", "title": "Plan the launch"},
-		"step":                {"type": "step"},
-		"chunk":               {"type": "chunk", "text": "hello"},
-		"done":                {"type": "done", "queue_len": 0},
-		"question":            {"type": "question", "question": "Which one?", "choices": []any{"a", "b"}},
-		"tool_call":           {"type": "tool_call", "call_id": "c1", "tool": "bash", "args": `{"command":"cat ~/.ssh/id_rsa ` + secret + `"}`, "mcp_server": secret},
-		"tool_done":           {"type": "tool_done", "call_id": "c1", "tool": "bash", "success": true, "output": "-----BEGIN KEY----- " + secret, "mcp_server": secret},
-		"tool_blocked":        {"type": "tool_blocked", "call_id": "c2", "tool": "bash", "args": `{"command":"rm -rf ` + secret + `"}`, "reason": secret, "mcp_server": secret},
-		"permission":          {"type": "permission", "permission_id": "p1", "permission": "bash " + secret, "patterns": []any{secret}, "call_id": "c3"},
-		"permission_answered": {"type": "permission_answered", "permission_id": "p1", "response": "once", "author_id": nil, "author_name": nil},
-		"mcp_auth_required":   {"type": "mcp_auth_required", "server": "atlassian-" + secret},
-		"error":               {"type": "error", "message": "open /home/developer/" + secret + ": denied"},
-		"usage":               {"type": "usage", "cost": 1.23, "tokens_in": 9000, "note": secret},
+		"session_id":        {"type": "session_id", "session_id": "s1"},
+		"title":             {"type": "title", "title": "Plan the launch"},
+		"step":              {"type": "step"},
+		"chunk":             {"type": "chunk", "text": "hello"},
+		"done":              {"type": "done", "queue_len": 0},
+		"question":          {"type": "question", "question": "Which one?", "choices": []any{"a", "b"}},
+		"tool_call":         {"type": "tool_call", "call_id": "c1", "tool": "bash", "args": `{"command":"cat ~/.ssh/id_rsa ` + secret + `"}`, "mcp_server": secret},
+		"tool_done":         {"type": "tool_done", "call_id": "c1", "tool": "bash", "success": true, "output": "-----BEGIN KEY----- " + secret, "mcp_server": secret},
+		"tool_blocked":      {"type": "tool_blocked", "call_id": "c2", "tool": "bash", "args": `{"command":"rm -rf ` + secret + `"}`, "reason": secret, "mcp_server": secret},
+		"mcp_auth_required": {"type": "mcp_auth_required", "server": "atlassian-" + secret},
+		"error":             {"type": "error", "message": "open /home/developer/" + secret + ": denied"},
+		"usage":             {"type": "usage", "cost": 1.23, "tokens_in": 9000, "note": secret},
 	}
 }
 
@@ -64,9 +62,6 @@ func TestFrameDecisions(t *testing.T) {
 	}
 	if out, _ := Frame(f["tool_done"]); out["success"] != true || out["output"] != nil {
 		t.Errorf("tool_done should keep status, drop output: %v", out)
-	}
-	if out, _ := Frame(f["permission"]); out["type"] != "waiting_on_owner" || out["reason"] != "approval" {
-		t.Errorf("permission should become waiting_on_owner/approval: %v", out)
 	}
 	if out, _ := Frame(f["mcp_auth_required"]); out["type"] != "waiting_on_owner" || out["reason"] != "connector" {
 		t.Errorf("mcp_auth_required should become waiting_on_owner/connector: %v", out)

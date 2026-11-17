@@ -4,37 +4,40 @@
 package mcpauth
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/db"
 )
 
-// stubOpencode points the package at a fake opencode for the duration of a
-// test.
+// stubStatuses stands in for the statuses opencode's server reports, for the
+// duration of a test.
 //
 // The cleanup deliberately waits for any in-flight background refresh before
-// restoring the global. A refresh goroutine resolves the binary when it runs,
-// not when it is started, so restoring too early lets a leaked goroutine fall
-// through resolveBin() to the developer's REAL opencode — which then connects
-// to every configured MCP server and blocks for up to commandTimeout. That is a
-// test-only hazard, but it makes unrelated tests hang, so it is closed here
-// rather than worked around at each call site.
-func stubOpencode(t *testing.T, script string) {
+// restoring the stand-in. A refresh goroutine reads it when it runs, not when
+// it is started, so restoring too early lets a leaked goroutine reach the
+// previous stand-in and write its answer into the next test's cache.
+func stubStatuses(t *testing.T, fn func(context.Context) (map[string]bool, error)) {
 	t.Helper()
-	old := OpencodeBin
-	OpencodeBin = writeFakeOpencode(t, script)
+	old := connectorStatuses
+	connectorStatuses = fn
 	t.Cleanup(func() {
 		waitForQuiescence()
-		OpencodeBin = old
+		connectorStatuses = old
 	})
+}
+
+func fixedStatuses(statuses map[string]bool) func(context.Context) (map[string]bool, error) {
+	return func(context.Context) (map[string]bool, error) { return statuses, nil }
 }
 
 // waitForQuiescence blocks until no background refresh is running, or gives up.
@@ -59,16 +62,6 @@ func resetColdRefresh(t *testing.T) {
 }
 
 func contains(haystack, needle string) bool { return strings.Contains(haystack, needle) }
-
-func countLines(s string) int {
-	n := 0
-	for _, line := range strings.Split(s, "\n") {
-		if strings.TrimSpace(line) != "" {
-			n++
-		}
-	}
-	return n
-}
 
 // waitUntil polls cond for up to two seconds. Used instead of a fixed sleep so
 // the test is neither flaky on a slow machine nor slow on a fast one.
@@ -104,16 +97,9 @@ func useTempDB(t *testing.T) {
 	}
 }
 
-// listStub is a fake opencode whose `mcp list` reports one connected server and
-// one needing authentication — the two states the cache distinguishes.
-const listStub = `#!/bin/sh
-if [ "$1" = "mcp" ] && [ "$2" = "list" ]; then
-  printf '%s\n' '●  ✓ obsidian connected'
-  printf '%s\n' '●  ⚠ atlassian needs authentication'
-  exit 0
-fi
-exit 1
-`
+// twoServers is one connected server and one needing authentication — the
+// two states the cache distinguishes.
+var twoServers = map[string]bool{"obsidian": true, "atlassian": false}
 
 type allStatusResponse struct {
 	Servers map[string]struct {
@@ -136,17 +122,14 @@ func getAllStatus(t *testing.T, query string) allStatusResponse {
 	return got
 }
 
-// The batched endpoint must report every server from a single `opencode mcp
-// list`, preserving the connected/needs-auth distinction. This is the whole
+// The batched endpoint must report every server from a single status read,
+// preserving the connected/needs-auth distinction. This is the whole
 // point of the endpoint: the connectors modal derives its status pills and
 // filter counts from one request instead of one per server.
 func TestHandleAllStatus_ReportsEveryServerFromOneList(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell-script stub not supported on windows")
-	}
 	useTempDB(t)
 	resetColdRefresh(t)
-	stubOpencode(t, listStub)
+	stubStatuses(t, fixedStatuses(twoServers))
 
 	got := getAllStatus(t, "")
 	if len(got.Servers) != 2 {
@@ -160,16 +143,11 @@ func TestHandleAllStatus_ReportsEveryServerFromOneList(t *testing.T) {
 	}
 }
 
-// A second read is served from the cache rather than re-running the CLI. The
-// stub is swapped for one that fails if invoked synchronously, so a cache miss
-// would surface as an empty response.
+// A second read is served from the cache rather than asking the server again.
 func TestHandleAllStatus_SecondReadIsCached(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell-script stub not supported on windows")
-	}
 	useTempDB(t)
 	resetColdRefresh(t)
-	stubOpencode(t, listStub)
+	stubStatuses(t, fixedStatuses(twoServers))
 
 	if first := getAllStatus(t, ""); first.Cached {
 		t.Error("first read on a cold cache should not be reported as cached")
@@ -184,29 +162,19 @@ func TestHandleAllStatus_SecondReadIsCached(t *testing.T) {
 	}
 }
 
-// ?fresh=1 must re-run the CLI and reflect a status that changed underneath the
+// ?fresh=1 must ask the server again and reflect a status that changed underneath the
 // cache — this is what the sign-in sheet relies on to confirm success.
 func TestHandleAllStatus_FreshBypassesCache(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell-script stub not supported on windows")
-	}
 	useTempDB(t)
 	resetColdRefresh(t)
-	stubOpencode(t, listStub)
+	stubStatuses(t, fixedStatuses(twoServers))
 
 	if got := getAllStatus(t, ""); got.Servers["atlassian"].Authenticated {
 		t.Fatal("precondition: atlassian should start unauthenticated")
 	}
 
 	// Atlassian has now signed in.
-	stubOpencode(t, `#!/bin/sh
-if [ "$1" = "mcp" ] && [ "$2" = "list" ]; then
-  printf '%s\n' '●  ✓ obsidian connected'
-  printf '%s\n' '●  ✓ atlassian connected'
-  exit 0
-fi
-exit 1
-`)
+	stubStatuses(t, fixedStatuses(map[string]bool{"obsidian": true, "atlassian": true}))
 	got := getAllStatus(t, "?fresh=1")
 	if !got.Servers["atlassian"].Authenticated {
 		t.Errorf("fresh read should see the new status: %+v", got.Servers)
@@ -219,12 +187,9 @@ exit 1
 // An empty result must still encode as an object, never null, so the frontend
 // can index it without a guard on every lookup.
 func TestHandleAllStatus_EmptyEncodesAsObject(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell-script stub not supported on windows")
-	}
 	useTempDB(t)
 	resetColdRefresh(t)
-	stubOpencode(t, "#!/bin/sh\nexit 1\n")
+	stubStatuses(t, func(context.Context) (map[string]bool, error) { return nil, errors.New("down") })
 
 	rec := httptest.NewRecorder()
 	HandleAllStatus(rec, httptest.NewRequest(http.MethodGet, "/api/mcp/status", nil))
@@ -233,28 +198,20 @@ func TestHandleAllStatus_EmptyEncodesAsObject(t *testing.T) {
 	}
 }
 
-// Concurrent callers must collapse into a single `opencode mcp list`. Before
-// this guard, every cached status read spawned its own refresh — opening the
-// modal with sixteen servers meant sixteen concurrent CLI processes computing
-// the same answer.
+// Concurrent callers must collapse into a single status read. Before this
+// guard, every cached status read spawned its own refresh — opening the modal
+// with sixteen servers meant sixteen concurrent reads computing the same
+// answer.
 func TestRefreshInBackground_CoalescesConcurrentCallers(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell-script stub not supported on windows")
-	}
 	useTempDB(t)
 	waitForQuiescence()
 
-	// The stub appends a line per invocation so we can count them.
-	counter := t.TempDir() + "/calls"
-	stubOpencode(t, `#!/bin/sh
-if [ "$1" = "mcp" ] && [ "$2" = "list" ]; then
-  echo x >> `+counter+`
-  sleep 0.3
-  printf '%s\n' '●  ✓ obsidian connected'
-  exit 0
-fi
-exit 1
-`)
+	var calls atomic.Int32
+	stubStatuses(t, func(context.Context) (map[string]bool, error) {
+		calls.Add(1)
+		time.Sleep(300 * time.Millisecond)
+		return map[string]bool{"obsidian": true}, nil
+	})
 
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
@@ -269,11 +226,7 @@ exit 1
 	// Wait for whichever refresh won the race to finish.
 	waitUntil(t, func() bool { return !refreshRunning.Load() })
 
-	data, err := os.ReadFile(counter)
-	if err != nil {
-		t.Fatalf("stub never ran: %v", err)
-	}
-	if n := countLines(string(data)); n != 1 {
-		t.Errorf("expected exactly 1 `mcp list` invocation, got %d", n)
+	if n := calls.Load(); n != 1 {
+		t.Errorf("expected exactly 1 status read, got %d", n)
 	}
 }

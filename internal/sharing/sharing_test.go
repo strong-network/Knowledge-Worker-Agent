@@ -385,7 +385,7 @@ func TestActivityCoversSharedChatsOnly(t *testing.T) {
 	v := chat.AddViewer("c1", "g-1")
 	defer chat.RemoveViewer("c1", v)
 	s := chat.OpenTurn("c1")
-	s.Append(map[string]any{"type": "permission", "permission": "bash"})
+	s.Append(map[string]any{"type": "mcp_auth_required", "server": "atlassian"})
 	chat.OpenTurn("plain")
 
 	_, body, _ := do(t, "GET", "/api/share/activity", "", false)

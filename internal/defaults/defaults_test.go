@@ -210,15 +210,12 @@ func TestInstallSkills_EmptyTargetDirErrors(t *testing.T) {
 // Knowledge Worker Agent no longer ships agents, context or product-specific skills.
 // Re-adding them would quietly restore the problem this change fixes: every
 // workspace getting Citrix content on top of whatever an admin assigned.
-func TestNothingButTheFloorAndPluginsIsShipped(t *testing.T) {
+func TestNothingButTheFloorIsShipped(t *testing.T) {
 	dir := t.TempDir()
 	var buf bytes.Buffer
 
 	if err := InstallSkills(&buf, dir); err != nil {
 		t.Fatalf("InstallSkills() error: %v", err)
-	}
-	if err := InstallPlugins(&buf, dir); err != nil {
-		t.Fatalf("InstallPlugins() error: %v", err)
 	}
 
 	entries, err := os.ReadDir(dir)
@@ -230,8 +227,8 @@ func TestNothingButTheFloorAndPluginsIsShipped(t *testing.T) {
 		got = append(got, e.Name())
 	}
 	sort.Strings(got)
-	if strings.Join(got, ",") != "plugin,skills" {
-		t.Errorf("installed %v, want only the plugin and skills trees", got)
+	if strings.Join(got, ",") != "skills" {
+		t.Errorf("installed %v, want only the skills tree", got)
 	}
 }
 

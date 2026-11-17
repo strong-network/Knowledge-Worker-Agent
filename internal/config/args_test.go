@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestBuildOpencodeArgsV2(t *testing.T) {
+func TestBuildOpencodeArgs_All(t *testing.T) {
 	cfg := SessionConfig{
 		Model:           "github-copilot/claude-sonnet-5.5",
 		ReasoningEffort: "high",
@@ -17,15 +17,15 @@ func TestBuildOpencodeArgsV2(t *testing.T) {
 		Workdir:         "/home/developer/chat",
 		Yolo:            true,
 	}
-	got := strings.Join(BuildOpencodeArgsV2("-a prompt", "ses_1", cfg), " ")
+	got := strings.Join(BuildOpencodeArgs("-a prompt", "ses_1", cfg), " ")
 	want := "run --format json --auto --model github-copilot/claude-sonnet-5.5#high --agent reviewer --session ses_1 -- -a prompt"
 	if got != want {
 		t.Fatalf("got  %q\nwant %q", got, want)
 	}
 }
 
-func TestBuildOpencodeArgsV2_WithoutYoloOrSession(t *testing.T) {
-	args := BuildOpencodeArgsV2("hi", "", SessionConfig{Model: "github-copilot/claude-haiku-4.5", Mode: "plan"})
+func TestBuildOpencodeArgs_WithoutYoloOrSession(t *testing.T) {
+	args := BuildOpencodeArgs("hi", "", SessionConfig{Model: "github-copilot/claude-haiku-4.5", Mode: "plan"})
 	for _, absent := range []string{"--auto", "--session", "--dir", "--variant", "--dangerously-skip-permissions"} {
 		if slices.Contains(args, absent) {
 			t.Errorf("args contain %s: %q", absent, args)
@@ -36,8 +36,8 @@ func TestBuildOpencodeArgsV2_WithoutYoloOrSession(t *testing.T) {
 	}
 }
 
-func TestWithForkOnV2Args(t *testing.T) {
-	got := strings.Join(WithFork(BuildOpencodeArgsV2("hi", "ses_1", SessionConfig{Model: "github-copilot/claude-haiku-4.5"})), " ")
+func TestWithForkOnArgs(t *testing.T) {
+	got := strings.Join(WithFork(BuildOpencodeArgs("hi", "ses_1", SessionConfig{Model: "github-copilot/claude-haiku-4.5"})), " ")
 	if got != "run --format json --model github-copilot/claude-haiku-4.5 --session ses_1 --fork -- hi" {
 		t.Fatalf("got %q", got)
 	}

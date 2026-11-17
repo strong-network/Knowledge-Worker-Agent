@@ -427,6 +427,52 @@ func TestBuiltinBackedProviderRejectsKeyWrites(t *testing.T) {
 	}
 }
 
+// A built-in that also takes a key, or takes only a key, accepts one. One with
+// only its own sign-in still does not.
+func TestKeyCapableBuiltinsAcceptKeyWrites(t *testing.T) {
+	if msg := guardUserKey(Provider{ID: "openai", AuthType: AuthChatGPTOAuth, Builtin: true, AcceptsKey: true}); msg != "" {
+		t.Errorf("a built-in that takes a key refused one: %s", msg)
+	}
+	if msg := guardUserKey(Provider{ID: "anthropic", AuthType: AuthUserKey, Builtin: true}); msg != "" {
+		t.Errorf("a key-only built-in refused a key: %s", msg)
+	}
+	if guardUserKey(Provider{ID: "corp", AuthType: AuthManaged, AcceptsKey: true}) == "" {
+		t.Error("a managed provider accepted a key")
+	}
+}
+
+// In central mode a built-in keeps its key option and how it is signed in, and
+// its own help text and link stand in for any the artifact does not give.
+func TestCentralModeKeepsTheBuiltinsKeyOptionAndHelp(t *testing.T) {
+	t.Setenv(config.EnvCentralConfig, "1")
+	ResetBuiltins()
+	t.Cleanup(ResetBuiltins)
+	RegisterBuiltin(Builtin{
+		ID: "openai", Label: "OpenAI", AuthType: AuthChatGPTOAuth, AcceptsKey: true,
+		Help: "builtin help", HelpURL: "https://example.com/keys",
+		Method: func() string { return "key" },
+	})
+	withCredentials(t)
+
+	centralDir(t, `{"provider":{"openai":{}}}`, `{"providers":[{"id":"openai","auth":{"label":"OpenAI"}}]}`)
+	p := Resolve().Providers[0]
+	if !p.Authenticated || p.AuthMethod != "key" || !p.AcceptsKey {
+		t.Errorf("got authenticated=%v method=%q acceptsKey=%v, want true/key/true", p.Authenticated, p.AuthMethod, p.AcceptsKey)
+	}
+	if p.Help != "builtin help" || p.HelpURL != "https://example.com/keys" {
+		t.Errorf("help = %q %q, want the built-in's", p.Help, p.HelpURL)
+	}
+
+	centralDir(t, `{"provider":{"openai":{}}}`, `{"providers":[{"id":"openai","auth":{"help":"admin help"}}]}`)
+	if p := Resolve().Providers[0]; p.Help != "admin help" || p.HelpURL != "https://example.com/keys" {
+		t.Errorf("help = %q %q, want the artifact's text and the built-in's link", p.Help, p.HelpURL)
+	}
+	centralDir(t, `{"provider":{"openai":{}}}`, `{"providers":[{"id":"openai","auth":{"helpUrl":"https://example.org/admin"}}]}`)
+	if p := Resolve().Providers[0]; p.Help != "builtin help" || p.HelpURL != "https://example.org/admin" {
+		t.Errorf("help = %q %q, want the built-in's text and the artifact's link", p.Help, p.HelpURL)
+	}
+}
+
 // A genuinely config-declared provider — one code knows nothing about — still
 // takes the user-key path. This is the case the built-in shortcut must not
 // swallow.

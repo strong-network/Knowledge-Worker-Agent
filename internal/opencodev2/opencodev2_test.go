@@ -224,19 +224,20 @@ func TestParseMajor(t *testing.T) {
 	}
 }
 
-func TestMajorIsWhatDetectFound(t *testing.T) {
-	majorMu.Lock()
-	majorSeen = 0
-	majorMu.Unlock()
-	if got := Major(os.Args[0]); got != 1 {
-		t.Fatalf("Major before Detect = %d, want 1", got)
+func TestDetectRemembersTheVersionUntilTheBinaryChanges(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "opencode")
+	write := func(version string) {
+		if err := os.WriteFile(bin, []byte("#!/bin/sh\necho "+version+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
-	useFake(t, "ok")
-	if got := Major(config.OpencodeBin); got != 2 {
-		t.Fatalf("Major = %d, want 2", got)
+	write("opencode v2.2.5")
+	if got := Detect(bin); got != 2 {
+		t.Fatalf("Detect = %d, want 2", got)
 	}
-	if !Enabled() {
-		t.Fatal("Enabled() = false for a 2.x binary")
+	write("1.19.4")
+	if got := Detect(bin); got != 1 {
+		t.Fatalf("Detect after the binary changed = %d, want 1", got)
 	}
 }
 

@@ -4,8 +4,8 @@
 // Resolve the friendly "Default" / "Thinking" presets to concrete model
 // identifiers from the available model list.
 //
-// Default  → the latest Claude Sonnet
-// Thinking → the latest Claude Opus
+// Default  → the latest Claude Sonnet, else a pinned GPT
+// Thinking → the latest Claude Opus, else a pinned GPT
 //
 // Model ids are "provider/model" strings, e.g. "github-copilot/claude-sonnet-5"
 // or "anthropic/claude-opus-5". "Latest" is the highest version number found
@@ -28,6 +28,15 @@ const PREFERRED_DEFAULT_SONNETS = ['claude-sonnet-5', 'claude-sonnet-4.6']
 // "claude-opus-4.8"). Mirrors preferredThinkingOpus in
 // internal/config/config.go.
 const PREFERRED_THINKING_OPUS = ['claude-opus-5', 'google-vertex/claude-opus-4-8', 'claude-opus-4.8']
+
+// PREFERRED_DEFAULT_GPT and PREFERRED_THINKING_GPT are the presets' GPT pins,
+// tried when no Claude model of the tier is offered, which is a workspace
+// signed in only to OpenAI (ChatGPT or an API key). GPT-6.1 Sol is the tier
+// priced like Sonnet, GPT-6 Astra the one priced like Opus. Mirrors
+// preferredDefaultGPT in internal/config/config.go; the server does not
+// resolve Thinking.
+const PREFERRED_DEFAULT_GPT = ['gpt-6.1-sol', 'gpt-6-sol']
+const PREFERRED_THINKING_GPT = ['gpt-6-astra']
 
 function versionScore(id: string): number {
   // Grab the last number-with-optional-decimal in the id (e.g. 4.6, 4.8, 3.5).
@@ -86,6 +95,15 @@ export function pickPinned(models: string[], pin: string): string {
   return best
 }
 
+// firstPinned returns the model matching the first pin present, or ''.
+function firstPinned(models: string[], pins: string[]): string {
+  for (const pin of pins) {
+    const m = pickPinned(models, pin)
+    if (m) return m
+  }
+  return ''
+}
+
 export function latestSonnet(models: string[]): string {
   // Pin the "Default" preset to a known-good Claude Sonnet when present, so a
   // newly-published higher-versioned Sonnet is not auto-selected as the default
@@ -136,8 +154,8 @@ export function providerOf(id: string): string {
 // visible symptom of them disagreeing is a composer chip labelled "Default"
 // that arms a different model than the server would have picked.
 //
-// The Claude heuristic below is NOT redundant with that: it is what runs in
-// built-in mode, where no artifact nominates anything.
+// The heuristic below is NOT redundant with that: it is what runs in built-in
+// mode, where no artifact nominates anything.
 export function resolvePreset(
   preset: 'default' | 'thinking',
   models: string[],
@@ -147,5 +165,6 @@ export function resolvePreset(
   // Still check availability: the nomination is resolved against the server's
   // model list, and the browser's copy can lag it by a poll interval.
   if (pick && models.includes(pick)) return pick
-  return preset === 'thinking' ? latestOpus(models) : latestSonnet(models)
+  if (preset === 'thinking') return latestOpus(models) || firstPinned(models, PREFERRED_THINKING_GPT)
+  return latestSonnet(models) || firstPinned(models, PREFERRED_DEFAULT_GPT)
 }

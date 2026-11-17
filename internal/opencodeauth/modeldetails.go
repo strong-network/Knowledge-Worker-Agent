@@ -11,7 +11,7 @@ import (
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodev2"
 )
 
-// ModelDetail is what `opencode models --verbose` reports about one model.
+// ModelDetail is what opencode's model list says about one model.
 type ModelDetail struct {
 	// ID is "provider/model", as FetchModelsFor returns it; Model is the part
 	// after the provider.
@@ -31,27 +31,19 @@ type ModelDetail struct {
 }
 
 // FetchModelDetails lists a provider's models with their catalogue metadata,
-// by running `opencode models <provider> --verbose`. 2.x's `models` has no
-// --verbose; there the server's model list answers.
+// from the server's model list.
 func FetchModelDetails(provider string) ([]ModelDetail, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), modelsTimeout)
 	defer cancel()
-	if opencodev2.Enabled() {
-		var raw json.RawMessage
-		if err := opencodev2.Get(ctx, "/api/model", &raw); err != nil {
-			return nil, err
-		}
-		return modelDetailsV2(raw, provider), nil
+	var raw json.RawMessage
+	if err := opencodev2.Get(ctx, "/api/model", &raw); err != nil {
+		return nil, err
 	}
-	out, err := opencodev2.Cmd(ctx, resolveBin(), "models", provider, "--verbose").Output()
-	if err != nil {
-		return nil, describeFailure(ctx, err, string(out))
-	}
-	return parseModelDetails(string(out)), nil
+	return modelDetailsV2(raw, provider), nil
 }
 
-// v2Packages names 2.x's model clients by the 1.x package that speaks the
-// same API, which is what NPM is read for.
+// v2Packages names opencode's model clients by the AI SDK package that speaks
+// the same API, which is what NPM is read for.
 var v2Packages = map[string]string{
 	"@opencode/ai/providers/google-vertex/gemini":   "@ai-sdk/google-vertex",
 	"@opencode/ai/providers/google-vertex/messages": "@ai-sdk/google-vertex/anthropic",
@@ -105,66 +97,4 @@ func modelDetailsV2(raw []byte, provider string) []ModelDetail {
 		out = append(out, d)
 	}
 	return out
-}
-
-// parseModelDetails reads the verbose listing: each model is its
-// "provider/model" line followed by an indented JSON object whose closing
-// brace starts a line.
-func parseModelDetails(raw string) []ModelDetail {
-	var out []ModelDetail
-	id := ""
-	var block []string
-	for _, line := range strings.Split(ansiRe.ReplaceAllString(raw, ""), "\n") {
-		switch {
-		case block == nil && line == "{":
-			block = []string{line}
-		case block != nil:
-			block = append(block, line)
-			if line != "}" {
-				continue
-			}
-			if d, ok := decodeModelDetail(id, strings.Join(block, "\n")); ok {
-				out = append(out, d)
-			}
-			block, id = nil, ""
-		default:
-			if s := strings.TrimSpace(line); s != "" && !strings.ContainsAny(s, " \t") && strings.Contains(s, "/") {
-				id = s
-			}
-		}
-	}
-	return out
-}
-
-func decodeModelDetail(id, text string) (ModelDetail, bool) {
-	var v struct {
-		ID         string `json:"id"`
-		ProviderID string `json:"providerID"`
-		Status     string `json:"status"`
-		API        struct {
-			URL string `json:"url"`
-			NPM string `json:"npm"`
-		} `json:"api"`
-		Capabilities struct {
-			ToolCall bool `json:"toolcall"`
-			Output   struct {
-				Text  bool `json:"text"`
-				Image bool `json:"image"`
-				Audio bool `json:"audio"`
-			} `json:"output"`
-		} `json:"capabilities"`
-	}
-	if json.Unmarshal([]byte(text), &v) != nil || v.ID == "" {
-		return ModelDetail{}, false
-	}
-	if id == "" {
-		id = v.ProviderID + "/" + v.ID
-	}
-	return ModelDetail{
-		ID: id, Model: v.ID, NPM: v.API.NPM, URL: v.API.URL, Status: v.Status,
-		ToolCall:    v.Capabilities.ToolCall,
-		OutputText:  v.Capabilities.Output.Text,
-		OutputImage: v.Capabilities.Output.Image,
-		OutputAudio: v.Capabilities.Output.Audio,
-	}, true
 }

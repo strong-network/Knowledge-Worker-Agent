@@ -186,10 +186,7 @@ function turnFrame(event: string, d: any) {
       break
     case 'tool_blocked': upsertTool(d.call_id, { name: d.tool, status: 'blocked' }); break
     case 'question': waiting.value = { reason: 'question', text: d.question || '' }; break
-    case 'waiting_on_owner': waiting.value = { reason: d.reason || 'approval' }; break
-    case 'permission_answered':
-      if (waiting.value?.reason === 'approval') waiting.value = null
-      break
+    case 'waiting_on_owner': waiting.value = { reason: d.reason || '' }; break
     case 'error':
       if (live) {
         live.content += `${live.content ? '\n\n' : ''}_${d.message || 'The assistant ran into a problem.'}_`
@@ -219,7 +216,7 @@ const follower = new TurnFollower({
   closed: () => end('sharing_ended'),
 })
 
-const FRAMES = ['ready', 'turn_start', 'chunk', 'step', 'tool_call', 'tool_done', 'tool_blocked', 'question', 'waiting_on_owner', 'permission_answered', 'error', 'done', 'title', 'share_options', 'sharing_ended', 'session_deleted']
+const FRAMES = ['ready', 'turn_start', 'chunk', 'step', 'tool_call', 'tool_done', 'tool_blocked', 'question', 'waiting_on_owner', 'error', 'done', 'title', 'share_options', 'sharing_ended', 'session_deleted']
 
 function openEvents() {
   es?.close()
@@ -324,7 +321,7 @@ const waitingText = computed(() => {
   if (!w) return ''
   if (w.reason === 'question') return `The assistant asked a question. Waiting for ${ownerLabel.value} to answer.`
   if (w.reason === 'connector') return `Waiting for ${ownerLabel.value} to sign in to a connector.`
-  return `Waiting for ${ownerLabel.value} to approve the next step.`
+  return `Waiting for ${ownerLabel.value}.`
 })
 
 // Tool names that usually mean the folder changed; the list refreshes after them.

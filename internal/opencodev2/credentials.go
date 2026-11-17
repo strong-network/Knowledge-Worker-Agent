@@ -5,34 +5,29 @@ package opencodev2
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"log"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/strong-network/Knowledge-Worker-Agent/internal/layout"
 )
 
-// Credentials on 2.x.
+// Credentials.
 //
-// 2.x keeps credentials in its database, and reads opencode's auth.json only
-// once, when it first upgrades a 1.x database. So on 2.x a sign-in or a key
-// that KWA stores goes to the server's API. KWA writes auth.json as well,
-// which keeps it for 1.x if the installation goes back.
+// opencode keeps credentials in its database, so a sign-in or a key that KWA
+// stores goes to the server's API.
 //
 // A credential belongs to an integration: a model provider's id
 // ("github-copilot", or a provider the configuration declares), or a
 // connector's own id, which the server reports with the connector.
 
-// credential is a stored credential, without its secret.
+// credential is a stored credential, without its secret: of its value only the
+// type ("key" or "oauth") is read.
 type credential struct {
 	ID            string `json:"id"`
 	IntegrationID string `json:"integrationID"`
+	Value         struct {
+		Type string `json:"type"`
+	} `json:"value"`
 }
 
 func credentials(ctx context.Context) ([]credential, error) {
@@ -103,6 +98,23 @@ func RemoveCredentials(ctx context.Context, integration string) error {
 	return nil
 }
 
+// RemoveCredentialsOfType removes integration's credentials of one type, "key"
+// or "oauth", and keeps the others.
+func RemoveCredentialsOfType(ctx context.Context, integration, valueType string) error {
+	all, err := credentials(ctx)
+	if err != nil {
+		return err
+	}
+	for _, c := range all {
+		if strings.EqualFold(c.IntegrationID, integration) && c.Value.Type == valueType {
+			if err := Delete(ctx, "/api/credential/"+url.PathEscape(c.ID)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // connector is a connector as the server lists it.
 type connector struct {
 	Name          string `json:"name"`
@@ -148,7 +160,7 @@ func listConnectors(ctx context.Context) ([]connector, error) {
 
 // ConnectorStatuses returns whether each connector is connected, by name in
 // lower case. It waits a little for connectors still connecting, as `opencode
-// mcp list` does on 1.x; one switched off, or still connecting after that,
+// mcp list` did on 1.x; one switched off, or still connecting after that,
 // gives no verdict and is left out.
 func ConnectorStatuses(ctx context.Context) (map[string]bool, error) {
 	all, err := listConnectors(ctx)
@@ -212,161 +224,4 @@ func findConnector(ctx context.Context, name string) (connector, error) {
 		}
 	}
 	return connector{}, fmt.Errorf("no connector called %s", name)
-}
-
-// importMarker records that the connector sign-ins of 1.x were imported.
-func importMarker() string { return filepath.Join(layout.System(), "opencode-v2-connectors-imported") }
-
-// v1Connector is a connector sign-in as 1.x keeps it in mcp-auth.json.
-type v1Connector struct {
-	Tokens *struct {
-		AccessToken  string  `json:"accessToken"`
-		RefreshToken string  `json:"refreshToken"`
-		ExpiresAt    float64 `json:"expiresAt"`
-		Scope        string  `json:"scope"`
-	} `json:"tokens"`
-	ClientInfo *struct {
-		ClientID              string `json:"clientId"`
-		ClientSecret          string `json:"clientSecret"`
-		ClientIDIssuedAt      int64  `json:"clientIdIssuedAt"`
-		ClientSecretExpiresAt *int64 `json:"clientSecretExpiresAt"`
-	} `json:"clientInfo"`
-	ServerURL string `json:"serverUrl"`
-}
-
-// ImportConnectorSignIns copies the connector sign-ins 1.x kept in the file
-// path (its mcp-auth.json) into 2.x, and returns how many it copied. 2.x
-// imports auth.json when it upgrades a 1.x database but not this file, so
-// every connector would otherwise need signing in again.
-//
-// It runs once per installation, so a later sign-out sticks. A sign-in is
-// copied only to a connector of the same name and address that 2.x holds no
-// credential for: a token goes to no server but the one that issued it.
-func ImportConnectorSignIns(ctx context.Context, path string) (int, error) {
-	if _, err := os.Stat(importMarker()); err == nil {
-		return 0, nil
-	}
-	n, sawConnectors, err := importConnectorSignIns(ctx, path)
-	if err != nil {
-		return n, err
-	}
-	// An empty list may only mean the server wasn't ready; try again next time.
-	if !sawConnectors {
-		return n, nil
-	}
-	if err := os.MkdirAll(filepath.Dir(importMarker()), 0o755); err != nil {
-		return n, err
-	}
-	return n, os.WriteFile(importMarker(), []byte(fmt.Sprintf("%d\n", n)), 0o644)
-}
-
-func importConnectorSignIns(ctx context.Context, path string) (n int, sawConnectors bool, err error) {
-	raw, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return 0, true, nil
-	}
-	if err != nil {
-		return 0, false, err
-	}
-	var v1 map[string]v1Connector
-	if err := json.Unmarshal(raw, &v1); err != nil {
-		return 0, false, fmt.Errorf("read %s: %w", path, err)
-	}
-	servers, err := listConnectors(ctx)
-	if err != nil {
-		return 0, false, err
-	}
-	if len(servers) == 0 {
-		return 0, false, nil
-	}
-	have, err := credentials(ctx)
-	if err != nil {
-		return 0, true, err
-	}
-	stored := map[string]bool{}
-	for _, c := range have {
-		stored[c.IntegrationID] = true
-	}
-	urls := connectorURLs()
-	for _, s := range servers {
-		e, ok := v1[s.Name]
-		if !ok || s.IntegrationID == "" || stored[s.IntegrationID] || e.Tokens == nil || e.Tokens.AccessToken == "" {
-			continue
-		}
-		if !sameURL(e.ServerURL, urls[s.Name]) {
-			continue
-		}
-		if err := SetCredential(ctx, s.IntegrationID, "Imported from opencode 1.x", v2SignIn(s.IntegrationID, e)); err != nil {
-			return n, true, fmt.Errorf("%s: %w", s.Name, err)
-		}
-		log.Printf("[opencode-v2] imported the 1.x sign-in of connector %s", s.Name)
-		n++
-	}
-	return n, true, nil
-}
-
-// v2SignIn is a 1.x sign-in in the shape 2.x stores: the tokens, with the
-// client the authorization server registered and the scope in the metadata.
-// 1.x gives the expiry in seconds, 2.x in milliseconds, and 0 means none.
-func v2SignIn(integration string, e v1Connector) map[string]any {
-	meta := map[string]any{"serverUrl": e.ServerURL, "tokenType": "Bearer"}
-	if e.Tokens.Scope != "" {
-		meta["scope"] = e.Tokens.Scope
-	}
-	if ci := e.ClientInfo; ci != nil && ci.ClientID != "" {
-		client := map[string]any{"client_id": ci.ClientID}
-		if ci.ClientSecret != "" {
-			client["client_secret"] = ci.ClientSecret
-		}
-		if ci.ClientIDIssuedAt != 0 {
-			client["client_id_issued_at"] = ci.ClientIDIssuedAt
-		}
-		if ci.ClientSecretExpiresAt != nil {
-			client["client_secret_expires_at"] = *ci.ClientSecretExpiresAt
-		}
-		meta["client"] = client
-	}
-	return map[string]any{
-		"type":     "oauth",
-		"methodID": integration,
-		"access":   e.Tokens.AccessToken,
-		"refresh":  e.Tokens.RefreshToken,
-		"expires":  int64(e.Tokens.ExpiresAt * 1000),
-		"metadata": meta,
-	}
-}
-
-// connectorURLs returns each configured connector's address: the global
-// configuration's, then the platform's over it, as 2.x layers them.
-func connectorURLs() map[string]string {
-	out := map[string]string{}
-	paths := []string{globalConfigPath()}
-	if dir := os.Getenv("OPENCODE_CONFIG_DIR"); dir != "" {
-		paths = append(paths, filepath.Join(dir, "opencode.json"))
-	}
-	for _, p := range paths {
-		b, err := os.ReadFile(p)
-		if err != nil {
-			continue
-		}
-		var doc struct {
-			MCP map[string]struct {
-				URL string `json:"url"`
-			} `json:"mcp"`
-		}
-		if json.Unmarshal(b, &doc) != nil {
-			continue
-		}
-		for name, s := range doc.MCP {
-			if s.URL != "" {
-				out[name] = s.URL
-			}
-		}
-	}
-	return out
-}
-
-func sameURL(a, b string) bool {
-	a, b = strings.TrimRight(strings.TrimSpace(a), "/"), strings.TrimRight(strings.TrimSpace(b), "/")
-	return a != "" && a == b
 }

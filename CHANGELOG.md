@@ -8,6 +8,53 @@ the project's history, starting after 1.1.2.
 
 - First public release.
 
+## 2.2.0 (2026-11-16)
+
+### Added
+
+- **OpenAI API keys.** The OpenAI row in **Accounts & connections** takes an API key from the
+  OpenAI Platform as well as a ChatGPT sign-in, one at a time: saving a key replaces the
+  sign-in, and signing in with ChatGPT removes the key. The row says which one is in use.
+- **Anthropic.** Claude models through the user's own Anthropic API key, from the Claude
+  Console. Day notes run on the newest Claude Haiku: Anthropic's dated model ids no longer
+  rank a release date as a version.
+- **GPT presets.** With only OpenAI signed in, **Default** is GPT-6.1 Sol, **Thinking** is
+  GPT-6 Astra and day notes run on GPT Luna. Before, Default was whichever model came first
+  in the list, Thinking had no model, and with ChatGPT day notes didn't run.
+- **Central configuration in a folder of a repository.** `KWA_CONFIG_REPO_SUBDIR` names the
+  folder that holds it, so the configuration can live in a larger repository. Only that folder,
+  and the files at the repository's root, are checked out.
+
+### Changed
+
+- **A saved API key is tested straight away**, as a sign-in is, so a provider that the
+  network refuses says so on its row before a message fails.
+
+### Removed
+
+- **The one-folder migration.** Releases up to 2.1 moved a workspace's files into
+  `Knowledge_Worker_Agent` once, and could move them back. This one doesn't: `KWA_MIGRATE` and the
+  `migrate` command are gone. A workspace whose files were never moved doesn't start, and every
+  page says why; nothing is changed. Start 2.1 in it once to move them.
+- **opencode 1.x.** Chats run on opencode 2.x only: `KWA_OPENCODE_MAJOR` is gone, and an
+  opencode older than 2.x in `KWA_OPENCODE_BIN` leaves chat unavailable, with the reason in the
+  log. What only 1.x used went with it: server mode (`KWA_OPENCODE_USE_SERVER`) and its card
+  for approving the agent's next step, the two opencode plugins (a start still removes our
+  copies), the one-time copy of 1.x's connector sign-ins, and writing sign-ins and API keys to
+  opencode's `auth.json` as well as its database. Diagnostics no longer says how chats run
+  opencode. A start logs any retired setting that is still set.
+- **The copy of opencode's database from before 2.x.** A start deletes
+  `.system/opencode-db-before-2.x.db`, kept when 2.x first opened opencode's database so a
+  workspace could go back to 1.x. It often takes more than 1 GB, and nothing can go back now.
+
+### Fixed
+
+- **A provider's help link reaches Accounts.** Central configuration can give a provider a
+  `helpUrl`, for the row's **How to get a key** link, but materialization dropped it, so no row
+  showed one.
+- **Pointing `KWA_CONFIG_REPO_URL` at another repository takes effect.** A workspace that had
+  cloned the earlier repository kept updating that clone instead of cloning the new one.
+
 ## 2.1.0 (2026-11-12)
 
 ### Security

@@ -26,11 +26,9 @@ import (
 // permanently broken: even a message with no attachment fails, because the
 // poison is in the replayed history rather than in the new message.
 //
-// plugin/pdf-guard.js (installed into the opencode config dir at startup)
-// stops this happening again by dropping such attachments before they are
-// stored. This is the other half: sessions that were already poisoned before
-// the guard existed carry the bad part forever, and no future prompt can clear
-// it.
+// opencode now replaces such an attachment with a notice before it is
+// stored. This is the other half: sessions that were already poisoned carry
+// the bad part forever, and no future prompt can clear it.
 //
 // The recovery is to detach our chat session from the poisoned OpenCode
 // session so the next turn starts a fresh one. Deliberately NOT used:

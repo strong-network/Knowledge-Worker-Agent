@@ -240,6 +240,22 @@ func TestSmallModelFindsEachVendorsCheapTier(t *testing.T) {
 			models: []string{"mistral/mistral-large-3", "mistral/mistral-small-3.2"},
 			want:   "mistral/mistral-small-3.2",
 		},
+		{
+			name:   "openai luna, the only small tier ChatGPT offers",
+			models: []string{"openai/gpt-5.6-luna", "openai/gpt-6-luna", "openai/gpt-6-luna-fast", "openai/gpt-6.1-sol"},
+			want:   "openai/gpt-6-luna",
+		},
+		{
+			name:   "openai luna before nano",
+			models: []string{"openai/gpt-5.4-nano", "openai/gpt-6-luna"},
+			want:   "openai/gpt-6-luna",
+		},
+		{
+			// Anthropic spells versions with dashes and lists dated snapshots.
+			name:   "anthropic newest haiku, not a dated older one",
+			models: []string{"anthropic/claude-haiku-4-5", "anthropic/claude-haiku-4-5-20251001", "anthropic/claude-haiku-5-5"},
+			want:   "anthropic/claude-haiku-5-5",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -314,5 +330,22 @@ func TestSmallModelPicksTheNewestInItsTier(t *testing.T) {
 
 	if got := SmallModel(); got != "github-copilot/claude-haiku-4.5" {
 		t.Errorf("SmallModel() = %q, want the newest haiku", got)
+	}
+}
+
+func TestTierVersionScore(t *testing.T) {
+	for _, c := range []struct {
+		a, b string // a ranks above b
+	}{
+		{"anthropic/claude-haiku-5-5", "anthropic/claude-haiku-4-5-20251001"},
+		{"anthropic/claude-haiku-4-5", "anthropic/claude-3-5-haiku-20241022"},
+		{"google-vertex/claude-haiku-5-5@default", "google-vertex/claude-haiku-4-5@20251001"},
+		{"github-copilot/claude-haiku-4.5", "github-copilot/claude-haiku-4"},
+		{"openai/gpt-6-luna", "openai/gpt-5.6-luna"},
+		{"openai/gpt-5.4-mini", "openai/gpt-4o-mini-2024-07-18"},
+	} {
+		if tierVersionScore(c.a) <= tierVersionScore(c.b) {
+			t.Errorf("%s (%d) does not rank above %s (%d)", c.a, tierVersionScore(c.a), c.b, tierVersionScore(c.b))
+		}
 	}
 }

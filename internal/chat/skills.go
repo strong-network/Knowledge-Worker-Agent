@@ -12,13 +12,12 @@ import (
 	"time"
 
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/config"
-	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodeserver"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodev2"
 )
 
 // skillListTimeout bounds how long the picker (and the send path) will wait for
-// opencode to enumerate skills. Starting a fresh instance dominates this; once
-// one is warm the call is local and instant.
+// opencode to enumerate skills. A folder's first listing dominates this; once
+// it is set up the call is local and instant.
 const skillListTimeout = 60 * time.Second
 
 // Turn carries settings that belong to a single prompt and are deliberately
@@ -48,6 +47,16 @@ func firstTurn(turn []Turn) Turn {
 	return turn[0]
 }
 
+// Skill is a skill opencode resolves for a folder. Content is the full SKILL.md
+// body and Location its absolute path; both are needed to force a skill into a
+// turn, and neither is ever sent to the browser.
+type Skill struct {
+	Name        string
+	Description string
+	Location    string
+	Content     string
+}
+
 // SkillSummary is the browser-facing shape of a skill: identity and the short
 // description shown in the picker. The SKILL.md body is deliberately absent —
 // it can be tens of kilobytes, the picker has no use for it, and it is injected
@@ -62,57 +71,34 @@ type SkillSummary struct {
 // opencode. It returns the raw enumeration for a directory.
 var listSkillsFn = fetchSkills
 
-func fetchSkills(ctx context.Context, workdir string) ([]opencodeserver.Skill, error) {
-	if opencodev2.Enabled() {
-		return fetchSkillsV2(ctx, workdir)
-	}
-	sup := Supervisor()
-	if sup == nil {
-		return nil, errSkillsUnavailable
-	}
-	// Ensure, not Client: Client only finds an instance that is already
-	// running, so on a brand-new chat — exactly when someone wants to arm a
-	// skill — the picker would come up empty for a workspace full of skills.
-	client, dir, err := sup.Ensure(ctx, workdir, config.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	return client.ListSkills(ctx, dir)
-}
-
-// errSkillsUnavailable marks "we could not ask" as distinct from "there are
-// none", so the picker can say the workspace is still starting instead of
-// claiming a workspace with a dozen skills has none.
-var errSkillsUnavailable = errSkills("opencode server is not available")
-
-// fetchSkillsV2 asks KWA's opencode 2.x server. A skill's ID is the name its
-// tool loads it by.
+// fetchSkills asks KWA's opencode server. A skill's ID is the name its tool
+// loads it by.
 //
-// 2.x registers a folder's skills in the background the first time the folder
+// opencode registers a folder's skills in the background the first time the folder
 // is used, and lists only those registered so far: none, then its built-in
 // ones, then the rest. Taking the first answer cached an empty or partial list
 // for a new chat, which its siblings then borrowed.
-func fetchSkillsV2(ctx context.Context, workdir string) ([]opencodeserver.Skill, error) {
-	return settleSkills(ctx, func(ctx context.Context) ([]opencodeserver.Skill, error) {
-		return getSkillsV2(ctx, workdir)
+func fetchSkills(ctx context.Context, workdir string) ([]Skill, error) {
+	return settleSkills(ctx, func(ctx context.Context) ([]Skill, error) {
+		return getSkills(ctx, workdir)
 	})
 }
 
 var (
 	skillPoll = 100 * time.Millisecond
-	// skillSettle is how long a list must stay the same to be final. 2.x adds
+	// skillSettle is how long a list must stay the same to be final. opencode adds
 	// each group of skills well within 100 ms of the last.
 	skillSettle = 500 * time.Millisecond
-	// skillEmptyGrace is how long an empty list must last to be final: 2.x has
+	// skillEmptyGrace is how long an empty list must last to be final: opencode has
 	// built-in skills, so an empty list usually means it hasn't started yet.
 	skillEmptyGrace = 3 * time.Second
 )
 
 // settleSkills asks until the list stops changing. A cancelled context is an
 // error, not a partial answer, so a partial list is never cached.
-func settleSkills(ctx context.Context, fetch func(context.Context) ([]opencodeserver.Skill, error)) ([]opencodeserver.Skill, error) {
+func settleSkills(ctx context.Context, fetch func(context.Context) ([]Skill, error)) ([]Skill, error) {
 	start := time.Now()
-	var list []opencodeserver.Skill
+	var list []Skill
 	var key string
 	var since time.Time
 	for {
@@ -134,7 +120,7 @@ func settleSkills(ctx context.Context, fetch func(context.Context) ([]opencodese
 	}
 }
 
-func skillNames(skills []opencodeserver.Skill) string {
+func skillNames(skills []Skill) string {
 	names := make([]string, len(skills))
 	for i, s := range skills {
 		names[i] = s.Name
@@ -143,7 +129,7 @@ func skillNames(skills []opencodeserver.Skill) string {
 	return strings.Join(names, "\n")
 }
 
-func getSkillsV2(ctx context.Context, workdir string) ([]opencodeserver.Skill, error) {
+func getSkills(ctx context.Context, workdir string) ([]Skill, error) {
 	var resp struct {
 		Data []struct {
 			ID          string `json:"id"`
@@ -155,20 +141,16 @@ func getSkillsV2(ctx context.Context, workdir string) ([]opencodeserver.Skill, e
 	if err := opencodev2.Get(ctx, "/api/skill?location[directory]="+url.QueryEscape(workdir), &resp); err != nil {
 		return nil, err
 	}
-	out := make([]opencodeserver.Skill, 0, len(resp.Data))
+	out := make([]Skill, 0, len(resp.Data))
 	for _, s := range resp.Data {
-		out = append(out, opencodeserver.Skill{Name: s.ID, Description: s.Description, Location: s.Path, Content: s.Content})
+		out = append(out, Skill{Name: s.ID, Description: s.Description, Location: s.Path, Content: s.Content})
 	}
 	return out, nil
 }
 
-type errSkills string
-
-func (e errSkills) Error() string { return string(e) }
-
 // SkillFiles returns the skills opencode resolves for workdir, each with the
 // SKILL.md it was read from.
-func SkillFiles(ctx context.Context, workdir string) ([]opencodeserver.Skill, error) {
+func SkillFiles(ctx context.Context, workdir string) ([]Skill, error) {
 	return listSkillsFn(ctx, canonicalSkillDir(workdir))
 }
 

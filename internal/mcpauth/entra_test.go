@@ -19,9 +19,14 @@ import (
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/layout"
 )
 
-// No test reaches a connector's metadata over the network unless it says so.
+// No test reaches a connector's metadata over the network, or opencode's
+// server, unless it says so.
 func TestMain(m *testing.M) {
 	detectEntra = func(context.Context, string) (entra.Target, bool, error) { return entra.Target{}, false, nil }
+	noServer := errors.New("no opencode server in tests")
+	connectorStatuses = func(context.Context) (map[string]bool, error) { return nil, noServer }
+	connectorSignedIn = func(context.Context, string) (bool, error) { return false, noServer }
+	signOutConnector = func(context.Context, string) error { return noServer }
 	os.Exit(m.Run())
 }
 
@@ -33,12 +38,11 @@ func entraConnector(t *testing.T) {
 	t.Setenv("KWA_ENTRA_CLIENT_ID", "client-1")
 	t.Setenv("KWA_ENTRA_TENANT_ID", "tenant-1")
 	t.Setenv("KWA_ENTRA_AUTHORITY", "http://127.0.0.1:9")
-	oldDetect, oldEnabled := detectEntra, entraEnabled
+	oldDetect := detectEntra
 	detectEntra = func(_ context.Context, u string) (entra.Target, bool, error) {
 		return entra.Target{ServerURL: u, Scopes: []string{"api-1/Ask", "offline_access"}}, true, nil
 	}
-	entraEnabled = func() bool { return true }
-	t.Cleanup(func() { detectEntra, entraEnabled = oldDetect, oldEnabled })
+	t.Cleanup(func() { detectEntra = oldDetect })
 	// opencode's own sign-in must not run: it would fail on Entra.
 	marker := filepath.Join(t.TempDir(), "opencode-ran")
 	old := OpencodeBin
@@ -90,23 +94,18 @@ func TestEntraConnectorSignsInWithKWA(t *testing.T) {
 	}
 }
 
-func TestEntraConnectorNeedsAnAppAnd2x(t *testing.T) {
+func TestEntraConnectorNeedsAnApp(t *testing.T) {
 	entraConnector(t)
 	t.Setenv("KWA_ENTRA_CLIENT_ID", "")
 	var unsupported ErrOAuthUnsupported
 	if err := startAuth("workiq"); !errors.As(err, &unsupported) || !strings.Contains(err.Error(), "KWA_ENTRA_CLIENT_ID") {
 		t.Errorf("without an app: %v", err)
 	}
-	t.Setenv("KWA_ENTRA_CLIENT_ID", "client-1")
-	entraEnabled = func() bool { return false }
-	if err := startAuth("workiq"); !errors.As(err, &unsupported) || !strings.Contains(err.Error(), "opencode 2.x") {
-		t.Errorf("on 1.x: %v", err)
-	}
 }
 
 func TestLogoutForgetsTheMicrosoftSignIn(t *testing.T) {
 	entraConnector(t)
-	OpencodeBin = writeFakeOpencode(t, "#!/bin/sh\n[ \"$2\" = logout ] && exit 0\nexit 1\n")
+	stubSignOut(t, nil)
 	dir := filepath.Join(layout.System(), "entra")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -117,7 +116,7 @@ func TestLogoutForgetsTheMicrosoftSignIn(t *testing.T) {
 	if !entra.Has("workiq") {
 		t.Fatal("no sign-in to forget")
 	}
-	if _, err := Logout("workiq"); err != nil {
+	if err := Logout("workiq"); err != nil {
 		t.Fatal(err)
 	}
 	if entra.Has("workiq") {

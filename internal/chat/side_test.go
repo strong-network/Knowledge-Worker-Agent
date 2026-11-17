@@ -83,8 +83,4 @@ func TestResumeOrFork(t *testing.T) {
 		}
 	}
 
-	req := buildServerTurnRequest("s1", "hi", config.SessionConfig{ParentID: "p", Fork: true}, nil, Author{})
-	if req.OpencodeSession != "ses_p" || !req.Fork {
-		t.Errorf("server turn = session %q fork %v, want ses_p true", req.OpencodeSession, req.Fork)
-	}
 }

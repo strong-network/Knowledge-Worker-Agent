@@ -88,9 +88,6 @@ var opencodeModelsMu sync.RWMutex
 // endpoints gate on this before spawning an opencode process.
 var opencodeReady atomic.Bool
 
-// opencodeEnsured is closed once bootstrap has installed or verified opencode, or failed to.
-var opencodeEnsured = make(chan struct{})
-
 // opencodeModelRefreshInterval controls how often the opencode model cache is
 // refreshed in the background.
 const opencodeModelRefreshInterval = 30 * time.Minute
@@ -131,20 +128,12 @@ func main() {
 			// Cross-session retrieval: serve the retrieval MCP server on stdio. opencode spawns
 			// this; it must not start the HTTP server or write to stdout.
 			os.Exit(runMCPRecall(os.Args[2:]))
-		case "migrate":
-			os.Exit(runMigrate(os.Args[2:]))
 		case "-h", "--help", "help":
-			fmt.Println("Usage: knowledge-worker-agent [serve|health|version|mcp-recall|migrate dry-run|on|undo]")
+			fmt.Println("Usage: knowledge-worker-agent [serve|health|version|mcp-recall]")
 			fmt.Println("  serve       (default) start the HTTP server")
 			fmt.Println("  health      hit /healthz on the configured host/port and exit 0/1")
 			fmt.Println("  version     print the build commit and exit")
 			fmt.Println("  mcp-recall  serve the cross-session retrieval MCP server on stdio")
-			fmt.Println("  migrate dry-run  report what the one-folder migration, or once it has run")
-			fmt.Println("                   its undo, would do, and exit")
-			fmt.Println("  migrate on       carry the migration out, with the server stopped; at startup")
-			fmt.Println("                   it runs unless KWA_MIGRATE=off, or an undo was the last run")
-			fmt.Println("  migrate undo     move everything back, with the server stopped;")
-			fmt.Println("                   KWA_MIGRATE=undo does it at startup, and =on migrates again")
 			return
 		case "serve":
 			os.Args = append(os.Args[:1], os.Args[2:]...)
@@ -161,37 +150,30 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  ⚠ Settings with old names, which a later release stops reading: %s\n", strings.Join(old, ", "))
 	}
 
-	// Before anything opens a file an interrupted migration may have moved.
-	if err := migration.Recover(os.Stdout); err != nil {
-		log.Fatalf("One-folder migration: %v", err)
+	// Before anything opens a file at the old places: this release doesn't move them.
+	if why, ok := migration.Unmoved(); ok {
+		serveUnmoved(why)
+	}
+	if !layout.Migrated() {
+		if err := migration.MarkNew(); err != nil {
+			log.Fatalf("Marking the new workspace's files as in %s: %v", layout.Root(), err)
+		}
 	}
 	if n, err := migration.Prune(time.Now()); err != nil {
 		log.Printf("One-folder migration: removing backups older than 30 days: %v", err)
 	} else if n > 0 {
 		log.Printf("One-folder migration: removed the backups of %d runs older than 30 days", n)
 	}
-	if from, err := migration.MoveGitHubToken(); err != nil {
-		log.Printf("One-folder migration: moving the saved GitHub token into %s: %v", layout.System(), err)
-	} else if from != "" {
-		log.Printf("One-folder migration: moved the saved GitHub token from %s into %s", from, layout.System())
-	}
 
 	config.Init()
 	exportURL()
 	setupSkillTokens()
 	setStatus("starting")
-	migrateMode := migrationAtStartup()
-	if migrateMode == migration.On || migrateMode == migration.Undo {
-		runMigrationAtStartup(migrateMode)
-	}
 
 	if err := db.Init(config.DBPath); err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 	defer db.Close()
-	if err := migration.HoldDatabase(config.DBPath); err != nil {
-		log.Fatalf("Database: %v", err)
-	}
 	// A chat's folder stays while another chat works in it, as a side chat does.
 	workdirs.InUse = db.FolderInUse
 	// Earlier versions of text files: taken around each turn and on each save,
@@ -206,15 +188,6 @@ func main() {
 		go versions.Sweep()
 	}
 
-	if migrateMode == migration.DryRun && !layout.Migrated() && config.OpencodeMajor < 2 {
-		// It only reads, so it needn't hold up the server.
-		go func() {
-			<-opencodeEnsured // a migration would install the pinned version first too
-			r := migration.Assess(config.DBPath, config.OpencodeBin)
-			r.Write(os.Stdout, migration.DryRun)
-			migrationState.Store(viewOf(r))
-		}()
-	}
 	if stray, ok := migration.StrayDatabase(); ok {
 		fmt.Fprintf(os.Stderr, "  ⚠ One-folder migration: %s has appeared since the migration; an older release probably ran, and chats made there aren't shown here\n", stray)
 		migrationState.Store(&migrationView{State: "stray", Path: stray})
@@ -229,7 +202,6 @@ func main() {
 		StartedAt:     startedAt,
 		Status:        getStatus,
 		OpencodeReady: opencodeReady.Load,
-		ServerBackend: serverBackendEnabled(),
 		OpencodeBin:   func() string { return config.OpencodeBin },
 		Models: func() []string {
 			opencodeModelsMu.RLock()
@@ -318,9 +290,7 @@ func main() {
 	telemetry.Shutdown()
 	cancel()
 
-	// Terminate any managed `opencode serve` child processes. db.Close runs via
-	// the deferred call above.
-	chat.CloseSupervisor()
+	// Stop KWA's `opencode serve`. db.Close runs via the deferred call above.
 	opencodev2.Stop()
 }
 
@@ -329,9 +299,12 @@ func main() {
 // parallel, then registers MCP defaults and discovers models. Idempotent —
 // handlers gate on opencodeReady before spawning opencode processes.
 func bootstrap() {
+	warnRetiredSettings()
+	opencodev2.RemoveLeftovers()
+
 	// Vertex AI (google-vertex provider): seed GOOGLE_VERTEX_PROJECT/LOCATION and
 	// GOOGLE_CLOUD_PROJECT so opencode lights up the provider. First, because
-	// opencode 2.x's one server keeps the environment it starts with, and a
+	// opencode's one server keeps the environment it starts with, and a
 	// request from the UI can start it at any point below. The model-cache
 	// refresh after a "Sign in with Google Cloud" (gcloud ADC) flow is hooked
 	// below.
@@ -403,15 +376,9 @@ func bootstrap() {
 			fmt.Fprintf(os.Stderr, "  ⚠ Cannot determine config dir for opencode defaults\n")
 			return
 		}
-		// The plugins are for opencode 1.x: 2.x does their work itself (see
-		// defaults.RemovePlugins). The setting says which one runs before the
-		// binary is installed; a 2.x binary given without it is detected.
-		if config.OpencodeMajor >= 2 || opencodev2.Detect(config.OpencodeBin) >= 2 {
-			if err := defaults.RemovePlugins(os.Stderr, dir); err != nil {
-				fmt.Fprintf(os.Stderr, "  ⚠ Removing opencode 1.x plugins: %v\n", err)
-			}
-		} else if err := defaults.InstallPlugins(os.Stderr, dir); err != nil {
-			fmt.Fprintf(os.Stderr, "  ⚠ Installing opencode plugins: %v\n", err)
+		// KWA's former opencode 1.x plugins do work opencode now does itself.
+		if err := defaults.RemovePlugins(os.Stderr, dir); err != nil {
+			fmt.Fprintf(os.Stderr, "  ⚠ Removing opencode 1.x plugins: %v\n", err)
 		}
 		if err := defaults.InstallSkills(os.Stderr, dir); err != nil {
 			fmt.Fprintf(os.Stderr, "  ⚠ Installing document skills: %v\n", err)
@@ -435,7 +402,6 @@ func bootstrap() {
 	// backend, so a failure here flips the overall status to "degraded".
 	go func() {
 		defer wg.Done()
-		defer close(opencodeEnsured)
 		if err := ensureOpencode(); err != nil {
 			fmt.Fprintf(os.Stderr, "  ✗ OpenCode bootstrap failed: %v\n", err)
 			setStatus("degraded")
@@ -470,17 +436,14 @@ func bootstrap() {
 
 	// A provider with regional endpoints needs one chosen before any opencode
 	// process reads its address, and the registry's first sign-in check below
-	// already starts opencode 2.x's server.
+	// already starts opencode's server.
 	providers.SetEndpointStore(db.GetAppMeta, db.SetAppMeta)
 	providers.SetEndpointChangeHook(chat.ReloadServerAgents)
 	providers.ApplyEndpoints(context.Background())
 
 	// Usage reporting, for providers whose artifact asks for it. It reads
-	// opencode 2.x's turn events.
+	// opencode's turn events.
 	telemetry.Version = version
-	if !opencodev2.Enabled() {
-		providers.SetTelemetryUnavailable("usage reporting needs opencode 2.x")
-	}
 	providers.ApplyTelemetry()
 
 	// Model providers: the provider registry reads what the materializer just wrote, so
@@ -543,19 +506,17 @@ func bootstrap() {
 	ensureRecallMCP()
 	mcp.WarnMissingCommands(os.Stderr)
 
-	// On opencode 2.x, model discovery has started the server by now, before
-	// the connector writes above, and it reads its configuration only when told.
-	if opencodev2.Enabled() {
-		reloadCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		if err := opencodev2.Reload(reloadCtx); err != nil {
-			fmt.Fprintf(os.Stderr, "  ⚠ OpenCode server: could not reload the configuration: %v\n", err)
-		}
-		cancel()
+	// Model discovery has started opencode's server by now, before the
+	// connector writes above, and it reads its configuration only when told.
+	reloadCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	if err := opencodev2.Reload(reloadCtx); err != nil {
+		fmt.Fprintf(os.Stderr, "  ⚠ OpenCode server: could not reload the configuration: %v\n", err)
 	}
+	cancel()
 
 	// Cache MCP auth status (which server is signed in) so the UI can render it
-	// instantly, and keep it fresh in the background. Checking status runs
-	// `opencode mcp list`, which is slow, so we do it off the request path.
+	// instantly, and keep it fresh in the background. Checking status can wait
+	// on opencode's server, so we do it off the request path.
 	// Also re-check right after a successful MCP OAuth sign-in.
 	go mcpauth.RefreshAllStatuses()
 	startMcpStatusRefresher()
@@ -570,57 +531,36 @@ func bootstrap() {
 	// occurrences missed while the workspace was off.
 	scheduledtasks.StartScheduler()
 
-	// opencode 2.x: start the server every opencode command goes to, so the
-	// first turn waits neither for it nor for its connectors.
-	if opencodev2.Enabled() {
-		if v := env.Get("KWA_OPENCODE_USE_SERVER"); v != "" {
-			fmt.Fprintf(os.Stderr, "  ⚠ KWA_OPENCODE_USE_SERVER=%s is ignored: server mode needs opencode 1.x\n", v)
-		}
-		startCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-		if _, _, err := opencodev2.Ensure(startCtx); err != nil {
-			fmt.Fprintf(os.Stderr, "  ⚠ OpenCode server did not start: %v\n", err)
-		} else {
-			fmt.Println("  ✓ OpenCode server ready")
-			mcpAuth := filepath.Join(opencodeauth.DataDir(), "mcp-auth.json")
-			if n, err := opencodev2.ImportConnectorSignIns(startCtx, mcpAuth); err != nil {
-				fmt.Fprintf(os.Stderr, "  ⚠ Could not import the connector sign-ins of opencode 1.x: %v\n", err)
-			} else if n > 0 {
-				fmt.Printf("  ✓ Imported %d connector sign-ins of opencode 1.x\n", n)
-				go mcpauth.RefreshAllStatuses()
-			}
-			entra.StartRefresher(chat.HasActiveTasks)
-		}
-		cancel()
+	// Start the server every opencode command goes to, so the first turn waits
+	// neither for it nor for its connectors.
+	startCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	if _, _, err := opencodev2.Ensure(startCtx); err != nil {
+		fmt.Fprintf(os.Stderr, "  ⚠ OpenCode server did not start: %v\n", err)
+	} else {
+		fmt.Println("  ✓ OpenCode server ready")
+		entra.StartRefresher(chat.HasActiveTasks)
 	}
-
-	// Server backend (KWA_OPENCODE_USE_SERVER): pre-warm a server at the workspace
-	// root so the first chat turn is fast and any auth/model problems surface
-	// during bootstrap rather than on the first prompt. Lazily-started
-	// per-workdir servers still spin up on demand for other directories.
-	if serverBackendEnabled() {
-		if sup := chat.Supervisor(); sup != nil {
-			warmCtx, cancel := context.WithTimeout(context.Background(), 75*time.Second)
-			if _, _, err := sup.Ensure(warmCtx, config.Workspace, config.Workspace); err != nil {
-				fmt.Fprintf(os.Stderr, "  ⚠ OpenCode server pre-warm failed: %v\n", err)
-			} else {
-				fmt.Printf("  ✓ OpenCode server ready at %s\n", config.Workspace)
-			}
-			cancel()
-		}
-	}
+	cancel()
 
 	setStatus("ready")
 	fmt.Println("  ✓ Bootstrap complete")
 }
 
-// serverBackendEnabled mirrors chat.useServerBackend for the bootstrap path:
-// reports whether KWA_OPENCODE_USE_SERVER selects the HTTP server backend.
-func serverBackendEnabled() bool {
-	switch strings.ToLower(strings.TrimSpace(env.Get("KWA_OPENCODE_USE_SERVER"))) {
-	case "1", "true", "yes", "on":
-		return !opencodev2.Enabled()
-	default:
-		return false
+// retiredSettings are settings this version no longer reads, with why.
+var retiredSettings = []struct{ name, why string }{
+	{"KWA_OPENCODE_MAJOR", "opencode 1.x is no longer supported"},
+	{"KWA_OPENCODE_USE_SERVER", "server mode needed opencode 1.x, which is no longer supported"},
+	{"OPENCODE_USE_SERVER", "server mode needed opencode 1.x, which is no longer supported"},
+	{"KWA_MIGRATE", "the move into one folder is no longer done"},
+}
+
+// warnRetiredSettings tells an administrator who still sets a retired setting
+// that it does nothing.
+func warnRetiredSettings() {
+	for _, s := range retiredSettings {
+		if v := os.Getenv(s.name); v != "" {
+			fmt.Fprintf(os.Stderr, "  ⚠ %s=%s is ignored: %s\n", s.name, v, s.why)
+		}
 	}
 }
 
@@ -699,7 +639,7 @@ func refreshCentralConfig(step func(string)) error {
 	mcp.EnsureProvisionedStubs(os.Stderr)
 	mcp.RemoveUnassignedStubs(os.Stderr)
 	go mcpauth.RefreshAllStatuses()
-	// A running `opencode serve` reads its config only at startup.
+	// A running `opencode serve` reads its config only when told.
 	chat.ReloadServerAgents()
 	fmt.Println("  ✓ Central configuration: refreshed")
 	return nil
@@ -737,7 +677,7 @@ func ensureOpencode() error {
 	if skipUpdate {
 		if !opencodeinstaller.VerifyBin(config.OpencodeBin) {
 			fmt.Fprintf(os.Stderr, "  ⤓ OpenCode binary not usable at: %s — installing ...\n", config.OpencodeBin)
-			installed, ierr := opencodeinstaller.Install(os.Stderr, opencodeinstaller.InstallOptions{InstallDir: installDir, Major: config.OpencodeMajor})
+			installed, ierr := opencodeinstaller.Install(os.Stderr, opencodeinstaller.InstallOptions{InstallDir: installDir})
 			if ierr != nil {
 				return fmt.Errorf("auto-install failed: %w", ierr)
 			}
@@ -749,7 +689,6 @@ func ensureOpencode() error {
 	res, err := opencodeinstaller.Ensure(os.Stderr, opencodeinstaller.EnsureOptions{
 		CurrentBin: config.OpencodeBin,
 		InstallDir: installDir,
-		Major:      config.OpencodeMajor,
 	})
 	if err != nil {
 		return fmt.Errorf("install/update failed: %w", err)
@@ -764,7 +703,11 @@ func verifyOpencodeRuns() error {
 	if !opencodeinstaller.VerifyBin(config.OpencodeBin) {
 		return fmt.Errorf("opencode binary not usable at %s", config.OpencodeBin)
 	}
-	opencodev2.Detect(config.OpencodeBin)
+	// KWA drives opencode 2.x's server API; an older binary given in
+	// KWA_OPENCODE_BIN can't run a turn.
+	if major := opencodev2.Detect(config.OpencodeBin); major < 2 {
+		return fmt.Errorf("opencode at %s is version %d.x; Knowledge Worker Agent needs 2.x", config.OpencodeBin, major)
+	}
 	return nil
 }
 
@@ -909,6 +852,9 @@ func preferredDefaultProvider(authenticated []string) string {
 	return authenticated[0]
 }
 
+// anthropicProvider is opencode's provider id for Anthropic's own API.
+const anthropicProvider = "anthropic"
+
 // initProviderRegistry wires up the provider registry: the built-in
 // providers and their auth probes, the credential store backing user-key
 // providers, and the hook that re-discovers models after a key changes.
@@ -931,23 +877,32 @@ func initProviderRegistry() {
 		// is wider than what a project, or a gateway in front of Vertex, serves.
 		DiscoverModels: discoverVertexModels,
 	})
-	// ChatGPT sign-in uses opencode 2.x's integration API, so it is offered only
-	// there. On 1.x a ChatGPT row would show a Connect that can only fail.
-	if config.OpencodeMajor >= 2 {
-		providers.RegisterBuiltin(providers.Builtin{
-			ID:          opencodeauth.ChatGPTProvider,
-			Label:       "OpenAI / ChatGPT",
-			AuthType:    providers.AuthChatGPTOAuth,
-			Description: "GPT models through your ChatGPT account, using OpenCode's native OAuth sign-in.",
-			CheckAuth:   opencodeauth.ChatGPTAuthenticated,
-		})
-	}
+	providers.RegisterBuiltin(providers.Builtin{
+		ID:          opencodeauth.ChatGPTProvider,
+		Label:       "OpenAI / ChatGPT",
+		AuthType:    providers.AuthChatGPTOAuth,
+		Description: "GPT models through your ChatGPT plan or an OpenAI API key.",
+		Help:        "Sign in with ChatGPT to use your plan, or use an API key from the OpenAI Platform, which bills that account.",
+		HelpURL:     "https://platform.openai.com/api-keys",
+		AcceptsKey:  true,
+		Method:      opencodeauth.OpenAIConnection,
+	})
 	providers.RegisterBuiltin(providers.Builtin{
 		ID:          opencodeauth.Provider,
 		Label:       "GitHub Copilot",
 		AuthType:    providers.AuthOAuthDevice,
 		Description: "Claude, GPT and Gemini models through your GitHub Copilot subscription.",
 		CheckAuth:   func() bool { return opencodeauth.CheckStatus().Authenticated },
+	})
+	// After Copilot, so a Copilot user who adds a key keeps Copilot's default.
+	providers.RegisterBuiltin(providers.Builtin{
+		ID:          anthropicProvider,
+		Label:       "Anthropic",
+		AuthType:    providers.AuthUserKey,
+		Description: "Claude models through your Anthropic API key.",
+		Help:        "Use an API key from the Claude Console. API use is billed to that account, separately from a Claude Pro or Max plan.",
+		HelpURL:     "https://platform.claude.com/settings/keys",
+		CheckAuth:   func() bool { return opencodeauth.HasCredential(anthropicProvider) },
 	})
 
 	providers.SetCredentialChecker(opencodeauth.HasCredential)
@@ -1090,7 +1045,6 @@ func registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sessions/{session_id}/stop", sessions.HandleStopSession)
 	mux.HandleFunc("GET /api/sessions/{session_id}/export", sessions.HandleExportSession)
 	mux.HandleFunc("DELETE /api/sessions/{session_id}", fileshare.AfterChatsDeleted(sharing.RetireAppAfter(sessions.HandleDeleteSession)))
-	mux.HandleFunc("POST /api/sessions/{session_id}/permission", sessions.HandlePermission)
 	mux.HandleFunc("GET /api/sessions/{session_id}/queue", sessions.HandleQueueList)
 	mux.HandleFunc("POST /api/sessions/{session_id}/queue", requireOpencodeReady(sessions.HandleQueueAdd))
 	mux.HandleFunc("DELETE /api/sessions/{session_id}/queue", sessions.HandleQueueClear)

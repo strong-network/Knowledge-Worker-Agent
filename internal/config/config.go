@@ -4,7 +4,6 @@
 package config
 
 import (
-	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -228,8 +227,9 @@ func ResolveModel(model string) string {
 //
 // A provider artifact's nomination wins when it names a model that is actually
 // present. Otherwise this mirrors the frontend "Default" preset: latest
-// Claude Sonnet, else latest Claude Opus, else any github-copilot/* model, else
-// the first non-blank entry — which is what runs for the built-in providers.
+// Claude Sonnet, else a pinned GPT, else latest Claude Opus, else any
+// github-copilot/* model, else the first non-blank entry — which is what runs
+// for the built-in providers.
 func pickDefaultModel(models []string) string {
 	cleaned := make([]string, 0, len(models))
 	for _, m := range models {
@@ -264,6 +264,14 @@ func pickDefaultModel(models []string) string {
 	// 1) Default preset fallback: latest Claude Sonnet.
 	if m := latestModel(cleaned, "sonnet"); m != "" {
 		return m
+	}
+	// 1) No Claude Sonnet: a pinned GPT of the same tier, for a workspace
+	// signed in only to OpenAI. Mirrors resolvePreset() in
+	// frontend/src/utils/models.ts.
+	for _, pin := range preferredDefaultGPT {
+		if m := preferredModel(cleaned, pin); m != "" {
+			return m
+		}
 	}
 	// 2) Thinking preset: pinned Opus 5 when present, else the previously
 	// vetted Opus 4.8, else the latest Claude Opus.
@@ -305,6 +313,14 @@ var preferredDefaultSonnets = []string{"claude-sonnet-5", "claude-sonnet-4.6"}
 // the latest-Opus logic. Mirrors PREFERRED_THINKING_OPUS in
 // frontend/src/utils/models.ts.
 var preferredThinkingOpus = []string{"claude-opus-5", "google-vertex/claude-opus-4-8", "claude-opus-4.8"}
+
+// preferredDefaultGPT lists the "Default" preset's GPT pins, tried when no
+// Claude Sonnet is offered, which is a workspace signed in only to OpenAI
+// (ChatGPT or an API key). GPT-6.1 Sol is the tier priced like Sonnet; GPT-6
+// Sol is kept behind it. Mirrors PREFERRED_DEFAULT_GPT in
+// frontend/src/utils/models.ts, which also holds the Thinking pin, since the
+// browser resolves Thinking.
+var preferredDefaultGPT = []string{"gpt-6.1-sol", "gpt-6-sol"}
 
 // SmallModel returns the model that background, server-initiated generations
 // should run on, or "" when the workspace offers nothing suitable.
@@ -361,6 +377,7 @@ func SmallModel() string {
 // own name for its smallest tier. Adding a vendor means adding its word here.
 var smallModelFamilies = []string{
 	"haiku", // Anthropic
+	"luna",  // OpenAI, e.g. gpt-6-luna; the only small tier ChatGPT offers
 	"nano",  // OpenAI
 	"mini",  // OpenAI
 	"lite",  // Google, e.g. gemini-*-flash-lite
@@ -406,13 +423,39 @@ func latestInFamily(models []string, family string) string {
 		if !namesFamily(m, f) {
 			continue
 		}
-		if s := versionScore(m); s > bestScore {
+		if s := tierVersionScore(m); s > bestScore {
 			bestScore = s
 			best = m
 		}
 	}
 	return best
 }
+
+// tierVersionScore is versionScore for ranking models within a tier. It reads
+// a dashed version ("claude-haiku-4-5", as Anthropic and Vertex spell it) as a
+// dotted one and ignores a release date, which versionScore would score: by
+// it, Anthropic's dated "claude-haiku-4-5-20251001" outranks
+// "claude-haiku-5-5", and a background sweep pays ten times the price for an
+// older model.
+func tierVersionScore(id string) int {
+	id = strings.ToLower(id)
+	if at := strings.IndexByte(id, '@'); at >= 0 {
+		id = id[:at]
+	}
+	id = releaseDateRe.ReplaceAllString(id, "")
+	runs := dashedVersionRe.FindAllString(id, -1)
+	if len(runs) == 0 {
+		return 0
+	}
+	return versionScore(strings.ReplaceAll(runs[len(runs)-1], "-", "."))
+}
+
+var (
+	// releaseDateRe matches a trailing release date: "-20251001", "-2024-07-18".
+	releaseDateRe = regexp.MustCompile(`-(?:\d{8}|\d{4}-\d{2}-\d{2})$`)
+	// dashedVersionRe matches a version written with dots or dashes.
+	dashedVersionRe = regexp.MustCompile(`\d+(?:[.-]\d+)*`)
+)
 
 // preferredModel returns the identifier in models that is exactly the pinned
 // model, or "" if none is. Among several (the same model on two providers) it
@@ -527,6 +570,17 @@ func EnvOrDefault(key, fallback string) string {
 	return fallback
 }
 
+// InitListen sets Host and Port from the environment, touching nothing on
+// disk, unlike Init. Both loopback addresses by default: the API has no
+// authentication, and the platform connects over ::1.
+func InitListen() {
+	Host = EnvOrDefault("KWA_HOST", "localhost")
+	Port, _ = strconv.Atoi(EnvOrDefault("KWA_PORT", "8765"))
+	if Port == 0 {
+		Port = 8765
+	}
+}
+
 // ListenAddrs returns the addresses the server listens on: for "localhost",
 // both 127.0.0.1 and ::1, where listening by name would take only one.
 func ListenAddrs() []string {
@@ -537,69 +591,20 @@ func ListenAddrs() []string {
 	return []string{net.JoinHostPort(Host, port)}
 }
 
-// OpencodeMajor is the opencode major version KWA runs: KWA_OPENCODE_MAJOR, or
-// else 2 once the one-folder migration, which needs 1.x, has run.
-var OpencodeMajor = 1
-
-// OpencodeMajorSet is whether KWA_OPENCODE_MAJOR chose the version.
-var OpencodeMajorSet bool
-
-func opencodeMajorSetting() (major int, set bool) {
-	switch v := strings.TrimSpace(env.Get("KWA_OPENCODE_MAJOR")); v {
-	case "":
-		return defaultOpencodeMajor(), false
-	case "1":
-		return 1, true
-	case "2":
-		return 2, true
-	default:
-		major = defaultOpencodeMajor()
-		log.Printf("[config] KWA_OPENCODE_MAJOR=%q isn't 1 or 2; using opencode %d.x", v, major)
-		return major, false
-	}
-}
-
-func defaultOpencodeMajor() int {
-	if layout.Migrated() {
-		return 2
-	}
-	return 1
-}
-
-// UseOpencode1 switches to opencode 1.x, unless KWA_OPENCODE_MAJOR chose 2.x.
-// The one-folder migration and its undo need it; Init switches back.
-func UseOpencode1() {
-	if OpencodeMajor >= 2 && !OpencodeMajorSet {
-		OpencodeMajor = 1
-		OpencodeBin = ResolveOpencodeBin(env.Get("KWA_OPENCODE_BIN"))
-	}
-}
-
-// OpencodeInstallDir is where KWA installs opencode: KWA_OPENCODE_INSTALL_DIR,
-// or ~/.opencode/bin. 2.x goes in a v2 folder there, so 1.x stays for going
-// back to it.
+// OpencodeInstallDir is where KWA installs opencode: a v2 folder in
+// KWA_OPENCODE_INSTALL_DIR, or ~/.opencode/bin, where earlier releases kept
+// 2.x beside 1.x.
 func OpencodeInstallDir() string {
-	dir := EnvOrDefault("KWA_OPENCODE_INSTALL_DIR", opencodeinstaller.DefaultInstallDir)
-	if OpencodeMajor >= 2 {
-		return filepath.Join(dir, "v2")
-	}
-	return dir
+	return filepath.Join(EnvOrDefault("KWA_OPENCODE_INSTALL_DIR", opencodeinstaller.DefaultInstallDir), "v2")
 }
 
 func Init() {
-	OpencodeMajor, OpencodeMajorSet = opencodeMajorSetting()
-	if OpencodeMajor >= 2 && env.Get("KWA_OPENCODE_BIN") == "" {
-		OpencodeBin = filepath.Join(OpencodeInstallDir(), "opencode")
+	if bin := env.Get("KWA_OPENCODE_BIN"); bin != "" {
+		OpencodeBin = ResolveOpencodeBin(bin)
 	} else {
-		OpencodeBin = ResolveOpencodeBin(env.Get("KWA_OPENCODE_BIN"))
+		OpencodeBin = filepath.Join(OpencodeInstallDir(), "opencode")
 	}
-	// Both loopback addresses by default: the API has no authentication, and
-	// the platform connects over ::1.
-	Host = EnvOrDefault("KWA_HOST", "localhost")
-	Port, _ = strconv.Atoi(EnvOrDefault("KWA_PORT", "8765"))
-	if Port == 0 {
-		Port = 8765
-	}
+	InitListen()
 	Workspace = layout.Workspace()
 	os.MkdirAll(Workspace, 0o755)
 	Workspace, _ = filepath.Abs(Workspace)
@@ -777,11 +782,8 @@ func DisplayInstruction() string {
 		"a click opens it beside the chat.\n\n"
 }
 
-// CodeModeInstruction is for 2.x, whose Code Mode can fetch but not read files; "" on 1.x.
+// CodeModeInstruction is for Code Mode, which can fetch but not read files.
 func CodeModeInstruction() string {
-	if OpencodeMajor < 2 {
-		return ""
-	}
 	return "[System — Code Mode]\n" +
 		"Code inside `execute` can't read files. To use a file's content there, for example a long text to send with a tool, " +
 		"fetch it from this app instead of pasting it or starting a web server: " +
@@ -789,14 +791,11 @@ func CodeModeInstruction() string {
 		"or `.arrayBuffer()` for a binary file. It serves files in the home folder, apart from the hidden ones directly in it.\n\n"
 }
 
-// QuestionsInstruction says when to ask: on 2.x a question stops the turn; nobody answers an unattended one.
+// QuestionsInstruction says when to ask: a question stops the turn; nobody answers an unattended one.
 func QuestionsInstruction(cfg SessionConfig) string {
 	if cfg.Unattended {
 		return "[System — unattended run]\n" +
 			"No one is watching this run, so don't ask questions: decide, and say what you assumed.\n\n"
-	}
-	if OpencodeMajor < 2 {
-		return ""
 	}
 	return "[System — questions]\n" +
 		"To ask the user for a decision, use the question tool. Your turn stops there, and their answers arrive as their next message, " +
@@ -1075,58 +1074,6 @@ func DefaultSessionConfig() SessionConfig {
 	}
 }
 
-// BuildOpencodeArgs assembles the argv vector for `opencode run`. opencode's
-// flag surface is much smaller than copilot's so most SessionConfig fields
-// are intentionally ignored.
-//
-// Reference: https://opencode.ai/docs/cli (the `run` subcommand). Streaming
-// JSON events are emitted to stdout when --format json is set; an "idle"
-// session status terminates the run.
-//
-// Notes:
-//   - opencode uses provider/model identifiers (e.g. "anthropic/claude-sonnet-4")
-//     and rejects bare model names. We forward cfg.Model verbatim — the caller
-//     is responsible for picking a valid one.
-//   - --dangerously-skip-permissions is the rough equivalent of copilot --yolo
-//     and is gated by cfg.Yolo for parity with the copilot path.
-//   - opencodeSessionID resumes an existing opencode session; an empty value
-//     creates a fresh one.
-func BuildOpencodeArgs(prompt string, opencodeSessionID string, cfg SessionConfig) []string {
-	args := []string{"run", "--format", "json"}
-
-	if cfg.Yolo {
-		args = append(args, "--dangerously-skip-permissions")
-	}
-	if m := ResolveModel(cfg.Model); m != "" {
-		args = append(args, "--model", m)
-	}
-	// Agent selection. An explicit agent always wins; otherwise "Plan" mode
-	// maps to opencode's built-in read-only `plan` agent (it drafts a plan and
-	// won't modify files). opencode has no `--mode` flag (that's copilot), so
-	// mode is otherwise ignored here.
-	if agent := strings.TrimSpace(cfg.Agent); agent != "" {
-		args = append(args, "--agent", agent)
-	} else if strings.EqualFold(strings.TrimSpace(cfg.Mode), "plan") {
-		args = append(args, "--agent", "plan")
-	}
-	if strings.TrimSpace(cfg.ReasoningEffort) != "" {
-		// opencode calls this --variant; semantics line up closely enough
-		// (high/medium/low/minimal).
-		args = append(args, "--variant", strings.TrimSpace(cfg.ReasoningEffort))
-	}
-	if strings.TrimSpace(cfg.Workdir) != "" {
-		args = append(args, "--dir", strings.TrimSpace(cfg.Workdir))
-	}
-	if opencodeSessionID != "" {
-		args = append(args, "--session", opencodeSessionID)
-	}
-
-	// Prompt must be trailing. The "--" keeps prompts that begin with "-"
-	// from being parsed as opencode flags.
-	args = append(args, "--", prompt)
-	return args
-}
-
 // WithFork makes args from BuildOpencodeArgs fork the session they name into
 // a new one, rather than continue it.
 func WithFork(args []string) []string {
@@ -1135,10 +1082,13 @@ func WithFork(args []string) []string {
 	return append(out, "--fork", args[n-2], args[n-1])
 }
 
-// BuildOpencodeArgsV2 is BuildOpencodeArgs for opencode 2.x. The run's working
-// directory is the folder, the reasoning variant is part of the model
-// reference, and --auto approves what isn't denied.
-func BuildOpencodeArgsV2(prompt string, opencodeSessionID string, cfg SessionConfig) []string {
+// BuildOpencodeArgs assembles the arguments of `opencode run`, whose JSON
+// events end with the session going idle. The run's working directory is the
+// folder, the reasoning variant is part of the model reference, --auto
+// approves what isn't denied, and "Plan" mode runs the read-only `plan` agent
+// unless an agent is named. The "--" keeps a prompt that starts with "-" from
+// being read as a flag.
+func BuildOpencodeArgs(prompt string, opencodeSessionID string, cfg SessionConfig) []string {
 	args := []string{"run", "--format", "json"}
 	if cfg.Yolo {
 		args = append(args, "--auto")

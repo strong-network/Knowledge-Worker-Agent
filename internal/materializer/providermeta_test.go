@@ -23,6 +23,7 @@ func TestTakeProviderMetaStripsSDSBlock(t *testing.T) {
 				"secretRef": "/etc/secrets/mistral.key",
 				"label":     "Mistral (on-prem)",
 				"help":      "Provisioned by your administrator",
+				"helpUrl":   "https://example.com/keys",
 			},
 			"presets": map[string]any{
 				"default":  "mistral/small",
@@ -52,6 +53,10 @@ func TestTakeProviderMetaStripsSDSBlock(t *testing.T) {
 	}
 	if m.Auth.Label != "Mistral (on-prem)" || m.Auth.Help == "" {
 		t.Errorf("label/help lost: %+v", m.Auth)
+	}
+	// The row links to it; dropping it here left the link out of every row.
+	if m.Auth.HelpURL != "https://example.com/keys" {
+		t.Errorf("help link lost: %+v", m.Auth)
 	}
 	if m.Presets["default"] != "mistral/small" || m.Presets["thinking"] != "mistral/large" {
 		t.Errorf("presets = %v", m.Presets)

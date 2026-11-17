@@ -39,7 +39,7 @@ see [Contributing](#contributing).
 - **opencode.** Installed automatically at a pinned version, checked against its SHA-256, if it
   isn't on `PATH` or set with `KWA_OPENCODE_BIN`.
 - **git**, for source control features.
-- **Go 1.27 and Node.js**, to build from source.
+- **Go 1.27 and Node.js 22.12 or later**, to build from source.
 
 ## Give users access in SecurSpaces
 
@@ -75,11 +75,11 @@ docker pull ghcr.io/strong-network/knowledge-worker-agent:latest
 docker pull strongnetwork/knowledge-worker-agent:latest
 
 # A specific version
-docker pull ghcr.io/strong-network/knowledge-worker-agent:2.1.0
-docker pull strongnetwork/knowledge-worker-agent:2.1.0
+docker pull ghcr.io/strong-network/knowledge-worker-agent:2.2.0
+docker pull strongnetwork/knowledge-worker-agent:2.2.0
 ```
 
-The latest version is **2.1.0**. Every published image is tagged with its version, taken from the
+The latest version is **2.2.0**. Every published image is tagged with its version, taken from the
 [`VERSION`](VERSION) file, and `latest` moves to the most recently published one. Pin the version
 tag for anything repeatable, and the digest where you need the exact image. Images are
 `linux/amd64`.
@@ -171,11 +171,11 @@ cmd/server/                Entry point, route registration, model discovery, hea
 internal/
   ├── config/              Env-var config, SessionConfig, opencode CLI arg builder
   ├── db/                  SQLite persistence (sessions, messages, queue, stats, full-text index)
-  ├── chat/                OpenCode process lifecycle, JSONL parser, prompt queue, backend selection
-  ├── opencodeserver/      Long-lived `opencode serve` client/adapter/supervisor (server mode)
+  ├── chat/                OpenCode process lifecycle, JSONL parser, prompt queue
+  ├── opencodev2/          The one `opencode serve` every opencode command goes to, and its API
   ├── opencodeauth/        GitHub Copilot device-flow sign-in for opencode + model discovery
   ├── opencodeinstaller/   OpenCode CLI auto-install / update
-  ├── sessions/            Session / chat HTTP handlers, SSE streaming, permission forwarding
+  ├── sessions/            Session / chat HTTP handlers, SSE streaming
   ├── files/               File manager HTTP handlers
   ├── git/                 git status / changes / pull / push / commit / clone / repos
   ├── mcp/                 MCP server management (opencode.json) + the built-in connector catalogue, registered switched off
@@ -183,20 +183,18 @@ internal/
   ├── daynotes/            Day notes: per-(chat, day) summaries and the capped backlog job
   ├── mcprecall/           The `recall` MCP server — JSON-RPC on stdio, bridged to the recall endpoints
   ├── obsidianinstaller/   Obsidian MCP auto-install + vault bootstrap
-  └── defaults/            Embedded document and report skills + opencode plugins, installed at startup
+  └── defaults/            Embedded document and report skills, installed at startup
 frontend/                  Vue 3 + TypeScript + Pinia SPA
 ```
 
 ### How it works
 
 1. Server boots and starts listening immediately; a background `bootstrap()` goroutine does the rest.
-2. In parallel, `opencodeinstaller.Ensure()` installs the pinned OpenCode CLI release (2.x from npm, or 1.x from GitHub with `KWA_OPENCODE_MAJOR=1`, verified against its SHA-256) into `~/.opencode/bin`, `obsidianinstaller.Ensure()` installs the pinned Obsidian MCP, the bundled document skills and opencode plugins are installed into `~/.config/opencode` (and any retired content bundle from an older version is removed), and default MCP servers (the built-in catalogue, switched off, and `recall`, switched on) are registered.
+2. In parallel, `opencodeinstaller.Ensure()` installs the pinned OpenCode CLI 2.x release (from npm, verified against its SHA-256) into `~/.opencode/bin/v2`, `obsidianinstaller.Ensure()` installs the pinned Obsidian MCP, the bundled document skills are installed into `~/.config/opencode` (and any retired content bundle or opencode 1.x plugin from an older version is removed), default MCP servers (the built-in catalogue, switched off, and `recall`, switched on) are registered, and one `opencode serve` starts, which every opencode command then goes to.
 3. Chat endpoints return **503** (via `requireOpencodeReady`) until the opencode binary is verified.
 4. Browser sends a chat prompt via `POST /api/chat`.
-5. The server runs opencode in one of two modes:
-   - **CLI mode (default):** spawns `opencode run --format json …` per turn (with `--session <id>` to resume, `--agent`, `--model`, `--variant`, `--dir`, and `--dangerously-skip-permissions` when Yolo is on).
-   - **Server mode (`KWA_OPENCODE_USE_SERVER=1`, opencode 1.x only):** drives a long-lived `opencode serve` over HTTP/SSE, which additionally supports interactive permission approval.
-6. opencode's JSONL/event stream is parsed into typed events (`chunk`, `tool_call`, `tool_done`, `question`, `permission`, `usage`, `result`, …).
+5. The server runs `opencode run --format json …` per turn in the chat's folder, with the prompt on stdin (with `--session <id>` to resume, `--agent`, `--model provider/model#variant`, and `--auto` when Yolo is on).
+6. opencode's JSONL event stream is parsed into typed events (`chunk`, `tool_call`, `tool_done`, `question`, `usage`, `result`, …).
 7. Events stream to the browser as Server-Sent Events (SSE).
 8. The opencode session ID is stored so follow-ups resume the same session.
 9. If a new prompt arrives while one is streaming it goes onto a backend-side queue and is dispatched automatically when the current run finishes.
@@ -211,7 +209,6 @@ frontend/                  Vue 3 + TypeScript + Pinia SPA
 | `POST /api/chat` | Send a prompt; SSE response |
 | `GET /api/sessions` / `POST /api/sessions/new` | List / create sessions |
 | `GET /api/sessions/{id}/config` / `PATCH …/config` / `DELETE /api/sessions/{id}` | Read / update / delete a session |
-| `POST /api/sessions/{id}/permission` | Approve / deny a tool permission (server mode) |
 | `GET /api/sessions/{id}/stream` / `GET /api/sessions/active` | Attach to a session's SSE / list active streams |
 | `GET/POST/DELETE /api/sessions/{id}/queue` | Prompt queue management |
 | `GET /api/history` | History |
@@ -231,15 +228,14 @@ it anywhere else:
 - **No authentication or authorization on the HTTP API.** Anyone who can reach the port can use
   it as the owner. The server listens on `127.0.0.1:8765` and `[::1]:8765` by default, and refuses a
   request from a browser on another origin that would change something.
-- **The agent acts without asking by default** (`--dangerously-skip-permissions`, or `--auto`
-  on opencode 2.x).
+- **The agent acts without asking by default** (`--auto`).
 - **The file manager opens only what's in the home folder,** apart from the hidden folders and
   files directly in it, such as `~/.ssh`. The agent isn't limited this way: it runs as the server
   user.
 - **Recall is read-only** and talks to `127.0.0.1` only.
 - **Git never prompts for credentials** (`GIT_TERMINAL_PROMPT=0`, `GIT_ASKPASS=true`), so missing
   credentials show as errors instead of hanging the server.
-- **Credentials** are stored by opencode in `~/.local/share/opencode/auth.json`.
+- **Credentials** are stored by opencode, in its database.
 
 For the full security model, see
 [How Knowledge Worker Agent works](https://docs.citrix.com/en-us/securspaces/knowledge-worker-agent/about/how-knowledge-worker-agent-works.html).

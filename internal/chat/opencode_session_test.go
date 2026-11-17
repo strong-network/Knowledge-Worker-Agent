@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -72,15 +73,11 @@ func TestDeleteOpencodeSessionInvokesTheCLI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("opencode was never invoked: %v", err)
 	}
+	// What follows names the server to send it to.
 	got := strings.Fields(string(raw))
 	want := []string{"session", "delete", "ses_abc123"}
-	if len(got) != len(want) {
-		t.Fatalf("args = %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("args = %v, want %v", got, want)
-		}
+	if len(got) < len(want) || !slices.Equal(got[:len(want)], want) {
+		t.Fatalf("args = %v, want %v first", got, want)
 	}
 }
 

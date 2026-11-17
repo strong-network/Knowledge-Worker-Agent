@@ -35,7 +35,6 @@ type Sources struct {
 	StartedAt     time.Time
 	Status        func() string
 	OpencodeReady func() bool
-	ServerBackend bool
 	OpencodeBin   func() string
 	Models        func() []string
 	LogFile       string
@@ -71,8 +70,6 @@ type App struct {
 	UptimeSeconds int64     `json:"uptime_seconds"`
 	Status        string    `json:"status"`
 	OpencodeReady bool      `json:"opencode_ready"`
-	// Backend is how chats run opencode: "run" per turn, or "serve".
-	Backend string `json:"backend"`
 }
 
 type Opencode struct {
@@ -232,7 +229,6 @@ func collectApp(now time.Time) App {
 		GoVersion: runtime.Version(),
 		Platform:  runtime.GOOS + "/" + runtime.GOARCH,
 		StartedAt: src.StartedAt,
-		Backend:   "run",
 	}
 	if !src.StartedAt.IsZero() {
 		a.UptimeSeconds = int64(now.Sub(src.StartedAt).Seconds())
@@ -243,9 +239,6 @@ func collectApp(now time.Time) App {
 	if src.OpencodeReady != nil {
 		a.OpencodeReady = src.OpencodeReady()
 	}
-	if src.ServerBackend {
-		a.Backend = "serve"
-	}
 	return a
 }
 
@@ -253,7 +246,7 @@ var semver = regexp.MustCompile(`\d+\.\d+\.\d+`)
 
 func collectOpencode() Opencode {
 	o := Opencode{
-		Pinned:      opencodeinstaller.Pinned(config.OpencodeMajor),
+		Pinned:      opencodeinstaller.PinnedVersion,
 		LogDir:      filepath.Join(opencodeDataDir(), "log"),
 		ConfigDir:   src.UserConfigDir,
 		PlatformDir: os.Getenv(config.EnvOpencodeConfigDir),

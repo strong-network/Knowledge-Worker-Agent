@@ -33,13 +33,15 @@ var (
 	chatGPTAttemptPattern = regexp.MustCompile(`^con_[A-Za-z0-9_-]{1,96}$`)
 
 	// Indirected so handler tests never need to start the real OpenCode binary.
-	chatGPTOpenCodeEnabled    = opencodev2.Enabled
-	chatGPTHasOAuthConnection = opencodev2.HasOAuthConnection
-	chatGPTIntegration        = opencodev2.OAuthIntegration
-	chatGPTStartOAuth         = opencodev2.StartOAuth
-	chatGPTOAuthStatus        = opencodev2.GetOAuthStatus
-	chatGPTCancelOAuth        = opencodev2.CancelOAuth
-	chatGPTRemoveCredentials  = opencodev2.RemoveCredentials
+	chatGPTConnectionMethod  = opencodev2.ConnectionMethod
+	chatGPTIntegration       = opencodev2.OAuthIntegration
+	chatGPTStartOAuth        = opencodev2.StartOAuth
+	chatGPTOAuthStatus       = opencodev2.GetOAuthStatus
+	chatGPTCancelOAuth       = opencodev2.CancelOAuth
+	chatGPTRemoveCredentials = opencodev2.RemoveCredentials
+	chatGPTRemoveKeys        = func(ctx context.Context, integration string) error {
+		return opencodev2.RemoveCredentialsOfType(ctx, integration, "key")
+	}
 )
 
 var chatGPTLogin struct {
@@ -85,26 +87,39 @@ type ChatGPTLoginStatus struct {
 	Status string `json:"status"`
 }
 
-// ChatGPT sign-in is built on opencode 2.x's integration API, which 1.x does
-// not have, so on 1.x the provider is not offered at all (main.go registers it
-// only on 2.x) and these functions report it as signed out.
+// ChatGPT sign-in is built on opencode's integration API.
+//
+// OpenAI takes either a ChatGPT sign-in or an API key, one at a time: saving a
+// key replaces the sign-in (SetAPIKey replaces the integration's credentials),
+// and a sign-in removes the key, so the Accounts row can say which one turns
+// use.
 
-// ChatGPTAuthenticated reports whether opencode 2.x has a working OAuth
-// connection for OpenAI. It reads the integration's connection summary, which
-// carries no credential value.
-func ChatGPTAuthenticated() bool {
-	if !chatGPTOpenCodeEnabled() {
-		return false
-	}
+// OpenAIConnection reports how opencode is signed in to OpenAI: "oauth"
+// for a working ChatGPT sign-in, "key" for an API key, or "" for neither. It
+// reads the integration's connection summary, which carries no credential
+// value.
+func OpenAIConnection() string {
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	defer cancel()
-	ok, err := chatGPTHasOAuthConnection(ctx, ChatGPTProvider, config.Workspace)
-	return err == nil && ok
+	method, err := chatGPTConnectionMethod(ctx, ChatGPTProvider, config.Workspace)
+	if err != nil {
+		return ""
+	}
+	return method
+}
+
+// dropOpenAIKey removes an OpenAI API key once a ChatGPT sign-in has replaced
+// it. Best effort: a key left behind does not change what the row reports,
+// because OpenAIConnection prefers the sign-in.
+func dropOpenAIKey() {
+	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+	defer cancel()
+	_ = chatGPTRemoveKeys(ctx, ChatGPTProvider)
 }
 
 // SignOutChatGPT cancels a sign-in in progress and removes OpenAI's saved
-// credential from opencode's credential store. It does not touch other
-// providers.
+// credentials, the ChatGPT sign-in and an API key alike, from opencode's
+// credential store. It does not touch other providers.
 func SignOutChatGPT() error {
 	chatGPTLogin.Lock()
 	attemptID := chatGPTLogin.info.AttemptID
@@ -112,9 +127,6 @@ func SignOutChatGPT() error {
 	chatGPTLogin.notified = false
 	chatGPTLogin.Unlock()
 
-	if !chatGPTOpenCodeEnabled() {
-		return errors.New("ChatGPT sign-in needs opencode 2.x")
-	}
 	if attemptID != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 		_ = chatGPTCancelOAuth(ctx, ChatGPTProvider, attemptID, config.Workspace)
@@ -135,13 +147,6 @@ func SignOutChatGPT() error {
 // receives only the authorization URL; tokens stay inside opencode and its
 // credential store.
 func HandleChatGPTLoginStart(w http.ResponseWriter, r *http.Request) {
-	if !chatGPTOpenCodeEnabled() {
-		writeJSON(w, http.StatusConflict, map[string]string{
-			"error": "ChatGPT sign-in needs opencode 2.x.",
-		})
-		return
-	}
-
 	chatGPTLogin.Lock()
 	defer chatGPTLogin.Unlock()
 	if chatGPTLogin.info.AttemptID != "" {
@@ -229,6 +234,7 @@ func HandleChatGPTLoginStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	chatGPTLogin.Unlock()
 	if notify {
+		dropOpenAIKey()
 		fireLoginSuccess()
 		fireChatGPTLoginSuccess()
 	}

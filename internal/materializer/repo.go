@@ -25,44 +25,94 @@ import (
 //   - If the remote is unreachable but a prior clone exists in cacheDir, that
 //     cached clone is used (functional-with-stale). A
 //     net-new workspace with no cache and an unreachable repo is an error.
+//   - A cached clone of a different repository is replaced by a fresh clone.
 //
 // git invocations use an argument vector (never a shell) and a timeout.
 func SyncRepo(logw io.Writer, source, cacheDir string) (string, error) {
-	dir, _, err := syncRepo(logw, source, cacheDir)
+	_, dir, _, err := syncRepo(logw, source, "", cacheDir)
 	return dir, err
 }
 
-// syncRepo is SyncRepo, also returning why it fell back to the cached clone.
-func syncRepo(logw io.Writer, source, cacheDir string) (dir string, stale error, err error) {
+// syncRepo is SyncRepo for the configuration in subdir ("" for the root), also
+// returning the repository's root and why it fell back to the cached clone.
+func syncRepo(logw io.Writer, source, subdir, cacheDir string) (root, dir string, stale error, err error) {
 	source = strings.TrimSpace(source)
 	if source == "" {
-		return "", nil, fmt.Errorf("sync: empty config repo source")
+		return "", "", nil, fmt.Errorf("sync: empty config repo source")
+	}
+	subdir, err = cleanSubdir(subdir)
+	if err != nil {
+		return "", "", nil, err
 	}
 
 	// Local path source: use in place.
 	if info, err := os.Stat(source); err == nil && info.IsDir() {
-		logf(logw, "  ℹ Using local config repo at %s", source)
-		return source, nil, nil
+		dir, err := configDir(source, subdir)
+		if err != nil {
+			return "", "", nil, err
+		}
+		logf(logw, "  ℹ Using local config repo at %s", dir)
+		return source, dir, nil, nil
 	}
 
 	if strings.TrimSpace(cacheDir) == "" {
-		return "", nil, fmt.Errorf("sync: empty cache dir")
+		return "", "", nil, fmt.Errorf("sync: empty cache dir")
 	}
 	haveCache := isGitRepo(cacheDir)
+	if haveCache && originURL(cacheDir) != source {
+		logf(logw, "  ℹ Config repo source changed; cloning it again")
+		haveCache = false
+	}
 
 	if haveCache {
-		if err := gitPull(cacheDir); err != nil {
+		if err := gitPull(cacheDir, subdir); err != nil {
 			logf(logw, "  ⚠ Config repo pull failed (%v); using cached clone", err)
-			return cacheDir, err, nil
+			stale = err
 		}
-		return cacheDir, nil, nil
+	} else if err := gitClone(source, cacheDir, subdir); err != nil {
+		return "", "", nil, fmt.Errorf("sync: clone config repo: %w", err)
 	}
+	dir, err = configDir(cacheDir, subdir)
+	if err != nil {
+		return "", "", nil, err
+	}
+	return cacheDir, dir, stale, nil
+}
 
-	// No cache yet — must clone.
-	if err := gitClone(source, cacheDir); err != nil {
-		return "", nil, fmt.Errorf("sync: clone config repo: %w", err)
+// cleanSubdir rejects a folder outside the repository and returns it with forward slashes.
+func cleanSubdir(subdir string) (string, error) {
+	subdir = strings.TrimSpace(subdir)
+	if subdir == "" {
+		return "", nil
 	}
-	return cacheDir, nil, nil
+	clean := filepath.Clean(subdir)
+	if !filepath.IsLocal(clean) {
+		return "", fmt.Errorf("sync: config repo folder %q must be a relative path inside the repository", subdir)
+	}
+	if clean == "." {
+		return "", nil
+	}
+	return filepath.ToSlash(clean), nil
+}
+
+func configDir(root, subdir string) (string, error) {
+	if subdir == "" {
+		return root, nil
+	}
+	dir := filepath.Join(root, filepath.FromSlash(subdir))
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return "", fmt.Errorf("sync: config repo has no folder %q", subdir)
+	}
+	return dir, nil
+}
+
+// originURL reads the configured URL, not the insteadOf-rewritten one, to compare with the source.
+func originURL(dir string) string {
+	out, err := runGit(dir, "config", "--get", "remote.origin.url")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
 }
 
 // Commit identifies a config repo commit.
@@ -105,12 +155,20 @@ func samePath(a, b string) bool {
 	return a != "" && resolve(a) == resolve(b)
 }
 
-func gitClone(url, dest string) error {
+// With a subdir, gitClone fetches and checks out only that folder and the root's files.
+func gitClone(url, dest, subdir string) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
 	}
 	_ = os.RemoveAll(dest)
-	out, err := runGit("", "clone", "--depth", "1", "--", url, dest)
+	args := []string{"clone", "--depth", "1"}
+	if subdir != "" {
+		args = append(args, "--filter=blob:none", "--sparse")
+	}
+	out, err := runGit("", append(args, "--", url, dest)...)
+	if err == nil && subdir != "" {
+		out, err = runGit(dest, "sparse-checkout", "set", "--", subdir)
+	}
 	if err != nil {
 		_ = os.RemoveAll(dest)
 		return fmt.Errorf("%v: %s", err, firstLine(out))
@@ -118,7 +176,7 @@ func gitClone(url, dest string) error {
 	return nil
 }
 
-func gitPull(dir string) error {
+func gitPull(dir, subdir string) error {
 	if out, err := runGit(dir, "fetch", "--depth", "1", "origin"); err != nil {
 		return fmt.Errorf("fetch: %v: %s", err, firstLine(out))
 	}
@@ -131,6 +189,16 @@ func gitPull(dir string) error {
 	}
 	if out, err := runGit(dir, "reset", "--hard", ref); err != nil {
 		return fmt.Errorf("reset: %v: %s", err, firstLine(out))
+	}
+	// Follow a change of folder, or to the whole repository.
+	if subdir != "" {
+		if out, err := runGit(dir, "sparse-checkout", "set", "--", subdir); err != nil {
+			return fmt.Errorf("sparse-checkout: %v: %s", err, firstLine(out))
+		}
+	} else if out, _ := runGit(dir, "config", "--get", "core.sparseCheckout"); strings.TrimSpace(out) == "true" {
+		if out, err := runGit(dir, "sparse-checkout", "disable"); err != nil {
+			return fmt.Errorf("sparse-checkout: %v: %s", err, firstLine(out))
+		}
 	}
 	return nil
 }

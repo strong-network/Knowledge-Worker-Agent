@@ -259,8 +259,7 @@ func HandleStarChat(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleGetProjectMcp — GET /api/projects/{id}/mcp. Returns the project's shared
-// connector selection and live status. Live status reflects the
-// single opencode process bound to the project's shared workspace.
+// connector selection.
 func HandleGetProjectMcp(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	p := db.GetProject(id)
@@ -268,7 +267,7 @@ func HandleGetProjectMcp(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "project not found"})
 		return
 	}
-	conns, err := connectors.Build(p.WorkspacePath, p.McpSelection)
+	conns, err := connectors.Build(p.McpSelection)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
@@ -277,9 +276,9 @@ func HandleGetProjectMcp(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleSetProjectMcp — PUT /api/projects/{id}/mcp. Updates the project's shared
-// connector selection, persists it, and applies the change live to the project's
-// running opencode process. The change affects every chat in the project (one
-// shared workspace, one process); the UI surfaces that blast radius.
+// connector selection and persists it; it applies from each chat's next turn.
+// The change affects every chat in the project (one shared workspace); the UI
+// surfaces that blast radius.
 // body: {"selection": {"github": true, ...}}
 func HandleSetProjectMcp(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -307,9 +306,7 @@ func HandleSetProjectMcp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	connectors.Apply(p.WorkspacePath, sel)
-
-	conns, err := connectors.Build(p.WorkspacePath, sel)
+	conns, err := connectors.Build(sel)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
