@@ -12,17 +12,6 @@ import (
 	"testing"
 )
 
-func TestBuildDownloadURL_Pinned(t *testing.T) {
-	url, _ := buildDownloadURL("1.0.180", "linux-arm64")
-	if url != "https://github.com/anomalyco/opencode/releases/download/v1.0.180/opencode-linux-arm64.tar.gz" {
-		t.Errorf("unexpected url: %s", url)
-	}
-	url2, _ := buildDownloadURL("v1.0.181", "darwin-arm64")
-	if url2 != "https://github.com/anomalyco/opencode/releases/download/v1.0.181/opencode-darwin-arm64.tar.gz" {
-		t.Errorf("unexpected url: %s", url2)
-	}
-}
-
 func TestExtractSemver(t *testing.T) {
 	cases := map[string]string{
 		"v1.0.180":                "v1.0.180",

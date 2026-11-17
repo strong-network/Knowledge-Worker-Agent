@@ -80,14 +80,14 @@ func TestInstall_FallsBackToEmbedded(t *testing.T) {
 
 	want := "#!/bin/sh\necho from-embedded\n"
 	emb := npmTarGz(t, want)
-	pinTarball2(t, emb)
+	pinTarball(t, emb)
 	swapEmbedded(t, func(target string) ([]byte, bool) {
 		return emb, true
 	})
 
 	dir := t.TempDir()
 	var logBuf bytes.Buffer
-	bin, err := Install(&logBuf, InstallOptions{InstallDir: dir, HTTPClient: srv.Client(), Major: 2})
+	bin, err := Install(&logBuf, InstallOptions{InstallDir: dir, HTTPClient: srv.Client()})
 	if err != nil {
 		t.Fatalf("Install with embedded fallback: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestInstall_FallsBackToEmbedded(t *testing.T) {
 func TestInstall_PrefersNetworkOverEmbedded(t *testing.T) {
 	netBody := "#!/bin/sh\necho from-network\n"
 	netTgz := npmTarGz(t, netBody)
-	pinTarball2(t, netTgz)
+	pinTarball(t, netTgz)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write(netTgz)
 	}))
@@ -129,7 +129,7 @@ func TestInstall_PrefersNetworkOverEmbedded(t *testing.T) {
 	})
 
 	dir := t.TempDir()
-	bin, err := Install(&bytes.Buffer{}, InstallOptions{InstallDir: dir, HTTPClient: srv.Client(), Major: 2})
+	bin, err := Install(&bytes.Buffer{}, InstallOptions{InstallDir: dir, HTTPClient: srv.Client()})
 	if err != nil {
 		t.Fatalf("Install: %v", err)
 	}
@@ -154,13 +154,13 @@ func TestInstall_FallsBackOnCorruptDownload(t *testing.T) {
 	defer srv.Close()
 	swapRegistry(t, srv.URL)
 	emb := npmTarGz(t, "#!/bin/sh\necho from-embedded\n")
-	pinTarball2(t, emb)
+	pinTarball(t, emb)
 	swapEmbedded(t, func(target string) ([]byte, bool) {
 		return emb, true
 	})
 
 	dir := t.TempDir()
-	bin, err := Install(&bytes.Buffer{}, InstallOptions{InstallDir: dir, HTTPClient: srv.Client(), Major: 2})
+	bin, err := Install(&bytes.Buffer{}, InstallOptions{InstallDir: dir, HTTPClient: srv.Client()})
 	if err != nil {
 		t.Fatalf("expected fallback to rescue a corrupt download: %v", err)
 	}
@@ -180,13 +180,12 @@ func TestInstall_NoEmbeddedFallbackFails(t *testing.T) {
 	defer srv.Close()
 	swapRegistry(t, srv.URL)
 	swapEmbedded(t, func(target string) ([]byte, bool) { return nil, false })
-	pinTarball2(t, npmTarGz(t, "#!/bin/sh\necho pinned\n"))
+	pinTarball(t, npmTarGz(t, "#!/bin/sh\necho pinned\n"))
 
 	dir := t.TempDir()
 	_, err := Install(&bytes.Buffer{}, InstallOptions{
 		InstallDir: dir,
 		HTTPClient: srv.Client(),
-		Major:      2,
 	})
 	if err == nil {
 		t.Fatal("expected install to fail with no network and no embedded fallback")
@@ -196,52 +195,11 @@ func TestInstall_NoEmbeddedFallbackFails(t *testing.T) {
 	}
 }
 
-// TestInstall_V1HasNoEmbeddedFallback: the release image embeds 2.x, which
-// must never stand in for 1.x.
-func TestInstall_V1HasNoEmbeddedFallback(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "no egress", http.StatusBadGateway)
-	}))
-	defer srv.Close()
-	swapReleasesBase(t, srv.URL)
-	emb := makeTarGz(t, "#!/bin/sh\necho from-embedded\n")
-	pinTarball(t, emb)
-	swapEmbedded(t, func(target string) ([]byte, bool) { return emb, true })
-
-	dir := t.TempDir()
-	_, err := Install(&bytes.Buffer{}, InstallOptions{InstallDir: dir, HTTPClient: srv.Client(), Major: 1})
-	if err == nil || !strings.Contains(err.Error(), "no embedded") {
-		t.Fatalf("expected a 'no embedded ... fallback' error for 1.x, got: %v", err)
-	}
-	if _, statErr := os.Stat(filepath.Join(dir, "opencode")); !os.IsNotExist(statErr) {
-		t.Fatalf("installed the embedded copy for 1.x (stat: %v)", statErr)
-	}
-}
-
 func swapRegistry(t *testing.T, base string) {
 	t.Helper()
 	old := npmRegistry
 	npmRegistry = base
 	t.Cleanup(func() { npmRegistry = old })
-}
-
-// pinTarball2 pins tgz as the 2.x tarball for the target the test runs on.
-func pinTarball2(t *testing.T, tgz []byte) {
-	t.Helper()
-	target, err := detectTarget()
-	if err != nil {
-		t.Skipf("unsupported target: %v", err)
-	}
-	old := pinnedSHA256v2
-	pinnedSHA256v2 = map[string]string{target: sha256Hex(tgz)}
-	t.Cleanup(func() { pinnedSHA256v2 = old })
-}
-
-func swapReleasesBase(t *testing.T, base string) {
-	t.Helper()
-	old := opencodeReleasesBase
-	opencodeReleasesBase = base
-	t.Cleanup(func() { opencodeReleasesBase = old })
 }
 
 func swapEmbedded(t *testing.T, fn func(string) ([]byte, bool)) {

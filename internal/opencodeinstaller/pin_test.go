@@ -35,7 +35,7 @@ func serveBytes(t *testing.T, body []byte, paths *[]string) *httptest.Server {
 		w.Write(body)
 	}))
 	t.Cleanup(srv.Close)
-	swapReleasesBase(t, srv.URL)
+	swapRegistry(t, srv.URL)
 	return srv
 }
 
@@ -50,7 +50,7 @@ func TestInstall_DownloadsThePinnedVersion(t *testing.T) {
 		t.Fatalf("Install: %v", err)
 	}
 	target, _ := detectTarget()
-	want := "/download/" + PinnedVersion + "/opencode-" + target + ".tar.gz"
+	want := "/@opencode/cli-" + target + "/-/cli-" + target + "-" + strings.TrimPrefix(PinnedVersion, "v") + ".tgz"
 	if len(paths) != 1 || paths[0] != want {
 		t.Fatalf("requested %v, want [%s]", paths, want)
 	}
@@ -76,7 +76,7 @@ func TestInstall_MismatchedDownloadFallsBackToAMatchingEmbeddedCopy(t *testing.T
 	srv := serveNpm(t, npmTarGz(t, "#!/bin/sh\necho tampered\n"), emb, nil)
 	swapEmbedded(t, func(string) ([]byte, bool) { return emb, true })
 
-	bin, err := Install(&bytes.Buffer{}, InstallOptions{InstallDir: t.TempDir(), HTTPClient: srv.Client(), Major: 2})
+	bin, err := Install(&bytes.Buffer{}, InstallOptions{InstallDir: t.TempDir(), HTTPClient: srv.Client()})
 	if err != nil {
 		t.Fatalf("Install: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestInstall_MismatchedDownloadFallsBackToAMatchingEmbeddedCopy(t *testing.T
 }
 
 func TestInstall_RejectsAnEmbeddedCopyThatDoesNotMatchThePin(t *testing.T) {
-	pinTarball2(t, npmTarGz(t, "#!/bin/sh\necho genuine\n"))
+	pinTarball(t, npmTarGz(t, "#!/bin/sh\necho genuine\n"))
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no egress", http.StatusBadGateway)
 	}))
@@ -95,7 +95,7 @@ func TestInstall_RejectsAnEmbeddedCopyThatDoesNotMatchThePin(t *testing.T) {
 	swapEmbedded(t, func(string) ([]byte, bool) { return npmTarGz(t, "#!/bin/sh\necho other\n"), true })
 
 	dir := t.TempDir()
-	_, err := Install(&bytes.Buffer{}, InstallOptions{InstallDir: dir, HTTPClient: srv.Client(), Major: 2})
+	_, err := Install(&bytes.Buffer{}, InstallOptions{InstallDir: dir, HTTPClient: srv.Client()})
 	if err == nil || !strings.Contains(err.Error(), "embedded") {
 		t.Fatalf("expected an embedded checksum error, got %v", err)
 	}
@@ -179,14 +179,14 @@ func TestDockerfileReleaseMatchesThePin(t *testing.T) {
 		}
 		return string(m[1])
 	}
-	if got := arg("OPENCODE_VERSION"); got != PinnedVersion2 {
-		t.Errorf("Dockerfile.release OPENCODE_VERSION = %s, installer pins %s", got, PinnedVersion2)
+	if got := arg("OPENCODE_VERSION"); got != PinnedVersion {
+		t.Errorf("Dockerfile.release OPENCODE_VERSION = %s, installer pins %s", got, PinnedVersion)
 	}
 	for argName, target := range map[string]string{
 		"OPENCODE_SHA256_LINUX_X64":   "linux-x64",
 		"OPENCODE_SHA256_LINUX_ARM64": "linux-arm64",
 	} {
-		if got, want := arg(argName), pinnedSHA256v2[target]; got != want {
+		if got, want := arg(argName), pinnedSHA256[target]; got != want {
 			t.Errorf("Dockerfile.release %s = %s, installer pins %s for %s", argName, got, want, target)
 		}
 	}

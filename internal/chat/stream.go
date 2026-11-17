@@ -305,23 +305,6 @@ func runDispatcher(sessionID string, cfg config.SessionConfig, events <-chan *Ev
 				"questions": event.Questions,
 			})
 
-		case "permission":
-			// An interactive permission request from the opencode server
-			// backend. Surfaced as its own SSE frame so the UI can render an
-			// allow/deny card; the browser replies via
-			// POST /api/sessions/{id}/permission which routes to the
-			// opencode server's permission-respond endpoint. Counts like a
-			// question so an otherwise-silent turn isn't treated as "no
-			// output".
-			sawQuestion = true
-			s.Append(map[string]any{
-				"type":          "permission",
-				"permission_id": event.PermissionID,
-				"permission":    event.Permission,
-				"patterns":      event.Patterns,
-				"call_id":       event.CallID,
-			})
-
 		case "mcp_auth_required":
 			s.Append(map[string]any{"type": "mcp_auth_required", "server": event.McpServer})
 
@@ -428,7 +411,7 @@ func IsStreaming(sessionID string) bool {
 }
 
 // WaitingOnOwner reports whether the session's turn has stopped on the owner:
-// its latest frame asks a question, a permission or a connector sign-in. A turn
+// its latest frame asks a question or a connector sign-in. A turn
 // that ended at the agent's questions waits until the next turn starts.
 func WaitingOnOwner(sessionID string) bool {
 	val, ok := Streams.Load(sessionID)
@@ -444,7 +427,7 @@ func WaitingOnOwner(sessionID string) bool {
 			continue
 		case "question":
 			return true
-		case "permission", "mcp_auth_required":
+		case "mcp_auth_required":
 			return !s.done
 		}
 		return false

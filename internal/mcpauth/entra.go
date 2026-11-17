@@ -13,15 +13,13 @@ import (
 
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/entra"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/mcp"
-	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodev2"
 )
 
 // Stand-ins that tests replace.
 var (
-	remoteURL    = mcp.RemoteURL
-	oauthScope   = mcp.OAuthScope
-	detectEntra  = entra.Detect
-	entraEnabled = opencodev2.Enabled
+	remoteURL   = mcp.RemoteURL
+	oauthScope  = mcp.OAuthScope
+	detectEntra = entra.Detect
 )
 
 // startEntra starts Knowledge Worker Agent's own Microsoft sign-in when the
@@ -45,9 +43,6 @@ func startEntra(server string) (handled bool, err error) {
 	// Some servers publish a permission Microsoft can't resolve; the entry can name the right one.
 	if s := strings.Fields(oauthScope(server)); len(s) > 0 {
 		target = target.WithScopes(s)
-	}
-	if !entraEnabled() {
-		return true, ErrOAuthUnsupported{Msg: fmt.Sprintf("%s signs in with Microsoft, which needs opencode 2.x.", server)}
 	}
 	app, ok := entraApp(server)
 	if !ok {

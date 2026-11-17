@@ -14,9 +14,8 @@ import (
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodev2"
 )
 
-// On opencode 2.x a note runs as KWA's own agent: 2.x's title agent only
-// writes titles.
-func TestExecNote_V2UsesKWAsAgent(t *testing.T) {
+// A note runs as KWA's own agent: opencode's title agent only writes titles.
+func TestExecNote_UsesKWAsAgent(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("KWA_HOME", filepath.Join(dir, "home"))
 	argsPath, stdinPath := filepath.Join(dir, "args"), filepath.Join(dir, "stdin")
@@ -28,7 +27,6 @@ func TestExecNote_V2UsesKWAsAgent(t *testing.T) {
 	prev := config.OpencodeBin
 	config.OpencodeBin = bin
 	t.Cleanup(func() { config.OpencodeBin = prev })
-	opencodev2.Detect(bin)
 
 	if _, err := execNote(context.Background(), bin, "github-copilot/claude-haiku-4.5", "-Summarise this"); err != nil {
 		t.Fatal(err)

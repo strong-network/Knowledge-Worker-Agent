@@ -9,15 +9,6 @@ import (
 	"strings"
 )
 
-// Cmd returns opencode with args as the installed version needs it: 1.x runs
-// them as given, 2.x through Command.
-func Cmd(ctx context.Context, bin string, args ...string) *exec.Cmd {
-	if Major(bin) < 2 {
-		return exec.CommandContext(ctx, bin, args...)
-	}
-	return Command(ctx, bin, args...)
-}
-
 // Command returns opencode with args, sent to KWA's server. When the server
 // can't start, the command runs its own private one instead (--standalone).
 //

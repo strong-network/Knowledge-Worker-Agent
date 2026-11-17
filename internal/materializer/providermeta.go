@@ -63,6 +63,9 @@ type ProviderAuthMeta struct {
 	// Label and Help are UI strings for the Accounts row.
 	Label string `json:"label,omitempty"`
 	Help  string `json:"help,omitempty"`
+	// HelpURL is the vendor's page for getting a key, linked from the row. The
+	// registry keeps only an https:// URL.
+	HelpURL string `json:"helpUrl,omitempty"`
 }
 
 // providerMetaFile is the on-disk shape of the sidecar. It is an ordered array
@@ -180,6 +183,7 @@ func parseMetaBlock(raw any) (ProviderAuthMeta, map[string]string) {
 		auth.SecretRef, _ = a["secretRef"].(string)
 		auth.Label, _ = a["label"].(string)
 		auth.Help, _ = a["help"].(string)
+		auth.HelpURL, _ = a["helpUrl"].(string)
 	}
 
 	var presets map[string]string

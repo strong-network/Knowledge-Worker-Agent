@@ -27,17 +27,7 @@ type TelemetryState struct {
 var (
 	telemetryMu    sync.Mutex
 	telemetryState = map[string]TelemetryState{}
-	// telemetryOff is why telemetry can't run at all (opencode 1.x), or "".
-	telemetryOff string
 )
-
-// SetTelemetryUnavailable turns telemetry off for every provider, with the
-// reason Diagnostics shows. Telemetry reads opencode 2.x's turn events.
-func SetTelemetryUnavailable(reason string) {
-	telemetryMu.Lock()
-	telemetryOff = reason
-	telemetryMu.Unlock()
-}
 
 // ApplyTelemetry reads every declared provider's kwa.telemetry, validates it,
 // and configures the exporters. Run at startup and after the central
@@ -45,9 +35,6 @@ func SetTelemetryUnavailable(reason string) {
 func ApplyTelemetry() {
 	cfgs := map[string]telemetry.Config{}
 	states := map[string]TelemetryState{}
-	telemetryMu.Lock()
-	off := telemetryOff
-	telemetryMu.Unlock()
 
 	if dir := configDirFn(); dir != "" {
 		declared, err := declaredProviderIDs(filepath.Join(dir, "opencode.json"))
@@ -70,17 +57,10 @@ func ApplyTelemetry() {
 				for _, w := range warnings {
 					log.Printf("[telemetry] %s: %s", m.ID, w)
 				}
-				if off != "" {
-					states[m.ID] = TelemetryState{Error: off}
-					continue
-				}
 				cfgs[m.ID] = cfg
 				states[m.ID] = TelemetryState{Endpoint: cfg.Endpoint, Content: contentOf(cfg), Warnings: warnings}
 			}
 		}
-	}
-	if off != "" && len(states) > 0 {
-		log.Printf("[telemetry] off: %s", off)
 	}
 	telemetry.Configure(cfgs)
 	telemetryMu.Lock()

@@ -288,7 +288,7 @@ func TestRunStreamOpencodeFakeBinary(t *testing.T) {
 
 	argsPath := filepath.Join(tmp, "args.txt")
 	bin := filepath.Join(tmp, "opencode")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argsPath + "\nprintf '%s\\n' '{\"type\":\"text\",\"timestamp\":1,\"sessionID\":\"oc-fake\",\"part\":{\"type\":\"text\",\"text\":\"Hello from fake OpenCode\",\"time\":{\"end\":1}}}'\n"
+	script := "#!/bin/sh\n[ \"$1\" = run ] || exit 0\n{ printf '%s\\n' \"$@\"; cat; } > " + argsPath + "\nprintf '%s\\n' '{\"type\":\"text\",\"timestamp\":1,\"sessionID\":\"oc-fake\",\"part\":{\"type\":\"text\",\"text\":\"Hello from fake OpenCode\",\"time\":{\"end\":1}}}'\n"
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +334,8 @@ func TestRunStreamOpencodeFakeBinary(t *testing.T) {
 					t.Fatal(err)
 				}
 				args := string(argsBytes)
-				for _, want := range []string{"run", "--format", "json", "--dangerously-skip-permissions", "--model", "anthropic/claude-sonnet-4-5", "--dir", tmp, "--", "hello"} {
+				// The message is on stdin, after the arguments.
+				for _, want := range []string{"run", "--format", "json", "--auto", "--model", "anthropic/claude-sonnet-4-5", "hello"} {
 					if !strings.Contains(args, want) {
 						t.Fatalf("expected fake opencode args to contain %q, got:\n%s", want, args)
 					}

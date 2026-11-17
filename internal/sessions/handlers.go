@@ -379,9 +379,9 @@ func deleteChat(sid string, deleteNotes bool) (int, error) {
 }
 
 // HandleStopSession stops an in-flight chat turn for a session without
-// deleting the session. It kills the running backend process (which, for the
-// opencode-serve backend, aborts the remote session via ActiveProcess.Abort)
-// and finishes the SSE stream so connected clients see the turn end. The
+// deleting the session. It kills the running backend process (and interrupts
+// the turn on opencode's server, via ActiveProcess.Abort) and finishes the SSE
+// stream so connected clients see the turn end. The
 // session, its config, and message history are preserved. Also clears any
 // queued follow-ups so they don't start after the user asked to stop.
 //
@@ -705,45 +705,6 @@ func forwardStream(w http.ResponseWriter, flusher http.Flusher, ctx context.Cont
 			return
 		}
 	}
-}
-
-// HandlePermission answers an interactive permission request raised by the
-// opencode server backend. Body: { "permission_id": "per_...", "response":
-// "once"|"always"|"reject" }. Routes to the opencode server's permission
-// endpoint for the session's in-flight turn.
-func HandlePermission(w http.ResponseWriter, r *http.Request) {
-	sid := r.PathValue("session_id")
-	var body struct {
-		PermissionID string `json:"permission_id"`
-		Response     string `json:"response"`
-	}
-	json.NewDecoder(r.Body).Decode(&body)
-	r.Body.Close()
-
-	permID := strings.TrimSpace(body.PermissionID)
-	resp := strings.TrimSpace(body.Response)
-	switch resp {
-	case "once", "always", "reject":
-	default:
-		http.Error(w, `response must be one of "once", "always", "reject"`, http.StatusBadRequest)
-		return
-	}
-	if permID == "" {
-		http.Error(w, "permission_id required", http.StatusBadRequest)
-		return
-	}
-
-	log.Printf("[PERMISSION] session=%s id=%s response=%s", sid, permID, resp)
-	ok, err := chat.AnswerPermission(r.Context(), sid, permID, resp, chat.Author{})
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
-		return
-	}
-	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "no such request is waiting"})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

@@ -30,29 +30,18 @@ var modelsTimeout = 60 * time.Second
 func FetchModelsFor(provider string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), modelsTimeout)
 	defer cancel()
-	bin := resolveBin()
-	// opencode 2.x lists every provider's models and takes no provider.
-	if opencodev2.Major(bin) >= 2 {
-		out, err := opencodev2.Cmd(ctx, bin, "models").CombinedOutput()
-		if err != nil {
-			return []string{}, describeFailure(ctx, err, string(out))
-		}
-		var mine []string
-		for _, m := range parseModels(string(out)) {
-			if strings.HasPrefix(m, provider+"/") {
-				mine = append(mine, m)
-			}
-		}
-		if mine == nil {
-			mine = []string{}
-		}
-		return mine, nil
-	}
-	out, err := opencodev2.Cmd(ctx, bin, "models", provider).CombinedOutput()
+	// opencode lists every provider's models and takes no provider.
+	out, err := opencodev2.Command(ctx, resolveBin(), "models").CombinedOutput()
 	if err != nil {
 		return []string{}, describeFailure(ctx, err, string(out))
 	}
-	return parseModels(string(out)), nil
+	mine := []string{}
+	for _, m := range parseModels(string(out)) {
+		if strings.HasPrefix(m, provider+"/") {
+			mine = append(mine, m)
+		}
+	}
+	return mine, nil
 }
 
 // describeFailure turns an `opencode models` failure into something a boot log

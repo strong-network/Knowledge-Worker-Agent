@@ -130,7 +130,6 @@ func (s *server) startLocked(ctx context.Context) error {
 	if bin == "" {
 		return errors.New("no opencode binary")
 	}
-	keepDatabaseBeforeV2()
 	port, err := freePort()
 	if err != nil {
 		return fmt.Errorf("allocate a port: %w", err)

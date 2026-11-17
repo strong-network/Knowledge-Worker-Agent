@@ -11,10 +11,7 @@ import (
 )
 
 func TestApplyTelemetry(t *testing.T) {
-	t.Cleanup(func() {
-		SetTelemetryUnavailable("")
-		telemetry.Shutdown()
-	})
+	t.Cleanup(telemetry.Shutdown)
 	centralDir(t, `{"provider":{"gw":{},"broken":{}}}`, `{"providers":[
 		{"id":"gw","telemetry":{"endpoint":"https://otel.example.com","logUserPrompts":true,"logToolDetails":true}},
 		{"id":"broken","telemetry":{"endpoint":"http://otel.example.com"}},
@@ -35,11 +32,5 @@ func TestApplyTelemetry(t *testing.T) {
 	}
 	if telemetryFor("gone") != nil || telemetry.For("gone") != nil {
 		t.Error("a provider the configuration doesn't declare has telemetry")
-	}
-
-	SetTelemetryUnavailable("usage reporting needs opencode 2.x")
-	ApplyTelemetry()
-	if gw := telemetryFor("gw"); gw == nil || gw.Error == "" || telemetry.For("gw") != nil {
-		t.Errorf("telemetry still on without opencode 2.x: %+v", gw)
 	}
 }

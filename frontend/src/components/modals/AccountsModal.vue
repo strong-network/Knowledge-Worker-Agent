@@ -54,6 +54,16 @@ function hasLoginFlow(p: ModelProvider): boolean {
   return p.builtin && !!BUILTIN_LOGIN_MODALS[p.id]
 }
 
+// What the sign-in button says on a row that also takes an API key, so the
+// two ways to connect are told apart.
+const SIGN_IN_LABELS: Record<string, string> = {
+  openai: 'Sign in with ChatGPT',
+}
+
+function signInLabel(p: ModelProvider): string {
+  return (p.acceptsKey && SIGN_IN_LABELS[p.id]) || 'Connect'
+}
+
 function openLogin(p: ModelProvider) {
   const modal = BUILTIN_LOGIN_MODALS[p.id]
   if (modal) ui.openModal(modal)
@@ -70,7 +80,9 @@ function statusFor(p: ModelProvider): { dot: string; text: string } {
   if (p.authenticated && p.reachability === 'unreachable') {
     return { dot: 'err', text: 'Signed in, but unreachable' }
   }
-  if (p.authenticated) return { dot: 'ok', text: 'Connected' }
+  if (p.authenticated) {
+    return { dot: 'ok', text: p.authMethod === 'key' ? 'Connected with an API key' : 'Connected' }
+  }
   if (p.authType === 'managed') {
     return { dot: 'pending', text: 'Waiting for your administrator' }
   }
@@ -459,11 +471,19 @@ async function removeGitHubPat() {
         <div class="acc-action">
           <!-- Built-ins keep their own sign-in flows and their own routes. -->
           <template v-if="hasLoginFlow(p)">
-            <button v-if="p.authenticated" class="btn-secondary" @click="openLogin(p)">
+            <button v-if="p.authenticated && p.authMethod !== 'key'" class="btn-secondary" @click="openLogin(p)">
               Re-authenticate
             </button>
             <button v-else class="btn-connect" @click="openLogin(p)">
-              Connect
+              {{ signInLabel(p) }}
+            </button>
+            <!-- Some also take an API key, which replaces the sign-in. -->
+            <button
+              v-if="p.acceptsKey && keyEditing !== p.id"
+              class="btn-secondary"
+              @click="startKeyEdit(p)"
+            >
+              {{ p.authMethod === 'key' ? 'Replace key' : 'Use an API key' }}
             </button>
           </template>
           <!-- A config-declared provider the user supplies a key for. -->
@@ -522,6 +542,9 @@ async function removeGitHubPat() {
         <label class="gh-label" :for="`key-${p.id}`">API key for {{ p.label }}</label>
         <p class="gh-help">
           Your key is stored on this workspace only, and is used solely to reach {{ p.label }}.
+          <template v-if="p.acceptsKey && p.authenticated && p.authMethod !== 'key'">
+            Saving it replaces your current sign-in.
+          </template>
         </p>
         <div class="gh-input-row">
           <input

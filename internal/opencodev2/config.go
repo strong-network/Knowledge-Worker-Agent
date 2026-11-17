@@ -184,7 +184,7 @@ func applyUserToggles(doc map[string]any) {
 
 // addKWASettings adds what KWA needs whatever the platform says: the plan
 // display reads opencode's todo tool, which 2.x offers only on request;
-// folders outside the chat are asked about, as 1.x does, so a turn without
+// folders outside the chat are asked about, as 1.x did, so a turn without
 // Yolo refuses them; built-in skills that don't fit KWA are turned off; and an
 // agent for KWA's one-off writing tasks.
 func addKWASettings(doc map[string]any) {

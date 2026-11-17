@@ -7,8 +7,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -41,14 +39,12 @@ func waitForLogin(t *testing.T, d time.Duration, pred func(LoginInfo) bool) Logi
 
 // TestDeviceFlow_CompletesAndPersists drives the full device flow against a
 // mock GitHub: device-code request, one authorization_pending poll, then a
-// token. It asserts the flow reaches done+success AND writes auth.json — i.e.
+// token. It asserts the flow reaches done+success AND stores the token — i.e.
 // the "never finishes" symptom would fail here.
 func TestDeviceFlow_CompletesAndPersists(t *testing.T) {
 	resetLoginForTest(t)
 
-	// Isolate the credential store to a temp dir.
-	dir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", dir)
+	store := stubCredentials(t)
 
 	prevAgent := UserAgent
 	UserAgent = "KnowledgeWorkerAgent/9.9.9"
@@ -131,18 +127,8 @@ func TestDeviceFlow_CompletesAndPersists(t *testing.T) {
 		t.Errorf("unexpected error on success: %q", final.Error)
 	}
 
-	// The credential must be written to auth.json.
-	authPath := filepath.Join(dir, "opencode", "auth.json")
-	raw, err := os.ReadFile(authPath)
-	if err != nil {
-		t.Fatalf("auth.json not written: %v", err)
-	}
-	var creds map[string]map[string]any
-	if err := json.Unmarshal(raw, &creds); err != nil {
-		t.Fatalf("auth.json invalid: %v", err)
-	}
-	if creds[Provider]["access"] != "gho_DEVICEFLOWTOKEN" {
-		t.Errorf("token not persisted correctly: %+v", creds[Provider])
+	if v := store.values[Provider]; v["access"] != "gho_DEVICEFLOWTOKEN" {
+		t.Errorf("token not stored correctly: %+v", v)
 	}
 
 	// The post-login success callback should have fired.
@@ -210,8 +196,7 @@ func TestRequestToken_SlowDownWithoutInterval(t *testing.T) {
 // response and asserts it still completes (rather than looping forever).
 func TestDeviceFlow_RecoversAfterSlowDown(t *testing.T) {
 	resetLoginForTest(t)
-	dir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", dir)
+	stubCredentials(t)
 
 	var polls int32
 	mux := http.NewServeMux()
@@ -252,8 +237,7 @@ func TestDeviceFlow_RecoversAfterSlowDown(t *testing.T) {
 // without waiting for a poll).
 func TestHandleLoginStartReturnsCodeImmediately(t *testing.T) {
 	resetLoginForTest(t)
-	dir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", dir)
+	stubCredentials(t)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/login/device/code", func(w http.ResponseWriter, r *http.Request) {

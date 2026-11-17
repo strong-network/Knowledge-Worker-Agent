@@ -53,21 +53,3 @@ func TestEnabledOnly(t *testing.T) {
 		t.Fatalf("expected only the enabled servers, got %v", got)
 	}
 }
-
-func TestIsConnected(t *testing.T) {
-	cases := map[string]bool{
-		"connected":    true,
-		"connecting":   true,
-		"pending":      true,
-		"disconnected": false,
-		"disabled":     false,
-		"error":        false,
-		"failed":       false,
-		"":             false,
-	}
-	for status, want := range cases {
-		if got := IsConnected(status); got != want {
-			t.Errorf("IsConnected(%q) = %v, want %v", status, got, want)
-		}
-	}
-}

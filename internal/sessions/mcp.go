@@ -11,8 +11,8 @@ import (
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/db"
 )
 
-// HandleGetSessionMcp returns the per-chat connector selection and live status
-// for a standalone chat.
+// HandleGetSessionMcp returns the per-chat connector selection for a
+// standalone chat.
 // GET /api/sessions/{session_id}/mcp
 func HandleGetSessionMcp(w http.ResponseWriter, r *http.Request) {
 	sid := r.PathValue("session_id")
@@ -25,7 +25,7 @@ func HandleGetSessionMcp(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	conns, err := connectors.Build(cfg.Workdir, cfg.McpSelection)
+	conns, err := connectors.Build(cfg.McpSelection)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -33,9 +33,8 @@ func HandleGetSessionMcp(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"connectors": conns})
 }
 
-// HandleSetSessionMcp updates the per-chat connector selection, persists it, and
-// applies the change live to the running opencode server (if one is serving the
-// chat) by connecting/disconnecting the affected servers.
+// HandleSetSessionMcp updates the per-chat connector selection and persists it;
+// it applies from the chat's next turn.
 // PUT /api/sessions/{session_id}/mcp   body: {"selection": {"github": true, ...}}
 func HandleSetSessionMcp(w http.ResponseWriter, r *http.Request) {
 	sid := r.PathValue("session_id")
@@ -67,9 +66,7 @@ func HandleSetSessionMcp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	connectors.Apply(cfg.Workdir, sel)
-
-	conns, err := connectors.Build(cfg.Workdir, sel)
+	conns, err := connectors.Build(sel)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

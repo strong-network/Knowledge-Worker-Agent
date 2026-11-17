@@ -14,20 +14,24 @@ import (
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/db"
 )
 
-// fakeOpencodeRecordingArgs installs a fake opencode that appends each
-// invocation's arguments to argsPath, separated by a marker line, and answers
-// with one line of text. Appending matters: other opencode calls in a turn
-// (session cleanup, titling) would otherwise overwrite the one under test.
-func fakeOpencodeRecordingArgs(t *testing.T) (argsPath string) {
+// fakeOpencodeRecordingArgs installs a fake opencode that records each
+// invocation's arguments and stdin (the message) in a file of its own in the
+// returned folder, and answers with one line of text. A file each matters:
+// other opencode calls in a turn (titling, session cleanup) run at the same
+// time, and records appended to one file interleave.
+func fakeOpencodeRecordingArgs(t *testing.T) (invocations string) {
 	t.Helper()
 	tmp := t.TempDir()
 	if err := db.Init(filepath.Join(tmp, "test.db")); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	argsPath = filepath.Join(tmp, "args.txt")
+	invocations = filepath.Join(tmp, "invocations")
+	if err := os.Mkdir(invocations, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	bin := filepath.Join(tmp, "opencode")
-	script := "#!/bin/sh\n{ printf '%s\\n' \"$@\"; echo '<<END>>'; } >> " + argsPath + "\nprintf '%s\\n' '{\"type\":\"text\",\"timestamp\":1,\"sessionID\":\"oc-fake\",\"part\":{\"type\":\"text\",\"text\":\"ok\",\"time\":{\"end\":1}}}'\n"
+	script := "#!/bin/sh\nf=$(mktemp " + invocations + "/inv.XXXXXX)\n{ printf '%s\\n' \"$@\"; cat; } > \"$f\"\nprintf '%s\\n' '{\"type\":\"text\",\"timestamp\":1,\"sessionID\":\"oc-fake\",\"part\":{\"type\":\"text\",\"text\":\"ok\",\"time\":{\"end\":1}}}'\n"
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +43,7 @@ func fakeOpencodeRecordingArgs(t *testing.T) (argsPath string) {
 	t.Cleanup(func() {
 		opencodeEnsured, config.OpencodeBin, config.Workspace, config.OwnerFullName = prevEnsured, prevBin, prevWS, prevOwner
 	})
-	return argsPath
+	return invocations
 }
 
 func waitDone(t *testing.T, s *Stream) {
@@ -56,14 +60,15 @@ func waitDone(t *testing.T, s *Stream) {
 	}
 }
 
-// invocationWith returns the recorded chat-turn invocation whose arguments
-// contain prompt, or "". The planning block marks a chat turn: the titler also
+// invocationWith returns the recorded chat-turn invocation whose message
+// contains prompt, or "". The planning block marks a chat turn: the titler also
 // runs opencode with the user's prompt, but without the chat preamble.
-func invocationWith(t *testing.T, argsPath, prompt string) string {
+func invocationWith(t *testing.T, invocations, prompt string) string {
 	t.Helper()
-	raw, _ := os.ReadFile(argsPath)
-	for _, inv := range strings.Split(string(raw), "<<END>>\n") {
-		if strings.Contains(inv, prompt) && strings.Contains(inv, "[System — planning]") {
+	entries, _ := os.ReadDir(invocations)
+	for _, e := range entries {
+		raw, _ := os.ReadFile(filepath.Join(invocations, e.Name()))
+		if inv := string(raw); strings.Contains(inv, prompt) && strings.Contains(inv, "[System — planning]") {
 			return inv
 		}
 	}
@@ -133,23 +138,6 @@ func TestGuestPromptIsAttributedToTheGuestOnEveryPath(t *testing.T) {
 		if m.AuthorID != "g-1" || m.AuthorName != "Sarah" {
 			t.Errorf("message %q stored author %q/%q", m.Content, m.AuthorID, m.AuthorName)
 		}
-	}
-}
-
-// The opencode server backend builds its prompt separately from the CLI path;
-// it must attribute a guest's prompt the same way.
-func TestServerBackendAttributesTheGuestToo(t *testing.T) {
-	prev := config.OwnerFullName
-	config.OwnerFullName = "Alex Owner"
-	t.Cleanup(func() { config.OwnerFullName = prev })
-
-	guest := buildServerTurnRequest("srv-g", "hello", config.SessionConfig{}, nil, Author{ID: "g-1", Name: "Sarah"})
-	if !strings.Contains(guest.Prompt, "written by Sarah") || strings.Contains(guest.Prompt, "current user:") {
-		t.Errorf("server backend did not attribute the guest: %q", guest.Prompt)
-	}
-	owner := buildServerTurnRequest("srv-o", "hello", config.SessionConfig{}, nil, Author{})
-	if !strings.Contains(owner.Prompt, "current user: Name: Alex Owner") {
-		t.Errorf("server backend lost the owner line: %q", owner.Prompt)
 	}
 }
 

@@ -40,19 +40,18 @@ whole product.
 |------|-----------|-------|
 | `cmd/server/` | Main entry point: `main.go` (route registration, bootstrap, model discovery), `health.go` (probe subcommand) | Embeds `cmd/server/html/` |
 | `cmd/server/html/` | **Generated** — Vite build output of the frontend | Do not hand-edit (see §9) |
-| `internal/defaults/` | Embedded bundles installed at startup into `~/.config/opencode`, in **every** workspace (not gated on `KWA_CENTRAL_CONFIG`): `skills/` (the pdf/docx/pptx/xlsx document skills — the capability floor for reading an attached file — and `reports-and-dashboards`, which teaches the agent to build reports and dashboards that the preview and shared files can show as written; a copy central configuration assigns under the same name hides it) and `plugin/` (OpenCode plugins that keep chat working; `pdf-guard.js` drops attachments the provider can't accept, which would otherwise poison a session's history permanently). Both are platform-owned: always overwritten, never manifest-tracked. The old content bundle (agents, product context, `AGENTS.md`, product-specific skills) is **retired**: central configuration provides that now, and `RetireLegacyDefaults` removes it from workspaces that already have it, preserving user-edited files | `//go:embed all:skills` + `all:plugin` |
+| `internal/defaults/` | Embedded bundles installed at startup into `~/.config/opencode`, in **every** workspace (not gated on `KWA_CENTRAL_CONFIG`): `skills/` (the pdf/docx/pptx/xlsx document skills — the capability floor for reading an attached file — and `reports-and-dashboards`, which teaches the agent to build reports and dashboards that the preview and shared files can show as written; a copy central configuration assigns under the same name hides it), platform-owned: always overwritten, never manifest-tracked. `plugin/` holds the opencode 1.x plugins earlier releases installed, embedded only so `RemovePlugins` can recognise and remove our copies. The old content bundle (agents, product context, `AGENTS.md`, product-specific skills) is **retired**: central configuration provides that now, and `RetireLegacyDefaults` removes it from workspaces that already have it, preserving user-edited files | `//go:embed all:skills` + `all:plugin` (only for removing the 1.x plugins) |
 | `internal/mcp/` | MCP server management: the `mcp` block of opencode's `opencode.json`. opencode handles MCP OAuth itself (`internal/mcpauth` drives its commands) | **Security-relevant**: tokens, external IdPs |
-| `internal/chat/` | Chat backend lifecycle (`RunStream`), opencode JSONL parser (`ParseOpencodeJSONL`), `opencode serve` event translation (`server_stream.go`), process registry, stream buffering | **Security-relevant**: process exec |
-| `internal/opencodeserver/` | Server mode: supervises long-lived `opencode serve` processes, one per working folder, and adapts their HTTP/SSE events. opencode 1.x only | **Security-relevant**: process exec |
-| `internal/opencodev2/` | opencode 2.x: detects the installed major version, runs the one `opencode serve` every 2.x command goes to (loopback, random password), and calls its API | **Security-relevant**: process exec, local API password |
+| `internal/chat/` | Chat backend lifecycle (`RunStream`), opencode JSONL parser (`ParseOpencodeJSONL`), process registry, stream buffering | **Security-relevant**: process exec |
+| `internal/opencodev2/` | opencode: detects the installed major version, runs the one `opencode serve` every opencode command goes to (loopback, random password), and calls its API | **Security-relevant**: process exec, local API password |
 | `internal/opencodeinstaller/`, `internal/opencodeembed/` | Installs the pinned opencode release, verified by SHA-256; the release binary embeds a fallback copy | **Security-relevant**: supply chain |
-| `internal/opencodeauth/`, `internal/vertexauth/`, `internal/providers/` | Model provider sign-in (GitHub Copilot device flow, Google Cloud), API keys, and which providers and preset models the workspace offers | **Security-relevant**: credentials, written to opencode's credential store |
+| `internal/opencodeauth/`, `internal/vertexauth/`, `internal/providers/` | Model provider sign-in (GitHub Copilot device flow, ChatGPT, Google Cloud), API keys (OpenAI, Anthropic, providers the configuration declares), and which providers and preset models the workspace offers | **Security-relevant**: credentials, written to opencode's credential store |
 | `internal/sessions/` | Session & chat HTTP handlers, SSE dispatch loop, prompt queue, answer forwarding, and temporary chats: a once-a-minute sweeper deletes one 24 hours after its last message, unless a turn is running | **Security-relevant**: deletes chats, through `workdirs` |
 | `internal/files/` | File-manager handlers: browse/view/save/upload/download/rename/move/duplicate/delete | **Security-relevant**: filesystem access |
 | `internal/diagnostics/` | Settings → Diagnostics: `GET /api/diagnostics` (versions, status, central configuration and its last run, hidden and kept items, providers, connectors, settings), `/disk` and `/log` (the ends of the server's and opencode's logs), and `POST /api/diagnostics/refresh-config`, which re-applies the central configuration in the background, one refresh at a time | **Security-relevant**: reads logs and settings; everything returned goes through `Redact` |
 | `internal/workdirs/` | The only gate for deleting chat folders: session delete, tidy-up and sweeps all go through it | **Security-relevant**: deletes files |
 | `internal/git/` | Git status/changes/pull/push/commit/clone over a client-supplied path | **Security-relevant**: exec `git` |
-| `internal/mcpauth/` | Drives opencode's MCP OAuth commands (`opencode mcp auth`, `logout`, `list`) | **Security-relevant**: external identity providers |
+| `internal/mcpauth/` | Drives opencode's MCP OAuth command (`opencode mcp auth`); status and sign-out go through opencode's server API | **Security-relevant**: external identity providers |
 | `internal/entra/` | Sign-in to connectors protected by Microsoft Entra ID, which opencode can't do (2.x rejects Entra's `{tenantid}` issuer; Entra has no dynamic client registration). `mcpauth` runs it instead of `opencode mcp auth` when a connector's protected-resource metadata names Entra: authorization code with PKCE at the tenant's own address, with the app in `KWA_ENTRA_CLIENT_ID` and `KWA_ENTRA_TENANT_ID`, or the one a connector artifact names (`kwa.auth.type: "entra"`, `clientId`, `tenant`; `mcp.EntraApp`). It asks for the scopes the metadata publishes, or for the entry's `oauth.scope` when it sets one (`mcp.OAuthScope`), with `offline_access`. The connector list carries the account and a refused refresh (`microsoft`). KWA keeps the refresh token in `.system/entra/`, refreshes before expiry (after a running turn, while it can), and hands opencode only the access token (`opencodev2.SetCredential`), which makes it reconnect the connector | **Security-relevant**: tokens, external identity providers |
 | `internal/skilltokens/` | Tokens skills ask for: declared in a SKILL.md's front matter (`metadata.kwa-token`), saved from Accounts (`/api/skill-tokens`, values never returned), kept in `.system/skill-tokens.json` and given to opencode's processes as environment variables. On 2.x a change restarts the server once no turn is running (`cmd/server/skilltokens.go`) | **Security-relevant**: credentials the agent uses as the user |
 | `internal/materializer/` | Central configuration: at startup and on a refresh from Diagnostics, clones or reads the configuration repository and writes the project's agents, skills, context, connectors, providers and vocabularies into a platform-owned opencode config folder, built beside the current one and swapped in | **Security-relevant**: exec `git`, writes config |
@@ -145,9 +144,8 @@ Single process, plus child processes:
 ```
 Browser (Vue SPA)  ──HTTP/SSE──>  Go server (cmd/server, 127.0.0.1:8765 and [::1]:8765)
                                       │
-                                      ├─ spawns: opencode run --format json … -- <prompt>  (per chat turn, default mode)
-                                      ├─ or runs: opencode serve …           (server mode, one per working folder)
-                                      ├─ on opencode 2.x: opencode serve      (one; every opencode command goes to it)
+                                      ├─ runs: opencode serve                (one; every opencode command goes to it)
+                                      ├─ spawns: opencode run --format json …  (per chat turn, message on stdin)
                                       ├─ spawns: opencode auth / models / mcp …  (sign-in, models, MCP OAuth)
                                       ├─ spawns: git <verb> …                (source control, cwd = client path)
                                       ├─ spawns: npm install …               (Obsidian MCP install, startup)
@@ -161,94 +159,88 @@ Owner ──────Workspace App──> preview listener (127.0.0.1:8769), 
 
 - **Startup is non-blocking.** `main()` starts the HTTP listener immediately, then a background
   `bootstrap()` goroutine installs or verifies opencode, installs the Obsidian MCP and the bundled
-  skills and plugins, applies central configuration, registers default MCP servers, and discovers
+  skills, applies central configuration, registers default MCP servers, and discovers
   models. Chat endpoints return **503** (via `requireOpencodeReady`) until opencode is verified.
-- **Chat turn, default mode:** `POST /api/chat` → `sessions.HandleChat` → `chat.RunStream` runs
+- **Chat turn:** `POST /api/chat` → `sessions.HandleChat` → `chat.RunStream` runs
   `opencode run` in the session's folder, reads stdout line by line, parses each line with
   `chat.ParseOpencodeJSONL` into typed `Event`s, and fans them to the browser as SSE frames
   (`chunk`, `tool_call`, `tool_done`, `question`, `usage`, `error`, `done`, …). The opencode
-  session ID is stored, so follow-ups pass `--session`.
-- **Server mode** (`KWA_OPENCODE_USE_SERVER=true`): turns go to a long-lived `opencode serve` over
-  HTTP/SSE (`internal/opencodeserver`), translated by `translateServerEvent`
-  (`internal/chat/server_stream.go`). Only this mode can ask before the agent acts: a
-  `permission` event, answered with `POST /api/sessions/{id}/permission`. opencode 1.x only:
-  2.x replaced the API it uses, so on 2.x the setting is ignored.
-- **opencode 2.x** (`internal/opencodev2`): the default (`config.OpencodeMajor`) once the
-  one-folder migration has run. The migration and its undo re-point chats through 1.x, so a
-  workspace runs 1.x until the migration has run, and they switch to 1.x (`config.UseOpencode1`).
-  `KWA_OPENCODE_MAJOR=1` goes back to 1.x; `KWA_OPENCODE_MAJOR=2` runs 2.x before the migration
-  too, which then waits for 1.x. The installer puts the pinned 2.x release (`PinnedVersion2`, from
-  npm, SHA-256 per target) in a `v2` folder of the install folder, so 1.x stays for going back;
-  `KWA_OPENCODE_BIN` still overrides. Before 2.x first opens opencode's database (which it
-  upgrades), KWA keeps a copy in `.system/opencode-db-before-2.x.db`, unless that would leave
-  less than 1 GB free. The major version comes from `--version` when the
-  binary is made sure of (`opencodev2.Detect`). Bootstrap starts one `opencode serve` and waits
-  until its connectors have connected; every opencode command then runs with `--server <url>`
-  and the password in `OPENCODE_PASSWORD` (`opencodev2.Cmd`), or `--standalone` when the server
-  won't start. A private server per command would connect the connectors mid-turn, and 2.x then
-  adds a reminder about their tools that the model answers in its reply. Turns still use
-  `opencode run --format json` (`config.BuildOpencodeArgsV2`: the folder is the working
-  directory, `model#variant`, `--auto` for Yolo), whose events keep the 1.x shape. Stopping a
-  turn also interrupts it on the server, which would otherwise carry on. Skills come from
+  session ID is stored, so follow-ups pass `--session`. Nothing asks before the agent acts:
+  `opencode run` refuses what a permission would ask about, and the chat shows a blocked tool.
+- **opencode 2.x** (`internal/opencodev2`) is the only version KWA runs. The installer puts the
+  pinned release (`opencodeinstaller.PinnedVersion`, from npm, SHA-256 per target) in a `v2`
+  folder of the install folder; `KWA_OPENCODE_BIN` overrides, and a binary older than 2.x
+  (`opencodev2.Detect` reads `--version`) leaves chat unavailable. Bootstrap starts one
+  `opencode serve` and waits until its connectors have connected; every opencode command then
+  runs with `--server <url>` and the password in `OPENCODE_PASSWORD` (`opencodev2.Command`), or
+  `--standalone` when the server won't start. A private server per command would connect the
+  connectors mid-turn, and opencode then adds a reminder about their tools that the model
+  answers in its reply. Turns use `opencode run --format json` (`config.BuildOpencodeArgs`: the
+  folder is the working directory, `model#variant`, `--auto` for Yolo). Stopping a turn also
+  interrupts it on the server, which would otherwise carry on. Skills come from
   `GET /api/skill`.
-  - **Configuration on 2.x** (`internal/opencodev2/config.go`): 2.x reads `OPENCODE_CONFIG_DIR`
-    *instead of* the global configuration, where 1.x layers it on top. So on 2.x the platform
+  - **Configuration** (`internal/opencodev2/config.go`): opencode reads `OPENCODE_CONFIG_DIR`
+    *instead of* the global configuration, where 1.x layered it on top. So the platform
     folder is handed over as one document, `OPENCODE_CONFIG=<folder>/opencode.kwa-v2.json`,
-    which 2.x layers over the global configuration: the folder's `opencode.json`, its skills
+    which opencode layers over the global configuration: the folder's `opencode.json`, its skills
     folder named in `skills`, its agents written into `agent`, the user's connector switches
-    (2.x ignores the global entries that hold only `enabled`), `experimental.todo` (the plan
-    display), `external_directory: ask` (as 1.x), `skill.use` deny policies for the built-in
+    (opencode ignores the global entries that hold only `enabled`), `experimental.todo` (the plan
+    display), `external_directory: ask` (as 1.x did), `skill.use` deny policies for the built-in
     `browser` (drives opencode's desktop app) and `report` (files an opencode issue) skills
     unless the platform sets its own, and the hidden `kwa-text` agent day notes
     run as. KWA rewrites it at every server start and before `opencode reload`, which runs when
     a connector, agent or the central configuration changes (`chat.ReloadServerAgents`).
-  - **Turns on 2.x:** `opencodev2.Command` puts a `run`'s message (the argument after `--`) on
-    stdin, which 2.x reads as it is: 2.2.5 quotes message arguments that contain a space and
-    counts those after `--` twice. 2.x commands get no `PWD`, because 2.x takes its folder from
-    `PWD` before the working directory. 2.x connects connectors per folder, so before a turn
-    `opencodev2.WarmFolder` waits for the chat folder's (a new folder's list starts empty); a
-    turn that starts first gets a mid-turn note about the tool catalog, which small models answer.
-    Titles and day notes share one scratch folder (`opencodev2.ScratchDir`), because 2.x keeps a
-    folder's connectors for an hour. Connector tools run through Code Mode: the model runs a
-    program with the `execute` tool, and `chat/codemode.go` turns each call the program made
-    into a row named as on 1.x (`<server>_<tool>`), so the connectors bar attributes it. The
-    program can make HTTP requests but can't read files, so `config.CodeModeInstruction` tells
-    the model, every turn, to fetch a file from `GET /api/files/raw` (home-folder limit applies)
-    rather than start a web server to serve it. `opencode run` cancels the question tool's
-    questions and tells the model to assume answers, so the turn stops at them instead
-    (`chat/questions.go`): the reply lists them, a `question` frame carries them to the question
-    card, the answers go out as the next message, and `WaitingOnOwner` holds until then.
-    `config.QuestionsInstruction` tells the model each turn that asking works this way, and when
-    to ask. A scheduled run's turn is `Unattended` (never saved): told not to ask, it isn't
-    stopped at a question either. Copied
+  - **Turns:** `opencodev2.Command` puts a `run`'s message (the argument after `--`) on
+    stdin, which opencode reads as it is: 2.2.5 quotes message arguments that contain a space and
+    counts those after `--` twice. opencode commands get no `PWD`, because opencode takes its
+    folder from `PWD` before the working directory. opencode connects connectors per folder, so
+    before a turn `opencodev2.WarmFolder` waits for the chat folder's (a new folder's list starts
+    empty); a turn that starts first gets a mid-turn note about the tool catalog, which small
+    models answer. Titles and day notes share one scratch folder (`opencodev2.ScratchDir`),
+    because opencode keeps a folder's connectors for an hour. Connector tools run through Code
+    Mode: the model runs a program with the `execute` tool, and `chat/codemode.go` turns each
+    call the program made into a row named as on 1.x (`<server>_<tool>`), so the connectors bar
+    attributes it. The program can make HTTP requests but can't read files, so
+    `config.CodeModeInstruction` tells the model, every turn, to fetch a file from
+    `GET /api/files/raw` (home-folder limit applies) rather than start a web server to serve it.
+    `opencode run` cancels the question tool's questions and tells the model to assume answers,
+    so the turn stops at them instead (`chat/questions.go`): the reply lists them, a `question`
+    frame carries them to the question card, the answers go out as the next message, and
+    `WaitingOnOwner` holds until then. `config.QuestionsInstruction` tells the model each turn
+    that asking works this way, and when to ask. A scheduled run's turn is `Unattended` (never
+    saved): told not to ask, it isn't stopped at a question either. Copied
     `<system-reminder>` blocks are removed from replies. 2.x renamed `bash` to `shell` and `task`
     to `subagent`; agents' 1.x permission names still apply.
-  - **Credentials on 2.x** (`internal/opencodev2/credentials.go`): 2.x keeps them in its database
-    and reads auth.json only once, when it upgrades a 1.x database. So the Copilot sign-in, API
-    keys and their sign-outs go through `/api/credential` (and still into auth.json, for 1.x), and
-    connector status and sign-out through `/api/mcp`, since 2.x's `mcp list` no longer lists them.
-    `opencode mcp auth` still runs over a PTY; its callback listens on a loopback port named in the
-    URL's `redirect_uri`. At the first 2.x start, `ImportConnectorSignIns` copies the connector
-    sign-ins in 1.x's mcp-auth.json, once, and only to a connector of the same name and address.
-    Vertex needs nothing new: 2.x reads the same environment and gcloud credentials.
-  - **Models on 2.x:** its `models` has no `--verbose`, so the Vertex model check reads
-    `/api/model` (`opencodeauth.modelDetailsV2`, which names 2.x's client packages by the 1.x
-    package of the same API). 2.x fails a turn whose model lacks the reasoning level asked for,
-    where 1.x ignored it, so a turn drops a level the model doesn't list (`opencodev2.HasVariant`).
+  - **Credentials** (`internal/opencodev2/credentials.go`): opencode keeps them in its database,
+    so the Copilot sign-in, API keys and their sign-outs go through `/api/credential`, and
+    connector status and sign-out through `/api/mcp`. `opencode mcp auth` still runs over a PTY;
+    its callback listens on a loopback port named in the URL's `redirect_uri`. Vertex needs
+    nothing of its own: opencode reads the environment and gcloud credentials.
+  - **Models:** `opencode models` has no `--verbose`, so the Vertex model check reads
+    `/api/model` (`opencodeauth.modelDetailsV2`, which names opencode's client packages by the
+    AI SDK package of the same API). opencode fails a turn whose model lacks the reasoning level
+    asked for, so a turn drops a level the model doesn't list (`opencodev2.HasVariant`).
     After `opencodev2.Stop` (shutdown) nothing starts the server again: a late request would
     leave one running after KWA.
-  - **Plugins on 2.x:** 2.x can't load 1.x plugins, and does the work of KWA's two itself: it
-    replaces an attachment the model can't take with a notice, and leaves blank text out of
-    requests. So on 2.x bootstrap removes our unchanged copies (`defaults.RemovePlugins`) instead
-    of installing them; back on 1.x they are installed again.
-- **Questions:** `opencode run` gets `/dev/null` as stdin, so it can't take an answer mid-turn;
-  the frontend sends the answer as the next message.
+  - **What 1.x left:** earlier releases installed two opencode 1.x plugins, which opencode can't
+    load and whose work it does itself: it replaces an attachment the model can't take with a
+    notice, and leaves blank text out of requests. Bootstrap removes our unchanged copies
+    (`defaults.RemovePlugins`), and deletes the copy of opencode's database kept for going back
+    to 1.x, `.system/opencode-db-before-2.x.db` (`opencodev2.RemoveLeftovers`).
 - **Persistence:** SQLite at `~/Knowledge_Worker_Agent/.system/knowledge-worker-agent.db`
   (`layout.Database`; `KWA_HOME` moves the folder), single open connection, WAL mode,
   `foreign_keys=ON`. On startup, before migrations run, the server writes a `VACUUM INTO`
   snapshot to `.system/backups/` (`layout.Backups`) and keeps the newest 5, at most one per
   24h (`internal/db/snapshot.go`). Snapshots sit on the same volume: they protect against a bad
   migration or an accidental delete, not against loss of the workspace.
+- **One folder:** everything lives under `KWA_HOME` (`internal/layout`). Releases up to 2.1
+  moved the files there from their old places, once; this one doesn't. A workspace whose files
+  are still at the old places (`migration.Unmoved`: no completion record in
+  `.system/migration/`, and a database at an old place or a move that didn't finish) stops
+  before anything opens them, and every page says why (`serveUnmoved`). A new workspace gets
+  the completion record (`migration.MarkNew`). `migration.Prune` still deletes the copies of
+  earlier moves after 30 days, and `migration.StrayDatabase` notices a database an older release
+  has written at the old place since.
 
 ---
 
@@ -303,13 +295,15 @@ patterns documented here rather than the documented patterns themselves.
   opencode. It authenticates opencode *to the provider*, not clients *to the server*.
 
 ### Secrets & crypto
-- **Model provider credentials** (the Copilot token, API keys) are stored by opencode in
-  `~/.local/share/opencode/auth.json`; `internal/opencodeauth` writes API keys there in
-  opencode's format. A GitHub personal access token for the GitHub MCP server comes from
+- **Model provider credentials** (the Copilot token, the ChatGPT sign-in, API keys) are stored
+  by opencode, in its database. `internal/opencodeauth` writes them through opencode's
+  credential API. A provider holds one credential at a time: an OpenAI key
+  replaces a ChatGPT sign-in, and a ChatGPT sign-in removes the key. The key endpoints accept
+  a key only for a provider the registry offers that takes one. A GitHub personal access token for the GitHub MCP server comes from
   `COPILOT_GITHUB_TOKEN`, `GH_TOKEN` or `GITHUB_TOKEN`, or one the user stores; the Copilot
   sign-in token is deliberately never used for it.
 - **MCP OAuth tokens:** opencode runs the OAuth flow and stores the tokens; `internal/mcpauth`
-  only drives `opencode mcp auth` and `opencode mcp logout`.
+  only drives `opencode mcp auth`, and signs out through opencode's server API.
 - **MCP personal API keys:** one file per server in `~/Knowledge_Worker_Agent/.system/mcp-keys/`
   (dir 0700, files 0600, written atomically), read by opencode through a `{file:}` header the
   materializer writes. Never in `opencode.json`, API responses or logs. A referenced key file
@@ -325,7 +319,7 @@ patterns documented here rather than the documented patterns themselves.
   variable (`skilltokens.Add`), unless the workspace sets that variable itself. A name must end
   in `_TOKEN`, `_KEY` or `_SECRET` and can't start with `KWA_`, `SDS_`, `OPENCODE_`, `COPILOT_`,
   `GITHUB_` or `GH_`, so a token can't replace `PATH`, `LD_PRELOAD` or a setting of ours. Nothing
-  limits what the agent does with a token; Accounts says so. On 2.x a change restarts the server
+  limits what the agent does with a token; Accounts says so. A change restarts the server
   once no turn is running.
 - **Randomness:** `crypto/rand` for UUIDs (`chat.NewUUID`) and other identifiers — no
   `math/rand` for security-sensitive values. (`math/rand` appears only for non-security
@@ -353,9 +347,8 @@ patterns documented here rather than the documented patterns themselves.
 
 ### Exec / filesystem / SQL / deserialization sinks
 - **Process exec (`exec.Command`, arg-vector, no shell):**
-  `internal/chat/chat.go` (`opencode run`), `internal/opencodeserver/supervisor.go`
-  (`opencode serve`), `internal/opencodev2` (`opencode serve` on 2.x, and the command builder
-  all opencode commands go through), `internal/titler` and `internal/daynotes` (`opencode run` for titles and
+  `internal/chat/chat.go` (`opencode run`), `internal/opencodev2` (`opencode serve`, and the
+  command builder all opencode commands go through), `internal/titler` and `internal/daynotes` (`opencode run` for titles and
   notes), `internal/opencodeauth`, `internal/vertexauth` and `internal/mcpauth` (`opencode auth`,
   `models`, `mcp`), `cmd/server/providerprobe.go` (opencode), `internal/git/git.go` and
   `internal/materializer/repo.go` (`git`), `internal/mcp/probe.go` (a client-supplied stdio
@@ -365,10 +358,10 @@ patterns documented here rather than the documented patterns themselves.
   `internal/voice/engine.go` (`whisper-server` on
   `127.0.0.1`, and `--help` for the availability check; fixed arguments, absolute paths,
   minimal environment).
-  - opencode runs with **`--dangerously-skip-permissions` by default** (`--auto` on 2.x)
+  - opencode runs with **`--auto` by default**
     (`DefaultSessionConfig().Yolo == true` → all tools auto-approved, no per-action
     confirmation). **This is intentional** — the product's purpose is to run an autonomous agent
-    in an isolated workspace. Server mode (`KWA_OPENCODE_USE_SERVER=true`, opencode 1.x only) adds per-action approval. The `SessionConfig` allow/deny
+    in an isolated workspace. The `SessionConfig` allow/deny
     tool/URL/path knobs in `internal/config/config.go` are the intended control surface.
   - Git runs with fixed sub-command verbs; the commit message is passed as `-m <msg>` (separate
     arg, not interpolated). `cwd`/repo path comes from the client, limited as the file manager's
@@ -389,13 +382,12 @@ patterns documented here rather than the documented patterns themselves.
   opencode JSONL, config files). No gob/YAML/pickle/native deserialization.
 
 ### Supply chain
-- `internal/opencodeinstaller` installs only the pinned opencode release, `PinnedVersion2` (2.x,
-  from npm) or `PinnedVersion` (1.x, from GitHub), and only a tarball whose **SHA-256** matches
-  `pinnedSHA256v2` (checked against npm's sha512 integrity) or `pinnedSHA256` (taken from the
-  GitHub release API's asset digests; opencode publishes no checksum files). A download that
-  doesn't match is refused. The release binary embeds the 2.x tarball, used only if the download
-  fails and it matches too; 1.x has no embedded copy. `Dockerfile.release` pins the same 2.x
-  version and digests and checks them with `sha256sum -c`; a test keeps the two in agreement.
+- `internal/opencodeinstaller` installs only the pinned opencode release, `PinnedVersion`
+  (from npm), and only a tarball whose **SHA-256** matches `pinnedSHA256` (checked against
+  npm's sha512 integrity). A download that doesn't match is refused. The release binary embeds
+  the tarball, used only if the download fails and it matches too. `Dockerfile.release` pins
+  the same version and digests and checks them with `sha256sum -c`; a test keeps the two in
+  agreement.
 - `internal/office` installs only LibreOffice `Version`, and only a download whose **SHA-256**
   matches `bundleSHA` (published by The Document Foundation). The URL is the permanent archive's,
   not `stable/`'s, which drops old releases. It unpacks 13 of the bundle's packages, checks that
@@ -442,9 +434,8 @@ patterns documented here rather than the documented patterns themselves.
   means: add a field (with JSON tag) in `internal/config/config.go`, append it in
   `BuildOpencodeArgs()`, default it in `DefaultSessionConfig()` if needed, add a `config_test.go`
   case, then mirror the field in `frontend/src/api/index.ts` and the relevant settings component.
-- **Backend output becomes internal `Event`s in two places:** `chat.ParseOpencodeJSONL()` for
-  per-turn `opencode run`, and `translateServerEvent()` (`internal/chat/server_stream.go`) for
-  `opencode serve`. New event types go in both *and* in the SSE dispatch loop
+- **Backend output becomes internal `Event`s in `chat.ParseOpencodeJSONL()`** (per-turn
+  `opencode run`). New event types go there *and* in the SSE dispatch loop
   (`internal/sessions`) *and* in the frontend store (`frontend/src/stores/chat.ts`).
 - **A new API endpoint:** handler in the relevant `internal/<pkg>`, registered in
   `registerRoutes()` in `cmd/server/main.go`, client function in `frontend/src/api/index.ts`.
@@ -544,8 +535,9 @@ names too.
   may drop the body of a 503 it doesn't recognise, so the browser gets the status with an empty
   body. Use another status, such as 409, when the UI shows the JSON `error` or reads a field
   (office preview, sharing, writing assistant). A 503 is fine where the status alone is the
-  signal: `requireOpencodeReady`, the startup migration and the guest app's "starting up".
-- **The release image** (`Dockerfile.release`) is based on `strongnetwork/cloud_editor_generic:2.3.9`
+  signal: `requireOpencodeReady`, the page of a workspace that can't start and the guest app's
+  "starting up".
+- **The release image** (`Dockerfile.release`) is based on `strongnetwork/cloud_editor_generic:2.3.12`
   and installs the binary as `/usr/bin/knowledge-worker-agent`, with `/usr/bin/chat`, its old name,
   as a link; `HEALTHCHECK` calls `/usr/bin/knowledge-worker-agent health` (which probes `/healthz`).
 
@@ -557,19 +549,19 @@ names too.
   the source under `frontend/`, then rebuild with `make frontend`. (It is **git-ignored / not
   committed**; run `make frontend` before `go build ./cmd/server`.)
 - `frontend/node_modules/`, `build/` — build artifacts (git-ignored).
-- `internal/defaults/skills/**` and `internal/defaults/plugin/**` — the only content the binary
-  still ships into `~/.config/opencode`. `skills/` holds the four document-handling skills
-  (pdf, docx, pptx, xlsx) that let the workspace read an attached file, and
-  `reports-and-dashboards`, which states the rules of the preview and shared files; `plugin/` holds OpenCode
-  plugins that run inside opencode and change its behaviour. Both install in every workspace
-  (central-config or not), are always overwritten rather than preserved on edit, and are kept out
-  of the defaults manifest so `RetireLegacyDefaults` can never remove them. The skills are
-  versioned here alongside the application that installs them.
+- `internal/defaults/skills/**` — the only content the binary still ships into
+  `~/.config/opencode`: the four document-handling skills (pdf, docx, pptx, xlsx) that let the
+  workspace read an attached file, and `reports-and-dashboards`, which states the rules of the
+  preview and shared files. They install in every workspace (central-config or not), are always
+  overwritten rather than preserved on edit, and are kept out of the defaults manifest so
+  `RetireLegacyDefaults` can never remove them. The skills are versioned here alongside the
+  application that installs them. `internal/defaults/plugin/**` holds the opencode 1.x plugins
+  earlier releases installed, kept only so `RemovePlugins` can recognise them.
 - Agents, product context and product-specific skills are **no longer shipped**. Central
   configuration assigns them; adding them back here would put the same content in every
   workspace on top of whatever an administrator assigned.
 - `~/Knowledge_Worker_Agent/.system/` (the database, its backups and the MCP API keys),
-  opencode's `opencode.json` and `~/.local/share/opencode/auth.json` —
+  opencode's `opencode.json` and its database —
   **runtime-managed** files written by the server or by opencode; never commit them.
 
 ---

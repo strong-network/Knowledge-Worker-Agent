@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -597,15 +598,11 @@ func TestHandleDeleteSession_DeletesOpencodeSession(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if raw, err := os.ReadFile(argsPath); err == nil {
+			// What follows names the server to send it to.
 			got := strings.Fields(string(raw))
 			want := []string{"session", "delete", "ses_from_row"}
-			if len(got) != len(want) {
-				t.Fatalf("opencode args = %v, want %v", got, want)
-			}
-			for i := range want {
-				if got[i] != want[i] {
-					t.Fatalf("opencode args = %v, want %v", got, want)
-				}
+			if len(got) < len(want) || !slices.Equal(got[:len(want)], want) {
+				t.Fatalf("opencode args = %v, want %v first", got, want)
 			}
 			return
 		}

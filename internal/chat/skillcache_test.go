@@ -13,16 +13,15 @@ import (
 	"time"
 
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/config"
-	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodeserver"
 )
 
 // countingSkills stubs the enumeration and reports how many times it ran, which
 // is the only way to tell "served from cache" from "asked opencode again".
-func countingSkills(t *testing.T, skills []opencodeserver.Skill, err error) *int32Counter {
+func countingSkills(t *testing.T, skills []Skill, err error) *int32Counter {
 	t.Helper()
 	c := &int32Counter{}
 	prev := listSkillsFn
-	listSkillsFn = func(context.Context, string) ([]opencodeserver.Skill, error) {
+	listSkillsFn = func(context.Context, string) ([]Skill, error) {
 		c.inc()
 		return skills, err
 	}
@@ -92,7 +91,7 @@ func mkdir(t *testing.T, path string) string {
 	return path
 }
 
-var oneSkill = []opencodeserver.Skill{{Name: "pdf", Description: "Work with PDFs", Content: "body"}}
+var oneSkill = []Skill{{Name: "pdf", Description: "Work with PDFs", Content: "body"}}
 
 func TestSkillCacheServesSecondCallWithoutAsking(t *testing.T) {
 	_, chats := chatWorkspace(t)
@@ -220,7 +219,7 @@ func TestSkillCacheFailedRefreshKeepsExistingEntry(t *testing.T) {
 		t.Fatal("warming call should succeed")
 	}
 	prev := listSkillsFn
-	listSkillsFn = func(context.Context, string) ([]opencodeserver.Skill, error) {
+	listSkillsFn = func(context.Context, string) ([]Skill, error) {
 		return nil, errors.New("connection refused")
 	}
 	t.Cleanup(func() { listSkillsFn = prev })
@@ -256,8 +255,7 @@ func TestSkillCacheUnknownWorkdirFallsBackToWorkspace(t *testing.T) {
 	workspace, _ := chatWorkspace(t)
 	calls := countingSkills(t, oneSkill, nil)
 
-	// A path that does not exist resolves to the workspace, matching what
-	// opencodeserver.canonicalDir does below this layer.
+	// A path that does not exist resolves to the workspace.
 	if _, ok := ListSkills(context.Background(), filepath.Join(workspace, "gone")); !ok {
 		t.Fatal("missing workdir should fall back, not fail")
 	}
@@ -277,7 +275,7 @@ func TestSkillCacheRevalidationIsSingleFlight(t *testing.T) {
 	entered := make(chan struct{}, 4)
 	calls := &int32Counter{}
 	prev := listSkillsFn
-	listSkillsFn = func(context.Context, string) ([]opencodeserver.Skill, error) {
+	listSkillsFn = func(context.Context, string) ([]Skill, error) {
 		calls.inc()
 		entered <- struct{}{}
 		<-release

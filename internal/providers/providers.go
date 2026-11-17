@@ -95,6 +95,11 @@ type Provider struct {
 	ReachabilityNote string `json:"reachabilityNote,omitempty"`
 	// ReachabilityCheckedAt is RFC 3339, empty when never probed.
 	ReachabilityCheckedAt string `json:"reachabilityCheckedAt,omitempty"`
+	// AcceptsKey marks a built-in with its own sign-in that also takes an API
+	// key, so its row offers both.
+	AcceptsKey bool `json:"acceptsKey,omitempty"`
+	// AuthMethod says how such a provider is signed in: "oauth" or "key".
+	AuthMethod string `json:"authMethod,omitempty"`
 	// CanSignOut reports whether this workspace can discard the provider's
 	// credentials itself.
 	CanSignOut bool `json:"canSignOut,omitempty"`
@@ -203,10 +208,18 @@ type Builtin struct {
 	AuthType AuthType
 	// Description says in one sentence what the provider gives the user.
 	Description string
+	// Help and HelpURL say where to get a key, for a built-in that takes one.
+	Help    string
+	HelpURL string
+	// AcceptsKey lets a built-in with its own sign-in take an API key as well.
+	AcceptsKey bool
 	// CheckAuth reports whether the user is signed in. It is a func so this
 	// package does not import the auth packages (which would be a cycle) and so
 	// tests can substitute it.
 	CheckAuth func() bool
+	// Method, when set, replaces CheckAuth for a built-in signed in more than
+	// one way: it reports how ("oauth", "key"), or "" when signed out.
+	Method func() string
 	// DiscoverModels optionally lists the models the provider can serve this
 	// workspace, as "provider/model" ids, in place of the vendor's catalogue.
 	//
@@ -287,21 +300,38 @@ func builtinRegistry(mode Mode, fallbackReason string) Registry {
 
 	out := make([]Provider, 0, len(list))
 	for _, b := range list {
-		ok := b.CheckAuth != nil && b.CheckAuth()
+		ok, method := b.auth()
 		p := Provider{
 			ID:            b.ID,
 			Label:         b.Label,
 			AuthType:      b.AuthType,
 			Authenticated: ok,
 			Builtin:       true,
+			Help:          b.Help,
+			HelpURL:       b.HelpURL,
 			Description:   b.Description,
+			AcceptsKey:    b.AcceptsKey,
+			AuthMethod:    method,
 		}
 		if !ok {
 			p.Reason = ReasonNotSignedIn
+			if b.AuthType == AuthUserKey {
+				p.Reason = ReasonNoKey
+			}
 		}
 		out = append(out, p)
 	}
 	return Registry{Mode: mode, Providers: out, FallbackReason: fallbackReason}
+}
+
+// auth reports whether the user is signed in to a built-in and, for one with
+// Method, how.
+func (b Builtin) auth() (bool, string) {
+	if b.Method != nil {
+		m := b.Method()
+		return m != "", m
+	}
+	return b.CheckAuth != nil && b.CheckAuth(), ""
 }
 
 // sortedIDs returns map keys in a deterministic order.

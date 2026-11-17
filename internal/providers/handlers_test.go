@@ -4,11 +4,13 @@
 package providers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/config"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/env/envtest"
@@ -206,6 +208,52 @@ func TestHandleSetKeyRejectsBuiltinAndManaged(t *testing.T) {
 			t.Errorf("credential removed for a managed provider: %v", rec.removed)
 		}
 	})
+}
+
+// OpenAI takes a key besides its ChatGPT sign-in, and Anthropic takes only a
+// key. Saving one drops the old reachability verdict, which described the
+// credential it replaced.
+func TestHandleSetKeyAcceptsKeyCapableBuiltins(t *testing.T) {
+	envtest.Clear(t, config.EnvCentralConfig)
+	ResetBuiltins()
+	t.Cleanup(ResetBuiltins)
+	RegisterBuiltin(Builtin{ID: "openai", AuthType: AuthChatGPTOAuth, AcceptsKey: true, Method: func() string { return "oauth" }})
+	RegisterBuiltin(Builtin{ID: "anthropic", AuthType: AuthUserKey, CheckAuth: func() bool { return false }})
+	resetReach(t)
+	store("openai", ReachUnreachable, "the ChatGPT sign-in was refused")
+	probed := make(chan string, 4)
+	SetDefaultProbe(func(_ context.Context, id string) error { probed <- id; return nil })
+	rec := newKeyRecorder(t)
+
+	for _, id := range []string{"openai", "anthropic"} {
+		if w := serve(http.MethodPost, "/api/providers/"+id+"/key", `{"key":"sk-abc"}`); w.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, want 200 (body %s)", id, w.Code, w.Body.String())
+		}
+		if rec.set[id] != "sk-abc" {
+			t.Errorf("%s: stored %q, want the key", id, rec.set[id])
+		}
+		// The new key is tested straight away.
+		select {
+		case got := <-probed:
+			if got != id {
+				t.Errorf("probed %q, want %q", got, id)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s: the new key was not tested", id)
+		}
+		if w := serve(http.MethodDelete, "/api/providers/"+id+"/key", ""); w.Code != http.StatusOK {
+			t.Fatalf("%s: delete status = %d, want 200", id, w.Code)
+		}
+	}
+	if Unreachable("openai") {
+		t.Error("the old verdict survived the new key")
+	}
+	if reachFor("openai").state != ReachOK {
+		t.Errorf("verdict = %q, want the new key's", reachFor("openai").state)
+	}
+	if len(rec.removed) != 2 {
+		t.Errorf("removed %v, want both keys", rec.removed)
+	}
 }
 
 func TestHandleSetKeyRejectsEmptyOrInvalidBody(t *testing.T) {

@@ -109,7 +109,7 @@ func TestStream_WaitReturnsOnContextCancel(t *testing.T) {
 }
 
 // A turn that ended at the agent's questions still waits on the owner; one
-// that ended on a permission request no longer can be answered.
+// that ended on a connector sign-in doesn't.
 func TestWaitingOnOwner(t *testing.T) {
 	const sid = "test-waiting"
 	defer Streams.Delete(sid)
@@ -131,9 +131,8 @@ func TestWaitingOnOwner(t *testing.T) {
 		{false, []string{"chunk", "question"}, true},
 		{true, []string{"chunk", "question", "usage", "title", "done"}, true},
 		{true, []string{"question", "chunk", "done"}, false},
-		{false, []string{"tool_call", "permission"}, true},
-		{true, []string{"permission", "usage", "done"}, false},
-		{false, []string{"permission", "permission_answered"}, false},
+		{false, []string{"tool_call", "mcp_auth_required"}, true},
+		{true, []string{"mcp_auth_required", "usage", "done"}, false},
 		{true, []string{"chunk", "usage", "done"}, false},
 	} {
 		frames(c.done, c.types...)

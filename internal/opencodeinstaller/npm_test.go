@@ -42,8 +42,8 @@ func serveNpm(t *testing.T, body []byte, pin []byte, paths *[]string) *httptest.
 	if err != nil {
 		t.Skipf("unsupported target: %v", err)
 	}
-	oldPins, oldRegistry := pinnedSHA256v2, npmRegistry
-	pinnedSHA256v2 = map[string]string{target: sha256Hex(pin)}
+	oldPins, oldRegistry := pinnedSHA256, npmRegistry
+	pinnedSHA256 = map[string]string{target: sha256Hex(pin)}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if paths != nil {
 			*paths = append(*paths, r.URL.Path)
@@ -51,16 +51,16 @@ func serveNpm(t *testing.T, body []byte, pin []byte, paths *[]string) *httptest.
 		w.Write(body)
 	}))
 	npmRegistry = srv.URL
-	t.Cleanup(func() { srv.Close(); pinnedSHA256v2, npmRegistry = oldPins, oldRegistry })
+	t.Cleanup(func() { srv.Close(); pinnedSHA256, npmRegistry = oldPins, oldRegistry })
 	return srv
 }
 
-func TestInstall_V2ComesFromNpm(t *testing.T) {
+func TestInstall_ComesFromNpm(t *testing.T) {
 	tgz := npmTarGz(t, "#!/bin/sh\necho 'opencode v2.2.5'\n")
 	var paths []string
 	srv := serveNpm(t, tgz, tgz, &paths)
 	dir := t.TempDir()
-	bin, err := Install(&bytes.Buffer{}, InstallOptions{InstallDir: dir, HTTPClient: srv.Client(), Major: 2})
+	bin, err := Install(&bytes.Buffer{}, InstallOptions{InstallDir: dir, HTTPClient: srv.Client()})
 	if err != nil {
 		t.Fatalf("Install: %v", err)
 	}
@@ -74,12 +74,12 @@ func TestInstall_V2ComesFromNpm(t *testing.T) {
 	}
 }
 
-func TestInstall_V2RejectsAMismatch(t *testing.T) {
+func TestInstall_RejectsAMismatchFromNpm(t *testing.T) {
 	genuine := npmTarGz(t, "#!/bin/sh\necho genuine\n")
 	srv := serveNpm(t, npmTarGz(t, "#!/bin/sh\necho tampered\n"), genuine, nil)
 	swapEmbedded(t, func(string) ([]byte, bool) { return nil, false })
 	dir := t.TempDir()
-	_, err := Install(&bytes.Buffer{}, InstallOptions{InstallDir: dir, HTTPClient: srv.Client(), Major: 2})
+	_, err := Install(&bytes.Buffer{}, InstallOptions{InstallDir: dir, HTTPClient: srv.Client()})
 	if err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
 		t.Fatalf("expected a checksum mismatch, got %v", err)
 	}
@@ -88,30 +88,27 @@ func TestInstall_V2RejectsAMismatch(t *testing.T) {
 	}
 }
 
-func TestEnsure_V2KeepsThePinnedVersionAndReplacesA1x(t *testing.T) {
+func TestEnsure_KeepsThePinnedVersionAndReplacesA1x(t *testing.T) {
 	var paths []string
 	tgz := npmTarGz(t, "#!/bin/sh\necho 'opencode v2.2.5'\n")
 	serveNpm(t, tgz, tgz, &paths)
 
 	current := fakeOpencode(t, "opencode v2.2.5")
-	res, err := Ensure(&bytes.Buffer{}, EnsureOptions{CurrentBin: current, InstallDir: t.TempDir(), Major: 2})
-	if err != nil || res.Installed || len(paths) != 0 || res.ToVersion != PinnedVersion2 {
+	res, err := Ensure(&bytes.Buffer{}, EnsureOptions{CurrentBin: current, InstallDir: t.TempDir()})
+	if err != nil || res.Installed || len(paths) != 0 || res.ToVersion != PinnedVersion {
 		t.Fatalf("pinned 2.x: %+v, %v, requests %v", res, err, paths)
 	}
 
-	res, err = Ensure(&bytes.Buffer{}, EnsureOptions{CurrentBin: fakeOpencode(t, "1.19.4"), InstallDir: t.TempDir(), Major: 2})
-	if err != nil || !res.Installed || res.FromVersion != "v1.19.4" || res.ToVersion != PinnedVersion2 {
+	res, err = Ensure(&bytes.Buffer{}, EnsureOptions{CurrentBin: fakeOpencode(t, "1.19.4"), InstallDir: t.TempDir()})
+	if err != nil || !res.Installed || res.FromVersion != "v1.19.4" || res.ToVersion != PinnedVersion {
 		t.Fatalf("1.x with 2.x asked for: %+v, %v", res, err)
 	}
 }
 
 func TestPinned(t *testing.T) {
-	if Pinned(0) != PinnedVersion || Pinned(1) != PinnedVersion || Pinned(2) != PinnedVersion2 {
-		t.Fatalf("Pinned = %s, %s, %s", Pinned(0), Pinned(1), Pinned(2))
-	}
 	for _, target := range []string{"linux-x64", "linux-x64-musl", "linux-arm64", "linux-arm64-musl"} {
-		if len(pinnedSHA256v2[target]) != 64 {
-			t.Errorf("no 2.x pin for %s", target)
+		if len(pinnedSHA256[target]) != 64 {
+			t.Errorf("no pin for %s", target)
 		}
 	}
 }

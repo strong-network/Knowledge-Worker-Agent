@@ -4,6 +4,7 @@
 package providers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -104,9 +105,15 @@ func HandleSetKey(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "could not store the key")
 		return
 	}
+	// The old verdict describes the credential the key replaced.
+	Forget(p.ID)
 	if onKeyChange != nil {
 		onKeyChange()
 	}
+	// Test the key now, as a sign-in is tested: a valid key for a provider the
+	// network refuses would otherwise read as connected until the first message
+	// failed.
+	go Probe(context.Background(), p.ID)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -144,11 +151,11 @@ func HandleRemoveKey(w http.ResponseWriter, r *http.Request) {
 // actually offers — an arbitrary id from the browser cannot inject an entry
 // into the credential store.
 func guardUserKey(p Provider) string {
-	if p.Builtin {
-		return "this provider uses its own sign-in flow"
-	}
 	if p.AuthType == AuthManaged {
 		return "this provider's key is provisioned by your administrator"
+	}
+	if p.AuthType != AuthUserKey && !p.AcceptsKey {
+		return "this provider uses its own sign-in flow"
 	}
 	return ""
 }

@@ -17,7 +17,6 @@ import EmptyState from './EmptyState.vue'
 import NewChatGreeting from './NewChatGreeting.vue'
 import PromptInput from './PromptInput.vue'
 import QuestionCard from './QuestionCard.vue'
-import PermissionCard from './PermissionCard.vue'
 import WorkspaceFilePanel from './WorkspaceFilePanel.vue'
 import TimerIcon from '../TimerIcon.vue'
 import { vTip } from '../../directives/tip'
@@ -418,11 +417,6 @@ onBeforeUnmount(() => {
           v-if="chatStore.currentQuestion"
           :question="chatStore.currentQuestion"
           @answer="chatStore.answerQuestion($event)"
-        />
-        <PermissionCard
-          v-if="chatStore.currentPermission"
-          :permission="chatStore.currentPermission"
-          @respond="chatStore.respondToPermission($event)"
         />
       </template>
         </div>

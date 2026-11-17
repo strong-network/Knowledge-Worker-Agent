@@ -214,10 +214,19 @@ func builtinBackedProvider(b Builtin, m providerMetaEntry) Provider {
 	if label == "" {
 		label = b.Label
 	}
-	ok := b.CheckAuth != nil && b.CheckAuth()
+	ok, method := b.auth()
 	description := strings.TrimSpace(m.Description)
 	if description == "" {
 		description = b.Description
+	}
+	// The artifact's help text and link win, each falling back to the
+	// built-in's own.
+	help, helpURL := strings.TrimSpace(m.Auth.Help), safeHelpURL(m.Auth.HelpURL)
+	if help == "" {
+		help = b.Help
+	}
+	if helpURL == "" {
+		helpURL = b.HelpURL
 	}
 	p := Provider{
 		ID:            b.ID,
@@ -225,13 +234,18 @@ func builtinBackedProvider(b Builtin, m providerMetaEntry) Provider {
 		AuthType:      b.AuthType,
 		Authenticated: ok,
 		Builtin:       true,
-		Help:          strings.TrimSpace(m.Auth.Help),
-		HelpURL:       safeHelpURL(m.Auth.HelpURL),
+		Help:          help,
+		HelpURL:       helpURL,
 		Presets:       m.Presets,
 		Description:   description,
+		AcceptsKey:    b.AcceptsKey,
+		AuthMethod:    method,
 	}
 	if !ok {
 		p.Reason = ReasonNotSignedIn
+		if b.AuthType == AuthUserKey {
+			p.Reason = ReasonNoKey
+		}
 	}
 	return p
 }

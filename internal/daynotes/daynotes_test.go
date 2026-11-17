@@ -197,7 +197,7 @@ func TestGenerateRefusesWhenTheAgentDidNotResolve(t *testing.T) {
 	stubRun(t, out, nil)
 
 	if _, err := Generate(context.Background(), "opencode", "some/model", msgs("hi", "there")); err == nil {
-		t.Error("expected a refusal when the title agent did not resolve")
+		t.Error("expected a refusal when the note agent did not resolve")
 	}
 }
 

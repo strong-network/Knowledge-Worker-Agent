@@ -10,7 +10,7 @@
 # Or:     make release
 
 # --- Frontend build ---
-FROM node:20-alpine AS frontend
+FROM node:22-alpine AS frontend
 WORKDIR /src/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 # --no-audit/--no-fund: --silent discards both reports anyway, and the audit
@@ -20,14 +20,13 @@ COPY frontend/ ./
 RUN npx vite build
 
 # --- opencode fallback asset ---
-# opencode 2.x, the version that runs by default, fetched at build time and
-# embedded into the chat binary as a *backup*. At runtime the installer still
-# downloads the pinned release from npm first; the embedded copy is used only
-# when that fails (no egress, proxy block, corrupt or altered download). Either
-# way the binary lands in the normal install dir (~/.opencode/bin/v2, or v2 in
-# KWA_OPENCODE_INSTALL_DIR). 1.x, set with KWA_OPENCODE_MAJOR=1, has no copy.
+# opencode, fetched at build time and embedded into the chat binary as a
+# *backup*. At runtime the installer still downloads the pinned release from
+# npm first; the embedded copy is used only when that fails (no egress, proxy
+# block, corrupt or altered download). Either way the binary lands in the
+# normal install dir (~/.opencode/bin/v2, or v2 in KWA_OPENCODE_INSTALL_DIR).
 #
-# The version and checksums must match PinnedVersion2 and pinnedSHA256v2 in
+# The version and checksums must match PinnedVersion and pinnedSHA256 in
 # internal/opencodeinstaller, which accepts only a matching embedded copy; a test
 # checks they agree. The build fails if the download doesn't match.
 FROM alpine:3.20 AS opencodeasset
@@ -127,7 +126,7 @@ RUN mkdir -p /out \
        | sha256sum -c -
 
 # --- Runtime ---
-FROM strongnetwork/cloud_editor_generic:2.3.11
+FROM strongnetwork/cloud_editor_generic:2.3.12
 
 USER root
 # The chat server owns workspace startup, replacing the base image's own.

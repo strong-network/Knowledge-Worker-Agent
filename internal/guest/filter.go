@@ -31,10 +31,6 @@ func Frame(ev map[string]any) (map[string]any, bool) {
 		return pick(ev, "type", "call_id", "tool", "success"), true
 	case "tool_blocked":
 		return pick(ev, "type", "call_id", "tool"), true
-	case "permission":
-		return map[string]any{"type": "waiting_on_owner", "reason": "approval"}, true
-	case "permission_answered":
-		return pick(ev, "type", "permission_id", "response", "author_id", "author_name"), true
 	case "mcp_auth_required":
 		return map[string]any{"type": "waiting_on_owner", "reason": "connector"}, true
 	case "error":

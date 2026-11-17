@@ -14,8 +14,6 @@ import (
 
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/config"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/db"
-	"github.com/strong-network/Knowledge-Worker-Agent/internal/env/envtest"
-	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodeserver"
 )
 
 // stubSkills points the skill lookup at a fixed list for the duration of a
@@ -23,10 +21,10 @@ import (
 // skill cache: changing what the enumeration returns invalidates anything an
 // earlier test cached, and a stale entry would otherwise be served instead of
 // the stub.
-func stubSkills(t *testing.T, skills []opencodeserver.Skill, err error) {
+func stubSkills(t *testing.T, skills []Skill, err error) {
 	t.Helper()
 	prev := listSkillsFn
-	listSkillsFn = func(context.Context, string) ([]opencodeserver.Skill, error) {
+	listSkillsFn = func(context.Context, string) ([]Skill, error) {
 		return skills, err
 	}
 	InvalidateSkillCache()
@@ -37,7 +35,7 @@ func stubSkills(t *testing.T, skills []opencodeserver.Skill, err error) {
 }
 
 func TestListSkillsOmitsUndescribedAndSorts(t *testing.T) {
-	stubSkills(t, []opencodeserver.Skill{
+	stubSkills(t, []Skill{
 		{Name: "ux-writing", Description: "Citrix UX writing guidelines", Content: "body"},
 		{Name: "internal-only", Description: "  ", Content: "body"},
 		{Name: "pdf", Description: "Work with PDFs", Content: "body"},
@@ -61,7 +59,7 @@ func TestListSkillsOmitsUndescribedAndSorts(t *testing.T) {
 // A workspace with no skills and a workspace we could not ask must not look the
 // same to the browser: the picker shows different copy for each.
 func TestListSkillsDistinguishesEmptyFromUnavailable(t *testing.T) {
-	stubSkills(t, []opencodeserver.Skill{}, nil)
+	stubSkills(t, []Skill{}, nil)
 	list, available := ListSkills(context.Background(), "/tmp")
 	if !available {
 		t.Fatal("an empty workspace is still an answer; expected available=true")
@@ -81,7 +79,7 @@ func TestListSkillsDistinguishesEmptyFromUnavailable(t *testing.T) {
 }
 
 func TestResolveForcedSkillFindsBodyAndLocation(t *testing.T) {
-	stubSkills(t, []opencodeserver.Skill{
+	stubSkills(t, []Skill{
 		{Name: "pdf", Description: "PDFs", Content: "pdf body", Location: "/skills/pdf/SKILL.md"},
 		{Name: "ux-writing", Description: "UX", Content: "ux body", Location: "/skills/ux-writing/SKILL.md"},
 	}, nil)
@@ -99,7 +97,7 @@ func TestResolveForcedSkillFindsBodyAndLocation(t *testing.T) {
 }
 
 func TestResolveForcedSkillEmptyNameForcesNothing(t *testing.T) {
-	stubSkills(t, []opencodeserver.Skill{{Name: "pdf", Description: "PDFs", Content: "body"}}, nil)
+	stubSkills(t, []Skill{{Name: "pdf", Description: "PDFs", Content: "body"}}, nil)
 	if _, ok := resolveForcedSkill(context.Background(), "/tmp", "  "); ok {
 		t.Fatal("an unarmed turn must not force anything")
 	}
@@ -108,7 +106,7 @@ func TestResolveForcedSkillEmptyNameForcesNothing(t *testing.T) {
 // Losing a skill between arming and sending must not cost the user their
 // message: the turn still goes out, carrying an explanation instead.
 func TestResolveForcedSkillMissingStillSends(t *testing.T) {
-	stubSkills(t, []opencodeserver.Skill{{Name: "pdf", Description: "PDFs", Content: "body"}}, nil)
+	stubSkills(t, []Skill{{Name: "pdf", Description: "PDFs", Content: "body"}}, nil)
 
 	skill, ok := resolveForcedSkill(context.Background(), "/tmp", "deleted-skill")
 	if !ok {
@@ -123,8 +121,7 @@ func TestResolveForcedSkillMissingStillSends(t *testing.T) {
 	}
 }
 
-// Backend 1 of 2 (CLI, `opencode run` per turn): the forced skill must reach
-// the spawned process's prompt argument.
+// The forced skill must reach the prompt of the turn's `opencode run`.
 func TestRunStreamCLIBackendForcesSkill(t *testing.T) {
 	tmp := t.TempDir()
 	if err := db.Init(filepath.Join(tmp, "test.db")); err != nil {
@@ -134,12 +131,11 @@ func TestRunStreamCLIBackendForcesSkill(t *testing.T) {
 
 	argsPath := filepath.Join(tmp, "args.txt")
 	bin := filepath.Join(tmp, "opencode")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argsPath + "\n"
+	script := "#!/bin/sh\n[ \"$1\" = run ] || exit 0\n{ printf '%s\\n' \"$@\"; cat; } > " + argsPath + "\n"
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	envtest.Clear(t, "KWA_OPENCODE_USE_SERVER")
 	t.Setenv("KWA_OPENCODE_AUTO_UPDATE", "false")
 	t.Setenv("KWA_OPENCODE_INSTALL_DIR", filepath.Join(tmp, "install"))
 	prevEnsured := opencodeEnsured
@@ -150,7 +146,7 @@ func TestRunStreamCLIBackendForcesSkill(t *testing.T) {
 	config.Workspace, config.OpencodeBin = tmp, bin
 	t.Cleanup(func() { config.Workspace, config.OpencodeBin = prevWorkspace, prevBin })
 
-	stubSkills(t, []opencodeserver.Skill{{
+	stubSkills(t, []Skill{{
 		Name:        "ux-writing",
 		Description: "Citrix UX writing guidelines",
 		Content:     "Always use sentence case.",
@@ -185,7 +181,7 @@ func TestRunStreamCLIBackendForcesSkill(t *testing.T) {
 	}
 }
 
-// An unarmed turn on the CLI backend must carry no skill block at all — the
+// An unarmed turn must carry no skill block at all — the
 // default has to stay "nothing is forced".
 func TestRunStreamCLIBackendWithoutSkillIsUnchanged(t *testing.T) {
 	tmp := t.TempDir()
@@ -196,11 +192,10 @@ func TestRunStreamCLIBackendWithoutSkillIsUnchanged(t *testing.T) {
 
 	argsPath := filepath.Join(tmp, "args.txt")
 	bin := filepath.Join(tmp, "opencode")
-	if err := os.WriteFile(bin, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > "+argsPath+"\n"), 0o755); err != nil {
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n[ \"$1\" = run ] || exit 0\n{ printf '%s\\n' \"$@\"; cat; } > "+argsPath+"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	envtest.Clear(t, "KWA_OPENCODE_USE_SERVER")
 	t.Setenv("KWA_OPENCODE_AUTO_UPDATE", "false")
 	t.Setenv("KWA_OPENCODE_INSTALL_DIR", filepath.Join(tmp, "install"))
 	prevEnsured := opencodeEnsured
@@ -223,47 +218,8 @@ func TestRunStreamCLIBackendWithoutSkillIsUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(args), "forced skill") {
+	if !strings.Contains(string(args), "just a question") || strings.Contains(string(args), "forced skill") {
 		t.Fatalf("an unarmed turn must not carry a skill block; got:\n%s", args)
-	}
-}
-
-// Backend 2 of 2 (`opencode serve`): the request handed to the server carries
-// the same forced-skill block. Asserted on the request builder because a real
-// server process is not available under test.
-func TestServerBackendTurnRequestForcesSkill(t *testing.T) {
-	tmp := t.TempDir()
-	if err := db.Init(filepath.Join(tmp, "test.db")); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-
-	prevWorkspace := config.Workspace
-	config.Workspace = tmp
-	t.Cleanup(func() { config.Workspace = prevWorkspace })
-
-	cfg := config.SessionConfig{Backend: config.BackendOpencode, Workdir: tmp}
-	forced := []config.ForcedSkill{{
-		Name:     "ux-writing",
-		Content:  "Always use sentence case.",
-		Location: filepath.Join(tmp, "skills", "ux-writing", "SKILL.md"),
-	}}
-
-	req := buildServerTurnRequest("srv-skill", "write an error message", cfg, forced, Author{})
-	for _, want := range []string{
-		"[System — forced skill]",
-		`<skill_content name="ux-writing">`,
-		"Always use sentence case.",
-		"write an error message",
-	} {
-		if !strings.Contains(req.Prompt, want) {
-			t.Fatalf("server backend prompt missing %q; got:\n%s", want, req.Prompt)
-		}
-	}
-
-	plain := buildServerTurnRequest("srv-plain", "just a question", cfg, nil, Author{})
-	if strings.Contains(plain.Prompt, "forced skill") {
-		t.Fatalf("an unarmed turn must not carry a skill block; got:\n%s", plain.Prompt)
 	}
 }
 

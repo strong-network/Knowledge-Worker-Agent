@@ -98,216 +98,30 @@ func TestSnapshotLoginDefaults(t *testing.T) {
 	}
 }
 
-// TestCheckStatusAndHandler reads a stored GitHub Copilot credential from the
-// credential store, without running opencode.
+// CheckStatus asks opencode's credential store, without running opencode.
 func TestCheckStatusAndHandler(t *testing.T) {
-	store := tempStore(t)
-	if err := os.MkdirAll(filepath.Dir(store), 0o700); err != nil {
+	s := stubCredentials(t)
+	if CheckStatus().Authenticated {
+		t.Fatal("authenticated with no credential")
+	}
+	if err := storeCopilotToken("gho_x"); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(store, []byte(`{"github-copilot":{"type":"oauth","access":"gho_x","refresh":"gho_x","expires":0}}`), 0o600); err != nil {
-		t.Fatal(err)
+	if v := s.values[Provider]; v["type"] != "oauth" || v["access"] != "gho_x" || v["methodID"] != "device" {
+		t.Errorf("stored %v", v)
 	}
-	old := OpencodeBin
-	OpencodeBin = "/nonexistent/opencode"
-	defer func() { OpencodeBin = old }()
-
 	st := CheckStatus()
-	if !st.Authenticated {
-		t.Fatalf("expected authenticated status, got %+v", st)
+	if !st.Authenticated || st.Provider != Provider {
+		t.Fatalf("CheckStatus = %+v", st)
 	}
-	if st.Provider != Provider {
-		t.Errorf("expected provider %q, got %q", Provider, st.Provider)
-	}
-
 	rec := httptest.NewRecorder()
 	HandleStatus(rec, httptest.NewRequest(http.MethodGet, "/api/opencode/auth/status", nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
-	}
 	var got Status
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatalf("decode: %v", err)
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || rec.Code != http.StatusOK || !got.Authenticated {
+		t.Fatalf("handler: %d %s", rec.Code, rec.Body.String())
 	}
-	if !got.Authenticated {
-		t.Errorf("handler should report authenticated, got %+v", got)
-	}
-}
-
-func TestCheckStatus_NotAuthenticated(t *testing.T) {
-	store := tempStore(t)
-	if CheckStatus().Authenticated {
-		t.Fatal("expected not authenticated with no credential store")
-	}
-	if err := os.MkdirAll(filepath.Dir(store), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(store, []byte(`{"anthropic":{"type":"api","key":"sk-x"},"github-copilot":{"type":"oauth","access":""}}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if CheckStatus().Authenticated {
-		t.Fatal("expected not authenticated with only another provider and an empty Copilot entry")
-	}
-}
-
-// TestFetchModelsFor_PassesProvider verifies FetchModelsFor shells out to
-// `opencode models <provider>` for the requested provider (github-copilot or
-// google-vertex) and parses its output. A fake opencode echoes provider-scoped
-// model ids so we can assert the provider argument is threaded through.
-func TestFetchModelsFor_PassesProvider(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell-script stub not supported on windows")
-	}
-	bin := writeFakeOpencode(t, `#!/bin/sh
-if [ "$1" = "models" ]; then
-  printf '%s/claude-sonnet-4.6\n' "$2"
-  printf '%s/claude-opus-4.1\n' "$2"
-  exit 0
-fi
-exit 1
-`)
-	old := OpencodeBin
-	OpencodeBin = bin
-	defer func() { OpencodeBin = old }()
-
-	for _, provider := range []string{"github-copilot", "google-vertex"} {
-		got, err := FetchModelsFor(provider)
-		if err != nil {
-			t.Fatalf("FetchModelsFor(%q): %v", provider, err)
-		}
-		want := provider + "/claude-sonnet-4.6"
-		found := false
-		for _, m := range got {
-			if m == want {
-				found = true
-			}
-			if !contains(m, provider+"/") {
-				t.Errorf("FetchModelsFor(%q) returned foreign model %q", provider, m)
-			}
-		}
-		if !found {
-			t.Errorf("FetchModelsFor(%q) = %v, want to contain %q", provider, got, want)
-		}
-	}
-}
-
-func writeFakeOpencode(t *testing.T, script string) string {
-	t.Helper()
-	dir := t.TempDir()
-	bin := filepath.Join(dir, "opencode")
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
-		t.Fatalf("write fake opencode: %v", err)
-	}
-	return bin
-}
-
-func contains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
-}
-
-func TestOpencodeAuthPath_XDG(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", "/tmp/xdgtest")
-	got := opencodeAuthPath()
-	want := filepath.Join("/tmp/xdgtest", "opencode", "auth.json")
-	if got != want {
-		t.Errorf("opencodeAuthPath() = %q, want %q", got, want)
-	}
-}
-
-func TestWriteOpencodeToken(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", dir)
-
-	// Seed an existing unrelated provider to confirm it's preserved.
-	authPath := filepath.Join(dir, "opencode", "auth.json")
-	if err := os.MkdirAll(filepath.Dir(authPath), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	seed := `{"openai":{"type":"api","key":"sk-test"}}`
-	if err := os.WriteFile(authPath, []byte(seed), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := writeOpencodeToken("gho_TESTTOKEN"); err != nil {
-		t.Fatalf("writeOpencodeToken: %v", err)
-	}
-
-	raw, err := os.ReadFile(authPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var creds map[string]map[string]any
-	if err := json.Unmarshal(raw, &creds); err != nil {
-		t.Fatalf("auth.json not valid JSON: %v", err)
-	}
-	// github-copilot credential written in the expected shape.
-	gc, ok := creds[Provider]
-	if !ok {
-		t.Fatalf("github-copilot credential missing: %v", creds)
-	}
-	if gc["type"] != "oauth" || gc["access"] != "gho_TESTTOKEN" || gc["refresh"] != "gho_TESTTOKEN" {
-		t.Errorf("unexpected credential: %+v", gc)
-	}
-	// Existing provider preserved.
-	if _, ok := creds["openai"]; !ok {
-		t.Errorf("existing provider was dropped: %v", creds)
-	}
-	// File perms are 0600.
-	info, err := os.Stat(authPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Errorf("auth.json perms = %o, want 600", perm)
-	}
-}
-
-func TestGitHubToken(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", dir)
-
-	// No auth.json yet → empty.
-	if got := GitHubToken(); got != "" {
-		t.Errorf("expected empty token with no auth.json, got %q", got)
-	}
-
-	// Write a credential store with a github-copilot access token.
-	authPath := filepath.Join(dir, "opencode", "auth.json")
-	if err := os.MkdirAll(filepath.Dir(authPath), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	creds := map[string]any{
-		Provider: map[string]any{"type": "oauth", "access": "gho_abc123"},
-		"openai": map[string]any{"type": "api", "key": "sk-x"},
-	}
-	data, _ := json.Marshal(creds)
-	if err := os.WriteFile(authPath, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	if got := GitHubToken(); got != "gho_abc123" {
-		t.Errorf("GitHubToken() = %q, want gho_abc123", got)
-	}
-}
-
-func TestGitHubToken_MissingProvider(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", dir)
-	authPath := filepath.Join(dir, "opencode", "auth.json")
-	if err := os.MkdirAll(filepath.Dir(authPath), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	// Only a non-github provider present.
-	if err := os.WriteFile(authPath, []byte(`{"openai":{"type":"api","key":"sk-x"}}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if got := GitHubToken(); got != "" {
-		t.Errorf("expected empty token when github-copilot absent, got %q", got)
+	if err := SignOut(); err != nil || CheckStatus().Authenticated {
+		t.Fatalf("still signed in after SignOut: %v", err)
 	}
 }
 
@@ -407,4 +221,23 @@ func TestLastMeaningfulLine(t *testing.T) {
 	if !strings.HasSuffix(got, "…") {
 		t.Errorf("truncated detail should end with an ellipsis, got %q", got)
 	}
+}
+
+func writeFakeOpencode(t *testing.T, script string) string {
+	t.Helper()
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "opencode")
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake opencode: %v", err)
+	}
+	return bin
+}
+
+func contains(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
 }

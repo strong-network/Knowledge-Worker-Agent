@@ -54,6 +54,40 @@ func TestBuiltinRegistryReportsUnauthenticatedReason(t *testing.T) {
 	}
 }
 
+// A built-in signed in more than one way says which, and its own help reaches
+// the row. A built-in that only takes a key reports a missing key.
+func TestBuiltinRegistryReportsHowABuiltinIsSignedIn(t *testing.T) {
+	ResetBuiltins()
+	t.Cleanup(ResetBuiltins)
+	method := "key"
+	RegisterBuiltin(Builtin{
+		ID: "openai", AuthType: AuthChatGPTOAuth, AcceptsKey: true,
+		Help: "h", HelpURL: "https://example.com/keys",
+		// Method decides; CheckAuth is not consulted.
+		CheckAuth: func() bool { return false },
+		Method:    func() string { return method },
+	})
+	RegisterBuiltin(Builtin{ID: "anthropic", AuthType: AuthUserKey, CheckAuth: func() bool { return false }})
+
+	reg := builtinRegistry(ModeBuiltin, "")
+	p := reg.Providers[0]
+	if !p.Authenticated || p.AuthMethod != "key" || !p.AcceptsKey {
+		t.Errorf("got authenticated=%v method=%q acceptsKey=%v, want true/key/true", p.Authenticated, p.AuthMethod, p.AcceptsKey)
+	}
+	if p.Help != "h" || p.HelpURL != "https://example.com/keys" {
+		t.Errorf("help = %q %q, want the built-in's", p.Help, p.HelpURL)
+	}
+	if k := reg.Providers[1]; k.Authenticated || k.Reason != ReasonNoKey {
+		t.Errorf("key-only built-in: authenticated=%v reason=%q, want false/%q", k.Authenticated, k.Reason, ReasonNoKey)
+	}
+
+	method = ""
+	p = builtinRegistry(ModeBuiltin, "").Providers[0]
+	if p.Authenticated || p.AuthMethod != "" || p.Reason != ReasonNotSignedIn {
+		t.Errorf("signed out: authenticated=%v method=%q reason=%q", p.Authenticated, p.AuthMethod, p.Reason)
+	}
+}
+
 func TestRegistryAuthenticated(t *testing.T) {
 	reg := Registry{Providers: []Provider{
 		{ID: "a", Authenticated: false},

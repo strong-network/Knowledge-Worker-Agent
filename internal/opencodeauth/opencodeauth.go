@@ -5,14 +5,10 @@
 // CLI (github.com/anomalyco/opencode). This is the only sign-in flow — it
 // authenticates opencode's github-copilot provider.
 //
-// opencode stores provider credentials in ~/.local/share/opencode/auth.json and
-// exposes them through `opencode auth login`/`opencode auth list`. The login
-// command is interactive: it prints a github.com/login/device URL plus a
-// one-time code and then blocks until the user authorizes in their browser
-// (the GitHub OAuth *device flow*). There is no headless/token login for the
-// github-copilot provider, so we drive `opencode auth login --provider
-// github-copilot` over a PTY, scrape the URL + code from its output, surface
-// them to the web UI, and poll until the flow completes.
+// KWA runs GitHub's OAuth device flow itself: it shows the user the
+// github.com/login/device URL and one-time code, polls until they authorize,
+// and stores the token through opencode's credential API. API keys and the
+// ChatGPT sign-in go through the same API.
 //
 // All process execution uses exec.Command with an argument vector (never a
 // shell), consistent with the rest of the codebase.
@@ -26,8 +22,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -35,7 +29,6 @@ import (
 
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/config"
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/env"
-	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodev2"
 )
 
 // Provider is the opencode provider id for GitHub Copilot. opencode keys its
@@ -98,9 +91,9 @@ func HandleStatus(w http.ResponseWriter, _ *http.Request) {
 // which wedged sign-in on "Starting sign-in…".
 //
 // Instead we now run the GitHub OAuth **device flow ourselves** against GitHub's
-// public HTTP endpoints (no PTY, no TUI), then write the resulting token into
-// opencode's credential store (auth.json) in the format opencode expects. This
-// is fully deterministic and version-independent.
+// public HTTP endpoints (no PTY, no TUI), then store the resulting token as
+// opencode's credential, in the format opencode expects. This is fully
+// deterministic and version-independent.
 
 // githubClientID is the GitHub OAuth client id used for the device flow.
 //
@@ -108,7 +101,7 @@ func HandleStatus(w http.ResponseWriter, _ *http.Request) {
 // client id yields a token opencode's github-copilot provider rejects. The
 // value below is the client id opencode itself uses for its device-flow login
 // (see anomalyco/opencode: packages/opencode/src/plugin/github-copilot/copilot.ts,
-// const CLIENT_ID), so the token we obtain and write to auth.json is accepted
+// const CLIENT_ID), so the token we obtain and store is accepted
 // by opencode. It is a public client id; the device flow needs no client
 // secret. Overridable via KWA_GITHUB_CLIENT_ID.
 func githubClientID() string {
@@ -375,7 +368,7 @@ func pollForToken(ctx context.Context, dc *deviceCodeResp) {
 			if tok == "" {
 				continue // authorization_pending
 			}
-			if err := writeOpencodeToken(tok); err != nil {
+			if err := storeCopilotToken(tok); err != nil {
 				log.Printf("[opencodeauth] token received but saving credential failed: %v", err)
 				finish(false, "signed in, but saving the credential failed: "+err.Error())
 				return
@@ -384,7 +377,7 @@ func pollForToken(ctx context.Context, dc *deviceCodeResp) {
 			login.output.WriteString("Authorized. Credential saved.\n")
 			login.err = ""
 			login.mu.Unlock()
-			log.Printf("[opencodeauth] token received and written to %s", opencodeAuthPath())
+			log.Printf("[opencodeauth] token received and stored")
 			finish(true, "")
 			return
 		}
@@ -443,83 +436,14 @@ func requestToken(deviceCode string) (string, time.Duration, error) {
 	}
 }
 
-// opencodeAuthPath returns the path to opencode's credential store, honoring
-// XDG_DATA_HOME (default ~/.local/share/opencode/auth.json).
-func opencodeAuthPath() string {
-	base := strings.TrimSpace(os.Getenv("XDG_DATA_HOME"))
-	if base == "" {
-		home, err := os.UserHomeDir()
-		if err != nil || home == "" {
-			home = "/home/developer"
-		}
-		base = filepath.Join(home, ".local", "share")
-	}
-	return filepath.Join(base, "opencode", "auth.json")
-}
-
-// DataDir returns opencode's data folder, which holds its credential files.
-func DataDir() string { return filepath.Dir(opencodeAuthPath()) }
-
-// GitHubToken returns the stored github-copilot access token from opencode's
-// credential store (auth.json), or "" if none is present or the store is
-// unreadable. This is the same token obtained via the device-flow login; it is
-// used to authenticate the hosted GitHub MCP server via a bearer header (that
-// server does not support the OAuth dynamic-client-registration flow).
-func GitHubToken() string {
-	raw, err := os.ReadFile(opencodeAuthPath())
-	if err != nil || len(raw) == 0 {
-		return ""
-	}
-	var creds map[string]any
-	if err := json.Unmarshal(raw, &creds); err != nil {
-		return ""
-	}
-	entry, _ := creds[Provider].(map[string]any)
-	if entry == nil {
-		return ""
-	}
-	access, _ := entry["access"].(string)
-	return strings.TrimSpace(access)
-}
-
-// writeOpencodeToken merges a github-copilot oauth credential into opencode's
-// auth.json (preserving any other providers) with 0600 perms.
-func writeOpencodeToken(token string) error {
-	path := opencodeAuthPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	creds := map[string]any{}
-	if raw, err := os.ReadFile(path); err == nil && len(raw) > 0 {
-		_ = json.Unmarshal(raw, &creds) // best-effort; overwrite on parse failure
-	}
-	creds[Provider] = map[string]any{
-		"type":    "oauth",
-		"access":  token,
-		"refresh": token,
-		"expires": 0,
-	}
-	data, err := json.MarshalIndent(creds, "", "  ")
-	if err != nil {
-		return err
-	}
-	// Write atomically: temp file in the same dir, then rename.
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return err
-	}
-	// 2.x reads its own store (see opencodev2/credentials.go).
-	if opencodev2.Enabled() {
-		ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
-		defer cancel()
-		return opencodev2.SetCredential(ctx, Provider, "OAuth", map[string]any{
-			"type": "oauth", "methodID": "device", "access": token, "refresh": token, "expires": 0,
-		})
-	}
-	return nil
+// storeCopilotToken stores the device flow's token as opencode's
+// github-copilot credential, replacing the one it had.
+func storeCopilotToken(token string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+	defer cancel()
+	return setCredential(ctx, Provider, "OAuth", map[string]any{
+		"type": "oauth", "methodID": "device", "access": token, "refresh": token, "expires": 0,
+	})
 }
 
 func firstNonEmptyLine(s string) string {

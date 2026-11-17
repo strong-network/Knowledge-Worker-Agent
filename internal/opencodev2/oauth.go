@@ -73,24 +73,32 @@ func OAuthIntegration(ctx context.Context, integrationID, directory string) ([]O
 	return resp.Data.Methods, resp.Data.Connections, nil
 }
 
-// HasOAuthConnection reports whether OpenCode has an OAuth connection that
-// does not currently report an authentication failure. It never retrieves the
-// underlying credential value.
-func HasOAuthConnection(ctx context.Context, integrationID, directory string) (bool, error) {
+// ConnectionMethod reports how an integration is signed in: "oauth" for an
+// OAuth connection that does not report an authentication failure, "key" for
+// an API key, or "" for neither. An OAuth connection wins over a key, because a
+// sign-in removes the key it replaces and a leftover key is the stale one. It
+// never retrieves the underlying credential value.
+func ConnectionMethod(ctx context.Context, integrationID, directory string) (string, error) {
 	_, connections, err := OAuthIntegration(ctx, integrationID, directory)
 	if err != nil {
-		return false, err
+		return "", err
 	}
+	method := ""
 	for _, connection := range connections {
-		if connection.Type != "credential" || connection.Method != "oauth" {
+		if connection.Type != "credential" {
 			continue
 		}
-		if connection.Status != nil && connection.Status.Status == "needs_auth" {
-			continue
+		switch connection.Method {
+		case "oauth":
+			if connection.Status != nil && connection.Status.Status == "needs_auth" {
+				continue
+			}
+			return "oauth", nil
+		case "key":
+			method = "key"
 		}
-		return true, nil
 	}
-	return false, nil
+	return method, nil
 }
 
 // StartOAuth asks OpenCode to begin one of the integration's native OAuth

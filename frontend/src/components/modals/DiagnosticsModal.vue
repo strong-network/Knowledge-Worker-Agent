@@ -79,7 +79,6 @@ const NO_PROJECT = 'No central configuration: this workspace has no project set 
 const NO_COMMIT = "Unknown: the source isn't a git repository of its own"
 const STATUS_UNCHECKED = "Connection status hasn't been checked yet."
 const runningFor = (r: DiagnosticsReport) => `${fmtDuration(r.app.uptime_seconds)} (since ${fmtTime(r.app.started_at)})`
-const backendLabel = (r: DiagnosticsReport) => (r.app.backend === 'serve' ? 'As a server' : 'Once per turn')
 const pinWarning = (r: DiagnosticsReport) => (r.opencode.matches_pin ? '' : `⚠ Expected ${r.opencode.pinned}`)
 const signedIn = (authenticated: boolean) => (authenticated ? 'signed in' : 'not signed in')
 const connectorsSummary = (k: DiagnosticsReport['connectors']) =>
@@ -239,7 +238,6 @@ function reportText(r: DiagnosticsReport, problems: string[]): string {
     ['Built', r.app.build_time],
     ['Status', statusLabel.value],
     ['Running for', runningFor(r)],
-    ['Chats run opencode', backendLabel(r)],
   ])
   section('opencode')
   rows([
@@ -433,7 +431,6 @@ function refreshAll() {
             <dt>Built</dt><dd>{{ report.app.build_time }}</dd>
             <dt>Status</dt><dd :class="{ 'diag-bad': report.app.status !== 'ready' }">{{ statusLabel }}</dd>
             <dt>Running for</dt><dd>{{ runningFor(report) }}</dd>
-            <dt>Chats run opencode</dt><dd>{{ backendLabel(report) }}</dd>
           </dl>
         </section>
 

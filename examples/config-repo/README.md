@@ -41,6 +41,10 @@ addresses, so they work only once you point them at real servers.
    | `KWA_PROJECT_ID` | `proj_team` |
    | `KWA_CENTRAL_CONFIG` | `true` |
 
+   If the configuration is a folder of a larger repository, also set
+   `KWA_CONFIG_REPO_SUBDIR` to that folder's path in the repository, such as
+   `config`. Only that folder is checked out.
+
 3. Check the log. At startup it shows the project and what it wrote:
 
    ```text

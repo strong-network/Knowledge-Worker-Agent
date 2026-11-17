@@ -12,21 +12,17 @@
 // deciding what a user sees. That bundle is retired — see RetireLegacyDefaults,
 // which removes it from workspaces that already have it.
 //
-// Two things still ship, because they are platform capability rather than
-// content an administrator curates:
+// What still ships is platform capability rather than content an
+// administrator curates: the document-handling skills (skills/: pdf, docx,
+// pptx, xlsx). Reading an attached document is a baseline expectation of the
+// product, not a Citrix opinion. With them, the reports-and-dashboards skill:
+// it states the rules of the product's own preview and shared files, so a
+// report works in both as written. Central configuration can assign its own
+// copy, which hides this one. They install in every workspace, centrally
+// managed or not.
 //
-//   - plugin/ — OpenCode plugins that keep chat working (see InstallPlugins).
-//   - skills/ — the document-handling skills (pdf, docx, pptx, xlsx). Reading
-//     an attached document is a baseline expectation of the product, not a
-//     Citrix opinion, and pdf-guard.js actively directs the model to the `pdf`
-//     skill when it drops an attachment the provider cannot accept. Leaving
-//     that skill to the config repo would mean a workspace whose guard
-//     recommends a capability it does not have. With them, the
-//     reports-and-dashboards skill: it states the rules of the product's own
-//     preview and shared files, so a report works in both as written. Central
-//     configuration can assign its own copy, which hides this one.
-//
-// Both install in every workspace, centrally managed or not.
+// plugin/ holds the opencode 1.x plugins earlier builds installed. They are
+// embedded only so RemovePlugins can recognise our copies and remove them.
 package defaults
 
 import (
@@ -179,12 +175,11 @@ func treePaths(fsys fs.FS, root string) map[string]bool {
 //
 // These are the floor: the workspace's ability to read a PDF, Word, PowerPoint
 // or Excel file the user attached. Unlike the retired content bundle they
-// install in every workspace, including a centrally managed one, for the same
-// reason InstallPlugins does — a workspace on central config runs the same
-// OpenCode against the same providers and needs the same baseline to be
-// useful. An administrator who ships their own version of one of these simply
-// overrides it from the platform config dir, which OpenCode resolves above the
-// user's Global.
+// install in every workspace, including a centrally managed one: a workspace
+// on central config runs the same OpenCode against the same providers and
+// needs the same baseline to be useful. An administrator who ships their own
+// version of one of these simply overrides it from the platform config dir,
+// which OpenCode resolves above the user's Global.
 func InstallSkills(w io.Writer, targetDir string) error {
 	if strings.TrimSpace(targetDir) == "" {
 		return fmt.Errorf("install opencode skills: empty target dir")
@@ -199,31 +194,10 @@ func InstallSkills(w io.Writer, targetDir string) error {
 	return nil
 }
 
-// InstallPlugins writes the platform's OpenCode plugins into targetDir/plugin.
-//
-// These are not content: they are guards that keep the chat backend working
-// (see plugin/pdf-guard.js, which stops an unreadable attachment from
-// permanently breaking a session). They install in every workspace, centrally
-// managed or not, and are kept out of the defaults manifest so
-// RetireLegacyDefaults can never remove them.
-func InstallPlugins(w io.Writer, targetDir string) error {
-	if strings.TrimSpace(targetDir) == "" {
-		return fmt.Errorf("install opencode plugins: empty target dir")
-	}
-	written, err := copyTree(pluginFS, pluginRoot, targetDir)
-	if err != nil {
-		return fmt.Errorf("install opencode plugins: %w", err)
-	}
-	if written > 0 {
-		fmt.Fprintf(w, "  ✓ Installed %d opencode plugin(s) to %s\n", written, filepath.Join(targetDir, pluginRoot))
-	}
-	return nil
-}
-
-// RemovePlugins removes the plugins InstallPlugins wrote to targetDir/plugin,
-// for opencode 2.x. 2.x does what they do by itself: it replaces an attachment
-// the model can't take with a notice, and leaves blank text out of requests.
-// It also can't load a 1.x plugin, and logs a warning about it on every
+// RemovePlugins removes the opencode 1.x plugins earlier builds wrote to
+// targetDir/plugin. opencode does what they did by itself: it replaces an
+// attachment the model can't take with a notice, and leaves blank text out of
+// requests. It also can't load them, and logs a warning about each on every
 // start. A copy that differs from ours is someone's edit and stays.
 func RemovePlugins(w io.Writer, targetDir string) error {
 	if strings.TrimSpace(targetDir) == "" {

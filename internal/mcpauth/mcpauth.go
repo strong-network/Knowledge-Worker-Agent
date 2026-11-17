@@ -1,15 +1,15 @@
 // Copyright 2026 Citrix Systems, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Package mcpauth drives opencode's interactive MCP OAuth commands
-// (`opencode mcp auth <name>` / `opencode mcp logout <name>`) and surfaces them
-// over HTTP so the web UI can sign a user in/out of an OAuth-enabled MCP server
-// (e.g. Atlassian).
+// Package mcpauth drives opencode's interactive MCP OAuth command
+// (`opencode mcp auth <name>`) and surfaces it over HTTP so the web UI can sign
+// a user in to an OAuth-enabled MCP server (e.g. Atlassian), and signs out
+// through opencode's server API.
 //
 // opencode owns the OAuth flow and its token store; `opencode mcp auth` prints
 // an authorization URL to a TTY and then blocks waiting for the browser
 // callback. We spawn it over a PTY, scrape the URL, expose it to the frontend,
-// and poll for completion (confirmed by re-scraping `opencode mcp list`).
+// and poll for completion (confirmed by the server's stored credential).
 package mcpauth
 
 import (
@@ -55,6 +55,13 @@ func resolveBin() string {
 	}
 	return config.ResolveOpencodeBin("")
 }
+
+// Stand-ins for opencode's server API that tests replace.
+var (
+	connectorStatuses = opencodev2.ConnectorStatuses
+	connectorSignedIn = opencodev2.ConnectorSignedIn
+	signOutConnector  = opencodev2.SignOutConnector
+)
 
 var (
 	ansiRe = regexp.MustCompile(`\x1b\[[0-9;?]*[A-Za-z]`)
@@ -181,8 +188,8 @@ func startAuth(server string) error {
 	auth.startedAt = time.Now()
 
 	ctx, cancel := context.WithTimeout(context.Background(), authTimeout)
-	cmd := opencodev2.Cmd(ctx, resolveBin(), "mcp", "auth", server)
-	// On 2.x the command already carries the server's password; keep it.
+	cmd := opencodev2.Command(ctx, resolveBin(), "mcp", "auth", server)
+	// The command already carries the server's password; keep it.
 	env := cmd.Env
 	if env == nil {
 		env = os.Environ()
@@ -193,11 +200,9 @@ func startAuth(server string) error {
 		"TERM=xterm-256color",
 		"OPENCODE_DISABLE_AUTOUPDATE=1",
 	)
-	// 2.x sets up every folder it is run in; the shared scratch one is set up.
-	if opencodev2.Enabled() {
-		if dir, err := opencodev2.ScratchDir(); err == nil {
-			cmd.Dir = dir
-		}
+	// opencode sets up every folder it is run in; the shared scratch one is set up.
+	if dir, err := opencodev2.ScratchDir(); err == nil {
+		cmd.Dir = dir
 	}
 
 	master, slave, ptyErr := openPTY()
@@ -316,17 +321,11 @@ func consumeAuthOutput(server string, cmd *exec.Cmd, stdout io.Reader, master *o
 		master.Close()
 	}
 
-	// Confirm success by re-scraping the server list rather than trusting the
-	// exit code — opencode persists the credential just before exiting. 2.x
-	// then reconnects the server, so there the stored credential is the answer.
-	var authed bool
-	if opencodev2.Enabled() {
-		ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
-		authed, _ = opencodev2.ConnectorSignedIn(ctx, server)
-		cancel()
-	} else {
-		authed = ServerAuthenticated(server)
-	}
+	// Confirm success by the stored credential rather than trusting the exit
+	// code — opencode stores it just before exiting, then reconnects the server.
+	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+	authed, _ := connectorSignedIn(ctx, server)
+	cancel()
 	auth.mu.Lock()
 	auth.master = nil
 	auth.running = false
@@ -404,41 +403,30 @@ func snapshotLocked() AuthInfo {
 	}
 }
 
-// ServerAuthenticated reports whether an MCP server is authenticated, by
-// scraping `opencode mcp list`. opencode marks each server "connected" or
-// "needs authentication".
+// ServerAuthenticated reports whether an MCP server is authenticated, as
+// opencode's server reports it.
 func ServerAuthenticated(server string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	defer cancel()
-	var authed bool
-	if opencodev2.Enabled() {
-		statuses, err := opencodev2.ConnectorStatuses(ctx)
-		if err != nil {
-			return false
-		}
-		authed = statuses[strings.ToLower(strings.TrimSpace(server))]
-	} else {
-		out, err := opencodev2.Cmd(ctx, resolveBin(), "mcp", "list").CombinedOutput()
-		if err != nil {
-			return false
-		}
-		authed = parseServerConnected(string(out), server)
+	statuses, err := connectorStatuses(ctx)
+	if err != nil {
+		return false
 	}
+	authed := statuses[strings.ToLower(strings.TrimSpace(server))]
 	// Keep the cache warm as a side effect of a live check.
 	db.SetMcpStatus(strings.ToLower(strings.TrimSpace(server)), authed)
 	return authed
 }
 
 // refreshRunning guards the background refresh so concurrent callers collapse
-// into one `opencode mcp list`.
+// into one status read.
 //
 // This matters because the refresh is fired from request handlers. Before the
 // batched status endpoint existed the connectors modal read status one server
 // at a time, and every cached read kicked off its own background refresh —
-// opening the modal with sixteen configured servers spawned sixteen concurrent
-// `opencode mcp list` processes, each connecting to every server, to compute a
-// result all sixteen shared. They also raced each other writing the same cache
-// rows.
+// opening the modal with sixteen configured servers ran sixteen concurrent
+// status reads to compute a result all sixteen shared. They also raced each
+// other writing the same cache rows.
 var refreshRunning atomic.Bool
 
 // refreshInBackground refreshes the status cache unless a refresh is already
@@ -454,100 +442,23 @@ func refreshInBackground() {
 	}()
 }
 
-// RefreshAllStatuses runs `opencode mcp list` ONCE and updates the DB cache for
-// every server it reports. One list call covers all servers (far cheaper than
-// checking each individually). Safe to call from a background goroutine. On
-// 2.x, whose `mcp list` no longer lists them, the server's API answers.
+// RefreshAllStatuses reads every server's status from opencode's server ONCE
+// and updates the DB cache for each. Safe to call from a background goroutine.
 func RefreshAllStatuses() {
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	defer cancel()
-	if opencodev2.Enabled() {
-		statuses, err := opencodev2.ConnectorStatuses(ctx)
-		if err != nil {
-			return
-		}
-		for name, connected := range statuses {
-			db.SetMcpStatus(name, connected)
-		}
-		return
-	}
-	out, err := opencodev2.Cmd(ctx, resolveBin(), "mcp", "list").CombinedOutput()
+	statuses, err := connectorStatuses(ctx)
 	if err != nil {
 		return
 	}
-	for name, connected := range parseAllServers(string(out)) {
+	for name, connected := range statuses {
 		db.SetMcpStatus(name, connected)
 	}
 }
 
-// parseAllServers parses every server row of `opencode mcp list` into a
-// name→connected map. Each row carries one status, and only "connected" means
-// the server works. "disabled" says nothing about its credentials, so it is
-// left out and the cache keeps what it knew; anything else ("failed", "needs
-// authentication") means it is not connected. A "failed" row used to be
-// skipped, so a server that stopped working kept reading as connected.
-func parseAllServers(raw string) map[string]bool {
-	out := map[string]bool{}
-	for _, line := range strings.Split(ansiRe.ReplaceAllString(raw, ""), "\n") {
-		if name, connected, ok := serverRow(line); ok {
-			out[name] = connected
-		}
-	}
-	return out
-}
-
-// serverRow reads an `opencode mcp list` server row, such as
-// "●  ✓ atlassian connected" or "●  ✗ kfp failed". ok is false for header,
-// footer and detail lines, and for "disabled", which is no verdict.
-func serverRow(line string) (name string, connected, ok bool) {
-	fields := strings.Fields(line)
-	i := 0
-	for i < len(fields) && !isNameToken(fields[i]) {
-		i++
-	}
-	if i+1 >= len(fields) {
-		return "", false, false
-	}
-	name = strings.ToLower(fields[i])
-	status := strings.ToLower(strings.Join(fields[i+1:], " "))
-	switch {
-	// opencode adds " (OAuth)" when the server's config has an oauth block.
-	case status == "connected", strings.HasPrefix(status, "connected ("):
-		return name, true, true
-	case status == "failed", status == "error",
-		strings.HasPrefix(status, "needs "), strings.HasPrefix(status, "not "):
-		return name, false, true
-	}
-	return "", false, false
-}
-
-// isNameToken reports whether a token looks like a server name (contains at
-// least one ASCII letter/digit), filtering out bullets like "●", "✓", "│".
-func isNameToken(s string) bool {
-	for i := 0; i < len(s); i++ {
-		b := s[i]
-		if (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') {
-			return true
-		}
-	}
-	return false
-}
-
-// parseServerConnected reports whether `server` has a "connected" row in
-// `opencode mcp list` output.
-func parseServerConnected(raw, server string) bool {
-	server = strings.ToLower(strings.TrimSpace(server))
-	for _, line := range strings.Split(ansiRe.ReplaceAllString(raw, ""), "\n") {
-		if name, connected, ok := serverRow(line); ok && name == server {
-			return connected
-		}
-	}
-	return false
-}
-
-// Logout removes the stored OAuth credentials for a server via
-// `opencode mcp logout <name>`, or on 2.x through its API.
-func Logout(server string) (string, error) {
+// Logout removes the stored OAuth credentials for a server through opencode's
+// server API.
+func Logout(server string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	defer cancel()
 	if entra.Has(server) {
@@ -555,15 +466,7 @@ func Logout(server string) (string, error) {
 			log.Printf("[ERROR] mcpauth: forget the Microsoft sign-in of %q: %v", server, err)
 		}
 	}
-	var clean string
-	var err error
-	if opencodev2.Enabled() {
-		err = opencodev2.SignOutConnector(ctx, server)
-	} else {
-		var out []byte
-		out, err = opencodev2.Cmd(ctx, resolveBin(), "mcp", "logout", server).CombinedOutput()
-		clean = strings.TrimSpace(ansiRe.ReplaceAllString(string(out), ""))
-	}
+	err := signOutConnector(ctx, server)
 	if err == nil {
 		// Reflect the sign-out in the cache immediately.
 		db.SetMcpStatus(strings.ToLower(strings.TrimSpace(server)), false)
@@ -576,7 +479,7 @@ func Logout(server string) (string, error) {
 			log.Printf("[ERROR] mcpauth: could not disable %q after sign-out: %v", server, derr)
 		}
 	}
-	return clean, err
+	return err
 }
 
 // ── HTTP handlers ───────────────────────────────────────────────────────────
@@ -646,12 +549,11 @@ func HandleLogout(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "server name is required"})
 		return
 	}
-	out, err := Logout(name)
-	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "output": out, "error": err.Error()})
+	if err := Logout(name); err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "output": out})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // HandleStatus — GET /api/mcp/servers/{name}/status.
@@ -690,9 +592,9 @@ func HandleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // coldRefreshAttempted records whether HandleAllStatus has already paid for one
-// synchronous refresh. Without it, a workspace where `opencode mcp list` yields
-// nothing — no servers configured, or the binary missing — would re-run the
-// command, and wait out its 20s timeout, on every single request.
+// synchronous refresh. Without it, a workspace where the status read yields
+// nothing — no servers configured, or opencode's server down — would re-run
+// it, and wait out its 20s timeout, on every single request.
 var coldRefreshAttempted atomic.Bool
 
 // HandleAllStatus — GET /api/mcp/status.

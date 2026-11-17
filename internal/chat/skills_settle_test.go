@@ -8,8 +8,6 @@ import (
 	"errors"
 	"testing"
 	"time"
-
-	"github.com/strong-network/Knowledge-Worker-Agent/internal/opencodeserver"
 )
 
 // fastSettle shrinks the settle timing so the tests take milliseconds.
@@ -20,18 +18,18 @@ func fastSettle(t *testing.T) {
 	t.Cleanup(func() { skillPoll, skillSettle, skillEmptyGrace = poll, settle, grace })
 }
 
-func skillsNamed(names ...string) []opencodeserver.Skill {
-	out := make([]opencodeserver.Skill, len(names))
+func skillsNamed(names ...string) []Skill {
+	out := make([]Skill, len(names))
 	for i, n := range names {
-		out[i] = opencodeserver.Skill{Name: n, Description: n}
+		out[i] = Skill{Name: n, Description: n}
 	}
 	return out
 }
 
 // answers replies with each list in turn, then the last one for good.
-func answers(lists ...[]opencodeserver.Skill) (func(context.Context) ([]opencodeserver.Skill, error), *int) {
+func answers(lists ...[]Skill) (func(context.Context) ([]Skill, error), *int) {
 	calls := 0
-	return func(context.Context) ([]opencodeserver.Skill, error) {
+	return func(context.Context) ([]Skill, error) {
 		calls++
 		if calls <= len(lists) {
 			return lists[calls-1], nil
@@ -61,7 +59,7 @@ func TestSettleSkillsIgnoresTheOrder(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	calls := 0
-	fetch := func(context.Context) ([]opencodeserver.Skill, error) {
+	fetch := func(context.Context) ([]Skill, error) {
 		calls++
 		if calls%2 == 0 {
 			return skillsNamed("b", "a"), nil
@@ -97,7 +95,7 @@ func TestSettleSkillsReportsACancelledRequest(t *testing.T) {
 	fastSettle(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	calls := 0
-	fetch := func(context.Context) ([]opencodeserver.Skill, error) {
+	fetch := func(context.Context) ([]Skill, error) {
 		calls++
 		if calls == 2 {
 			cancel()
@@ -114,7 +112,7 @@ func TestSettleSkillsReportsACancelledRequest(t *testing.T) {
 func TestSettleSkillsReturnsAFailure(t *testing.T) {
 	fastSettle(t)
 	boom := errors.New("server gone")
-	fetch := func(context.Context) ([]opencodeserver.Skill, error) { return nil, boom }
+	fetch := func(context.Context) ([]Skill, error) { return nil, boom }
 
 	if _, err := settleSkills(context.Background(), fetch); !errors.Is(err, boom) {
 		t.Fatalf("got %v, want %v", err, boom)

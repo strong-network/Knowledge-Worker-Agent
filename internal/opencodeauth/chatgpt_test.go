@@ -29,19 +29,18 @@ func resetChatGPTAttempt() {
 
 func withChatGPTHooks(t *testing.T) {
 	t.Helper()
-	oldEnabled := chatGPTOpenCodeEnabled
-	oldHasConnection := chatGPTHasOAuthConnection
+	oldConnection := chatGPTConnectionMethod
 	oldIntegration := chatGPTIntegration
 	oldStart := chatGPTStartOAuth
 	oldStatus := chatGPTOAuthStatus
 	oldCancel := chatGPTCancelOAuth
 	oldRemove := chatGPTRemoveCredentials
+	oldRemoveKeys := chatGPTRemoveKeys
 	oldHook := onLoginSuccess
 	chatGPTLoginSuccess.RLock()
 	oldChatGPTHook := chatGPTLoginSuccess.fn
 	chatGPTLoginSuccess.RUnlock()
-	chatGPTOpenCodeEnabled = func() bool { return true }
-	chatGPTHasOAuthConnection = func(_ context.Context, _, _ string) (bool, error) { return true, nil }
+	chatGPTConnectionMethod = func(_ context.Context, _, _ string) (string, error) { return "oauth", nil }
 	SetOnChatGPTLoginSuccess(nil)
 	chatGPTIntegration = func(_ context.Context, _, _ string) ([]opencodev2.OAuthMethod, []opencodev2.IntegrationConnection, error) {
 		return []opencodev2.OAuthMethod{{ID: chatGPTMethod, Type: "oauth"}}, nil, nil
@@ -59,18 +58,19 @@ func withChatGPTHooks(t *testing.T) {
 	}
 	chatGPTCancelOAuth = func(_ context.Context, _, _, _ string) error { return nil }
 	chatGPTRemoveCredentials = func(_ context.Context, _ string) error { return nil }
+	chatGPTRemoveKeys = func(_ context.Context, _ string) error { return nil }
 	loginSuccessMu.Lock()
 	onLoginSuccess = nil
 	loginSuccessMu.Unlock()
 	resetChatGPTAttempt()
 	t.Cleanup(func() {
-		chatGPTOpenCodeEnabled = oldEnabled
-		chatGPTHasOAuthConnection = oldHasConnection
+		chatGPTConnectionMethod = oldConnection
 		chatGPTIntegration = oldIntegration
 		chatGPTStartOAuth = oldStart
 		chatGPTOAuthStatus = oldStatus
 		chatGPTCancelOAuth = oldCancel
 		chatGPTRemoveCredentials = oldRemove
+		chatGPTRemoveKeys = oldRemoveKeys
 		SetOnChatGPTLoginSuccess(oldChatGPTHook)
 		loginSuccessMu.Lock()
 		onLoginSuccess = oldHook
@@ -79,44 +79,31 @@ func withChatGPTHooks(t *testing.T) {
 	})
 }
 
-func TestChatGPTAuthenticatedReflectsSafeOpenCodeConnectionStatus(t *testing.T) {
+// OpenAI reports a ChatGPT sign-in and an API key apart, from the connection
+// summary, and an error as signed out.
+func TestOpenAIConnectionReflectsSafeOpenCodeConnectionStatus(t *testing.T) {
 	withChatGPTHooks(t)
-	connected := true
-	chatGPTHasOAuthConnection = func(_ context.Context, integration, _ string) (bool, error) {
+	method, fail := "oauth", error(nil)
+	chatGPTConnectionMethod = func(_ context.Context, integration, _ string) (string, error) {
 		if integration != ChatGPTProvider {
 			t.Fatalf("checked integration %q, want %q", integration, ChatGPTProvider)
 		}
-		return connected, nil
+		return method, fail
 	}
-	if !ChatGPTAuthenticated() {
-		t.Fatal("an OpenCode OAuth connection was reported disconnected")
-	}
-	connected = false
-	if ChatGPTAuthenticated() {
-		t.Fatal("a missing OpenCode OAuth connection was reported connected")
-	}
-}
-
-// ChatGPT sign-in is opencode 2.x only: on 1.x nothing reaches opencode, the
-// provider reads as signed out, and starting a sign-in is refused.
-func TestChatGPTIsUnavailableOnOpenCodeOneX(t *testing.T) {
-	withChatGPTHooks(t)
-	chatGPTOpenCodeEnabled = func() bool { return false }
-	chatGPTHasOAuthConnection = func(context.Context, string, string) (bool, error) {
-		t.Fatal("checked the connection through opencode 1.x")
-		return false, nil
-	}
-	chatGPTStartOAuth = func(context.Context, string, string, string) (opencodev2.OAuthAttempt, error) {
-		t.Fatal("started a sign-in on opencode 1.x")
-		return opencodev2.OAuthAttempt{}, nil
-	}
-	if ChatGPTAuthenticated() {
-		t.Fatal("ChatGPT reported signed in on opencode 1.x")
-	}
-	rec := httptest.NewRecorder()
-	HandleChatGPTLoginStart(rec, httptest.NewRequest("POST", "/api/openai/auth/login/start", nil))
-	if rec.Code != 409 {
-		t.Fatalf("status = %d, want 409", rec.Code)
+	for _, c := range []struct {
+		method string
+		fail   error
+		want   string
+	}{
+		{"oauth", nil, "oauth"},
+		{"key", nil, "key"},
+		{"", nil, ""},
+		{"oauth", errors.New("opencode is down"), ""},
+	} {
+		method, fail = c.method, c.fail
+		if got := OpenAIConnection(); got != c.want {
+			t.Fatalf("connection %q with error %v reported %q, want %q", c.method, c.fail, got, c.want)
+		}
 	}
 }
 
@@ -219,6 +206,14 @@ func TestHandleChatGPTLoginStatusNotifiesOnceAndOmitsFailureText(t *testing.T) {
 	chatGPTOAuthStatus = func(_ context.Context, _, _, _ string) (opencodev2.OAuthAttemptStatus, error) {
 		return opencodev2.OAuthAttemptStatus{Status: "complete"}, nil
 	}
+	keysRemoved := 0
+	chatGPTRemoveKeys = func(_ context.Context, integration string) error {
+		if integration != ChatGPTProvider {
+			t.Fatalf("removed keys of %q, want %q", integration, ChatGPTProvider)
+		}
+		keysRemoved++
+		return nil
+	}
 	called := make(chan struct{}, 2)
 	chatGPTCalled := make(chan struct{}, 2)
 	SetOnLoginSuccess(func() { called <- struct{}{} })
@@ -254,6 +249,10 @@ func TestHandleChatGPTLoginStatusNotifiesOnceAndOmitsFailureText(t *testing.T) {
 	case <-chatGPTCalled:
 		t.Fatal("ChatGPT-specific success callback fired more than once")
 	case <-time.After(25 * time.Millisecond):
+	}
+	// The sign-in replaces an API key, once.
+	if keysRemoved != 1 {
+		t.Fatalf("key removals = %d, want 1", keysRemoved)
 	}
 }
 

@@ -46,14 +46,12 @@ func probeProvider(ctx context.Context, providerID string) error {
 		// passing: a provider offering no models cannot serve a turn either.
 		return fmt.Errorf("no model is available to test this provider")
 	}
-	cmd := opencodev2.Cmd(ctx, config.OpencodeBin,
+	cmd := opencodev2.Command(ctx, config.OpencodeBin,
 		"run", "--agent", "title", "--model", model, "--format", "json", "hi")
 	cmd.Dir = config.Workspace
 	started := time.Now()
 	out, err := cmd.CombinedOutput()
-	if opencodev2.Enabled() {
-		telemetry.RecordRun(telemetry.CallInfo{Model: model, QuerySource: "provider_check", Started: started}, out)
-	}
+	telemetry.RecordRun(telemetry.CallInfo{Model: model, QuerySource: "provider_check", Started: started}, out)
 	if msg := probeErrorFrom(out); msg != "" {
 		return fmt.Errorf("%s", msg)
 	}

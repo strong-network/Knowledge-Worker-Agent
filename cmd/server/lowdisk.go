@@ -4,6 +4,7 @@
 package main
 
 import (
+	"fmt"
 	"math"
 	"net/http"
 	"os"
@@ -11,7 +12,6 @@ import (
 	"unicode"
 
 	"github.com/strong-network/Knowledge-Worker-Agent/internal/diagnostics"
-	"github.com/strong-network/Knowledge-Worker-Agent/internal/migration"
 )
 
 // lowDisk is what /api/status says while the workspace's disk is almost full,
@@ -34,8 +34,8 @@ func lowDiskView(r *http.Request) *lowDisk {
 		return nil
 	}
 	return &lowDisk{
-		Free:  migration.Bytes(s.Free),
-		Total: migration.Bytes(s.Total),
+		Free:  bytesText(s.Free),
+		Total: bytesText(s.Total),
 		// Rounded down, so a warning never reads as 5%.
 		PercentFree: math.Floor(1000*float64(s.Free)/float64(s.Total)) / 10,
 		Workspace:   workspaceName(r),
@@ -59,4 +59,19 @@ func consoleURL() string {
 		return ""
 	}
 	return "https://" + d + "/"
+}
+
+// bytesText is a size for people, in decimal units: "12.3 GB".
+func bytesText(b uint64) string {
+	const unit = 1000
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	v, suffix := float64(b), "kMGTP"
+	i := -1
+	for v >= unit && i < len(suffix)-1 {
+		v /= unit
+		i++
+	}
+	return fmt.Sprintf("%.1f %cB", v, suffix[i])
 }

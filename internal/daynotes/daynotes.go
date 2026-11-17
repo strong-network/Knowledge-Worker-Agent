@@ -12,29 +12,18 @@
 // message) describes none of that. Notes are generated only where that
 // breakdown actually happens -- see db.PendingNoteDays -- not for every chat.
 //
-// # Why the built-in `title` agent
+// # Why KWA's own agent
 //
 // `opencode run` has no `--tools` flag, so the only way to deny tools to a
-// one-shot generation is to name an agent. A *custom* agent would work, but
-// measured against opencode v1.18.30 every custom agent also carries opencode's
-// full coding-agent system prompt: ~49.4k tokens, or ~41.7k with every tool
-// disabled in frontmatter. Nothing removes the rest -- neither a `prompt:`
-// override nor `options.systemPrompt` replaces it.
-//
-// opencode's built-in `title` agent is special-cased with a small prompt and no
-// tools. On a real 12k-character day, measured side by side on the same input:
-//
-//	--agent title     input 3,667  cost $0.0044
-//	custom agent      input 3,328 + 41,423 cached  cost $0.0090
-//
-// with no discernible difference in the notes produced. So this package reuses
-// the same agent internal/titler does. Its prompt is small enough that the
-// caller's instruction dominates: asked for a 120-word note, it returns a
-// 120-word note, not a title.
+// one-shot generation is to name an agent. opencode's built-in `title` agent
+// has a small prompt and no tools, but it only writes titles. So notes run as
+// a hidden agent KWA declares (opencodev2.NoteAgent): a one-line prompt and
+// every permission denied. Its prompt is small enough that the caller's
+// instruction dominates: asked for a 120-word note, it returns a 120-word note.
 //
 // The call is contained the same way titling is: an empty scratch directory so
 // no repo context files are loaded, a capped transcript so one enormous day
-// cannot turn into an enormous bill, no stdin, and a timeout. Failure is always
+// cannot turn into an enormous bill, and a timeout. Failure is always
 // silent -- a missing note is the status quo, and the day stays in the backlog.
 package daynotes
 
@@ -45,7 +34,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 	"strings"
 	"time"
 
@@ -132,14 +120,12 @@ func Generate(ctx context.Context, bin, model string, msgs []db.RecallMessage) (
 
 	started := time.Now()
 	out, err := runNote(ctx, bin, model, instruction+"\n\n--- TRANSCRIPT ---\n"+transcript+"\n--- END TRANSCRIPT ---")
-	if opencodev2.Major(bin) >= 2 {
-		telemetry.RecordRun(telemetry.CallInfo{Model: model, QuerySource: "day_note", Started: started}, out)
-	}
+	telemetry.RecordRun(telemetry.CallInfo{Model: model, QuerySource: "day_note", Started: started}, out)
 	if err != nil && len(out) == 0 {
 		return "", err
 	}
 	if bytes.Contains(out, []byte(agentFallbackMarker)) {
-		return "", fmt.Errorf("title agent unavailable")
+		return "", fmt.Errorf("note agent unavailable")
 	}
 
 	note, opencodeSession, runErr := parseNoteOutput(out)
@@ -238,27 +224,14 @@ func execNote(ctx context.Context, bin, model, prompt string) ([]byte, error) {
 	// A dedicated empty directory keeps the workspace's context files
 	// (AGENTS.md and friends) out of the request. internal/titler measured
 	// that at ~7.7k input tokens versus ~20 for an identical result.
-	if opencodev2.Major(bin) >= 2 {
-		scratch, err := opencodev2.ScratchDir()
-		if err != nil {
-			return nil, err
-		}
-		// 2.x's title agent only writes titles; notes run as KWA's own agent
-		// there. The message goes on stdin (see opencodev2.Command).
-		cmd := opencodev2.Cmd(ctx, bin, "run", "--agent", opencodev2.NoteAgent, "--model", model, "--format", "json", "--", prompt)
-		cmd.Dir = scratch
-		return cmd.CombinedOutput()
-	}
-	scratch, err := os.MkdirTemp("", "chat-daynote-")
+	scratch, err := opencodev2.ScratchDir()
 	if err != nil {
 		return nil, err
 	}
-	defer os.RemoveAll(scratch)
-
-	cmd := opencodev2.Cmd(ctx, bin, "run", "--agent", "title", "--model", model, "--format", "json", prompt)
+	// opencode's title agent only writes titles; notes run as KWA's own agent.
+	// The message goes on stdin (see opencodev2.Command).
+	cmd := opencodev2.Command(ctx, bin, "run", "--agent", opencodev2.NoteAgent, "--model", model, "--format", "json", "--", prompt)
 	cmd.Dir = scratch
-	// Leave stdin nil: `opencode run` reads stdin when it is attached, which
-	// would let it consume the parent's input.
 	return cmd.CombinedOutput()
 }
 
@@ -335,7 +308,7 @@ func cleanNote(s string) string {
 func deleteOpencodeSession(bin, sessionID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := opencodev2.Cmd(ctx, bin, "session", "delete", sessionID).Run(); err != nil {
+	if err := opencodev2.Command(ctx, bin, "session", "delete", sessionID).Run(); err != nil {
 		log.Printf("[DAYNOTE] could not delete throwaway opencode session %s: %v", sessionID, err)
 	}
 }
